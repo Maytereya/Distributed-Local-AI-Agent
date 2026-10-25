@@ -90,6 +90,7 @@ class Case:
     phrases: tuple[str, ...]  # что LLM разметки отмечает услугами (пусто — «ни одной»)
     rows: tuple[str, ...] | None = None  # начало названий, которые выбирает LLM строки; () — «ни одна»; None — недоступна
     why: str = field(default="", compare=False)
+    spans: str = ""  # ответ разметки как есть (не по контракту — `invalid`); пусто — по фразам случая
 
 
 CASES: dict[str, Case] = {
@@ -116,6 +117,11 @@ CASES: dict[str, Case] = {
     "journal_grouped": Case(
         ("сколько стоит анализ на флороценоз",), ("анализ на флороценоз",), rows=(), why="фраза разметки с «анализ на» (правило 5 промпта)"
     ),
+    # LLM работает, а разбор не решён или «ни одна фраза не услуга»: строку по-прежнему выбирает LLM (карточка Ш7, 25.10)
+    "parse_invalid": Case(
+        ("сколько стоит анализ ферритина",), (), rows=("Ферритин",), spans='{"phrases": [[1, 3], [2, 4]]}', why="ответ разметки не по контракту"
+    ),
+    "parse_none_fit_findable": Case(("сколько стоит анализ ферритина",), (), rows=("Ферритин",), why="разметка: ни одна не услуга, строка есть"),
     # корзина: позиции — фразы разметки
     "basket_commas": Case(("ферритин, глюкоза, холестерин",), ("ферритин", "глюкоза", "холестерин"), rows=("Холестерол",)),
     "basket_run_on": Case(("ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА",), ("ОАК", "ОАМ", "ФЕРРИТИН", "ГЛЮКОЗА"), rows=("Общий анализ крови (Le", "Общий анализ мочи")),
@@ -141,7 +147,7 @@ CLASSES: dict[str, tuple[str, ...]] = {
         "one_consult_generic",
         "one_generic_word",
     ),
-    "price_select": ("weak_select_picks", "weak_select_down", "weak_abbr"),
+    "price_select": ("weak_select_picks", "weak_select_down", "weak_abbr", "parse_invalid", "parse_none_fit_findable"),
     "journal": ("journal_miss", "journal_wrapped", "journal_grouped"),
     "basket": ("basket_commas", "basket_run_on"),
     "readiness": ("readiness_named",),
@@ -184,7 +190,7 @@ class _Oracle:
         seen = f"{system}\n\n{prompt}" if system else prompt
         if _SPANS_MARK in prompt:
             self.asked.append("spans")
-            return GenerateResponse(model="m", response=json.dumps(self._spans(prompt)), done=True)
+            return GenerateResponse(model="m", response=self.case.spans or json.dumps(self._spans(prompt)), done=True)
         if self.case.rows is not None and any(mark in seen for mark in _ROWS_MARKS):
             self.asked.append("rows")
             options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]

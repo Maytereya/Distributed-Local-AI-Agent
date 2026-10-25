@@ -1113,6 +1113,146 @@
    "rows"
   ]
  },
+ "parse_invalid-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "parse_invalid-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "invalid",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "invalid"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "parse_none_fit_findable-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "parse_none_fit_findable-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "none_fit",
+     "tu_rule": "parse_none_fit",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "none_fit"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
  "prepare_named-down": {
   "turns": [
    {

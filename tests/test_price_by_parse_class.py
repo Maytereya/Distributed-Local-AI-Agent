@@ -20,6 +20,9 @@
   срока по словам; догадка заземления по буквам в контексте не остаётся (свип по прайсу мини-прод через эндпоинт);
 - Ш5, журнал синонимов клинике (K7): только фраза разбора этой реплики — срез реплики; разбора нет, он не решён или решил «услуги
   нет» — записи нет; ни фразы вырезателя, ни упоминания правил понимания (контракт `_journal_phrase` и все записи эталона on);
+- «без LLM» — только «LLM разметки не ответила» (`unavailable`): ответ не по контракту, письмо длиннее 40 слов, сбой кода — модель
+  работает, строку выбирает LLM, «уточните» не ставится; «ни одна фраза не услуга» (`none_fit`) — не «услуги нет»: поиск по реплике,
+  как раньше (карточка Ш7, 25.10: на обоих классах «уточните» и пустой поиск стоили 8 верных ответов dev из 867);
 - off — как было (контраст: вырезатель делает реплику с обвязкой сильной и печатает склейки).
 """
 
@@ -266,3 +269,38 @@ def test_journal_entries_are_reply_slices_under_on():
         if not any(_norm(entry["phrase"]) in _norm(reply) for reply in CASES[key.rsplit("-", 1)[0]].turns)
     }
     assert foreign == {}
+
+
+# --------------------------------------------------------------------------- «без LLM» и «услуги нет» — что это значит для цены
+
+
+def _parse(status: str, items: tuple[str, ...] = ()):
+    from messengers_router import turn_parse
+    from messengers_router.choice import Strength
+
+    phrases = tuple(turn_parse.ParsedPhrase(text=t, start=0, end=len(t), strength=Strength.WEAK, rows=()) for t in items)
+    return turn_parse.PhraseParse(reply="r", status=status, source="llm", items=phrases)
+
+
+@pytest.mark.parametrize(
+    ("status", "items", "failed", "phrase"),
+    [
+        ("unavailable", (), True, None),
+        ("invalid", (), False, None),
+        ("merged", (), False, None),
+        ("too_many", (), False, None),
+        ("error", (), False, None),
+        ("none_fit", (), False, None),
+        ("empty", (), False, ""),
+        ("picked", ("ферритин",), False, "ферритин"),
+        ("picked", ("ферритин", "глюкоза"), False, None),
+    ],
+)
+def test_without_llm_means_unavailable_and_none_fit_keeps_search(monkeypatch, status, items, failed, phrase):
+    from messengers_router import turn_understanding as TU
+    from messengers_router.services import _price_by_parse
+
+    parse = _parse(status, items)
+    monkeypatch.setattr(TU, "parse_status", lambda text: parse.status)
+    monkeypatch.setattr(TU, "parse_for", lambda text: parse if parse.decided else None)
+    assert (_price_by_parse.failed("r"), _price_by_parse.phrase("r")) == (failed, phrase)

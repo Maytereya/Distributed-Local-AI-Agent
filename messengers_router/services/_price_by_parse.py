@@ -14,17 +14,12 @@ from __future__ import annotations
 from .. import shown_context, turn_parse
 from ..runtime_config import config as _cfg
 
-# Разбор этой реплики был, но не решён: LLM не ответила, ответ нарушил контракт, реплика — письмо (больше 40 слов), сбой кода.
-# Без LLM услугу не угадываем (решение 22.10 (а)): действует только реплика, которая сама — название или код (`strong_whole`).
-_FAILED = frozenset(
-    {
-        turn_parse.ParseStatus.UNAVAILABLE,
-        turn_parse.ParseStatus.INVALID,
-        turn_parse.ParseStatus.MERGED,
-        turn_parse.ParseStatus.TOO_MANY,
-        turn_parse.ParseStatus.ERROR,
-    }
-)
+# LLM разметки не ответила (сбой модели, таймаут, отказ лимита решений хода) — без LLM услугу не угадываем (решение 22.10 (а)):
+# действует только реплика, которая сама — название или код (`strong_whole`). Прочие нерешённые исходы — не «без LLM»: ответ не по
+# контракту (`invalid`, `merged`), письмо длиннее 40 слов (`too_many`), сбой кода (`error`) — модель работает, строку по-прежнему
+# выбирает LLM (выбор строки, корзина); карточка Ш7 (25.10): «уточните» на них стоило 4 верных ответов dev из 867 (два длинных
+# списка по 15 позиций, «глюкоза в плазме», ВЭБ).
+_FAILED = frozenset({turn_parse.ParseStatus.UNAVAILABLE})
 
 
 def enabled() -> bool:
@@ -38,8 +33,10 @@ def phrase(text: str) -> str | None:
     разметки или данные МИС).
 
     :param text: вход читателя цены — реплика хода
-    :return: фраза; "" — разбор решил, что услуги в реплике нет (`none_fit`, `empty`); None — одной фразы нет: разбора этой
-        реплики нет (не ценовой ход, вход — не реплика), он не решён (`failed`) или назван список (его ведёт корзина)
+    :return: фраза; "" — в реплике нет слов (`empty`); None — одной фразы нет: разбора этой реплики нет (не ценовой ход, вход —
+        не реплика), он не решён, назван список (его ведёт корзина) или разметка сказала «ни одна фраза не услуга» (`none_fit`):
+        выбор строки при этом бывает прав («посев на хламидии», «анализы для ревматолога» — replay 21.10: 5 потерь верной цены из
+        1068 ходов; карточка Ш7: 4 потери dev), поэтому поиск идёт по реплике, как раньше; печатать и писать клинике — нечего
     """
 
     from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
@@ -50,12 +47,12 @@ def phrase(text: str) -> str | None:
     if parse is None or not parse.decided:
         return None
     if parse.status == turn_parse.ParseStatus.NONE_FIT or not parse.items:
-        return ""
+        return None
     return str(parse.items[0].text or "") if len(parse.items) == 1 else None
 
 
 def failed(text: str) -> bool:
-    """Разбор этой реплики был, но не решён (`_FAILED`): без LLM — только дословное название или код (решение 22.10 (а))."""
+    """LLM разметки этой реплики не ответила (`_FAILED`): без LLM — только дословное название или код (решение 22.10 (а))."""
 
     from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
 
