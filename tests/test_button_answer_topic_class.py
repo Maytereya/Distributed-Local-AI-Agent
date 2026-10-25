@@ -216,3 +216,19 @@ def test_slot_judge_does_not_spend_turn_decision(mini_prod_world, monkeypatch): 
     on = _dialog(mini_prod_world, monkeypatch, [_press("menu.tests.prepare"), "колоноскопия"], switch="on")
     tel = on[1]["telemetry"]
     assert tel.get("tu_pending_src") == "llm" and tel.get("tu_button_refund") == 1, tel
+
+
+@pytest.mark.parametrize("button_id", _JUDGED)
+def test_slot_mode_keeps_price_buttons_like_before(button_id, mini_prod_world, monkeypatch):  # noqa: F811
+    """`slot` (карточка 25.10: на кнопках цены +3 чужие цены выбора строки — блок): тема без классификатора — у вопросов-слотов
+    (подготовка, подбор, результаты); вопрос кнопок цены свободного ответа функции не получает, тему решает NLU, как было."""
+
+    topic = button_menu.BUTTONS[button_id].label
+    slot = _dialog(mini_prod_world, monkeypatch, [_press(button_id), _REPLIES[0]], switch="slot")
+    off = _dialog(mini_prod_world, monkeypatch, [_press(button_id), _REPLIES[0]], switch="off")
+    tel = slot[1]["telemetry"]
+    if topic == "PRICE":
+        assert "tu_pending_type" not in tel and tel.get("nlu_llm") is True, tel
+        assert (slot[1]["text"], slot[1]["label"]) == (off[1]["text"], off[1]["label"])
+    else:
+        assert tel.get("nlu_topic_by_llm") == "button_answer" and tel.get("nlu_llm") is False, tel

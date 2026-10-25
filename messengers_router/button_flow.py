@@ -11,7 +11,9 @@
   (`pending_answer`, вид `free`) решила «это ответ» — тему решает кнопка там, где решала бы LLM-классификатор (правило
   не сработало или его ветка в `topic_by_llm`); надёжные правила и срочное — как всегда. У кнопок цены своего вопроса-слота
   не было — его ответ судила LLM-классификатор; под on его судит та же функция (≈ 1 с вместо 3,7 с), и это решение лимита
-  решений хода не тратит: оно — шаг NLU вместо классификатора, а пути цены остаются её решения, как без кнопки.
+  решений хода не тратит: оно — шаг NLU вместо классификатора, а пути цены остаются её решения, как без кнопки. Режим `slot`
+  — только вопросы-слоты (подготовка, подбор, результаты): на кнопках цены карточка 25.10 дала +3 чужие цены — путь цены
+  выбирает «соседние» строки для услуги, которой нет в прайсе («антитела к аннексину суммарные» → «… V, IgG / IgM»).
 * `button_topic_hint` (BUG-2026-10-25-BUTTON-FOREIGN-TOPIC) — на чужую тему в ответ на вопрос кнопки бот подсказывает
   нужную кнопку, а не угадывает тему общим путём (предложение владельца 25.10). Одна функция решила «другая тема», а тему
   угадывала бы LLM-классификатор (надёжное правило другой темы отвечает само) — LLM
@@ -52,10 +54,16 @@ def _on(key: str) -> bool:
     return str(getattr(_cfg, key, "off") or "").strip().lower() == "on"
 
 
-def answer_topic_on() -> bool:
-    """`[MESSENGER_ROUTER] button_answer_topic = on`: тему ответа на вопрос кнопки решает кнопка, не LLM-классификатор."""
+def answer_topic_mode() -> str:
+    """`[MESSENGER_ROUTER] button_answer_topic = off | slot | on`: тему ответа на вопрос кнопки решает кнопка, не
+    LLM-классификатор, — у вопросов-слотов (`slot`: подготовка, подбор анализов, результаты) или и у кнопок цены (`on`)."""
 
-    return _on("MR_BUTTON_ANSWER_TOPIC")
+    mode = str(getattr(_cfg, "MR_BUTTON_ANSWER_TOPIC", "off") or "").strip().lower()
+    return mode if mode in ("slot", "on") else "off"
+
+
+def answer_topic_on() -> bool:
+    return answer_topic_mode() != "off"
 
 
 def hint_on() -> bool:
@@ -115,7 +123,7 @@ def judges_answer(label: str, pending: Any) -> bool:
     """Вопрос кнопки этой темы получает свободный ответ одной функции под `button_answer_topic` (кнопки цены): вопрос
     `SLOT_TOPICS` получает его и без выключателя (`pending_buttons`)."""
 
-    return (answer_topic_on() or hint_on()) and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
+    return (answer_topic_mode() == "on" or hint_on()) and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
 
 
 def judged_by_llm(pending: Any) -> bool:
@@ -132,12 +140,14 @@ def answer_topic(pending: Any) -> str:
     mixed = _MIXED.get()
     if mixed is not None:
         return mixed[0]  # в сообщении и ответ, и другой вопрос (`button_topic_hint`): ответ — по теме кнопки
-    if not answer_topic_on() or not question_button(pending):
+    mode = answer_topic_mode()
+    label = str(pending.get("label") or "") if isinstance(pending, dict) else ""
+    if mode == "off" or not question_button(pending) or (label in _JUDGED_UNDER_SWITCH and mode != "on"):
         return ""
     found = pending_answer.slot_answer()
     if found is None or found.outcome is not pending_answer.Outcome.ANSWER:
         return ""
-    return str(pending.get("label") or "")
+    return label
 
 
 def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any, spent_before: int) -> None:
