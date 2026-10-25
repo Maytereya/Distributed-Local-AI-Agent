@@ -42,7 +42,7 @@ from ._doctors_helpers import (
     _specialty_label_for_doctor,
 )
 from ._prepare import _is_prepare_requested_in_price_query
-from ._basket_select import basket_from_phrases, choose_basket_rows
+from ._basket_select import basket_calculation, basket_from_phrases, choose_basket_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
 from ._price_select_llm import (
@@ -221,7 +221,9 @@ async def _multi_price_payload(
             llm_allowed=choosing,
             journal=parse.status == turn_parse.ParseStatus.PICKED,
         )
-        return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True)
+        return multi_price_payload_from_items(
+            positions, _names_a_service(unrecognized), allow_single=True, calculation=basket_calculation(positions, retail_rows)
+        )
     # Разбора нет или он не годится для действия (`empty`, `too_many`, `error`, вход — не реплика хода): корзина правил
     # с политикой сбоя разбора — строки слабых позиций выбирает LLM, при сбое — варианты кода (T7 шаг 3б: прежняя
     # корзина правил без выбора, путь `turn_parse = off`, снята).
@@ -232,8 +234,8 @@ async def _multi_price_payload(
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:
         return None
-    refined = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows, llm_allowed=choosing)
-    return multi_price_payload_from_items(*refined, allow_single=True)
+    positions, not_found = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows, llm_allowed=choosing)
+    return multi_price_payload_from_items(positions, not_found, allow_single=True, calculation=basket_calculation(positions, retail_rows))
 
 
 def _names_a_service(fragments: list[str]) -> list[str]:

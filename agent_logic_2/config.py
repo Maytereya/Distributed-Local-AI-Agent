@@ -228,6 +228,7 @@ class MessengerRouterConfig:
     t7_drop_k1: str
     t7_drop_k3: str
     price_judge_conditions: str
+    basket_calc: str
     pending_buttons: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
@@ -681,6 +682,11 @@ settings = Settings(
         # записаться, сколько готовится, «условия сбора» — не условие услуги (BUG-2026-10-17-P2-JUDGE-COLLECTION-CONDITIONS);
         # промпт `choose_price_service_conditions`. off — прежний промпт `choose_price_service`. [MESSENGER_ROUTER] price_judge_conditions
         price_judge_conditions=_get_enum("MESSENGER_ROUTER", "price_judge_conditions", default="off", allowed={"off", "on"}),
+        # Корзина-калькулятор, базовый объём ТЗ 17.08 §6 (ответы заказчика 16.09): под позициями корзины — итог (одна цена у
+        # каждой позиции — сумма; у позиции развилка вариантов — «от … до …» без выдуманной суммы) и «Взятие биоматериала
+        # оплачивается отдельно» с перечнем взятия по данным (название строки прайса и материалы МИС `biomatNames`, цены — из
+        # прайса). off — как было. [MESSENGER_ROUTER] basket_calc
+        basket_calc=_get_enum("MESSENGER_ROUTER", "basket_calc", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -844,6 +850,7 @@ MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
 MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
 MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
+MR_BASKET_CALC = settings.messenger_router.basket_calc
 MR_PENDING_BUTTONS = settings.messenger_router.pending_buttons
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_LLM_PRIMARY_RULES_FALLBACK = settings.messenger_router.llm_primary_rules_fallback

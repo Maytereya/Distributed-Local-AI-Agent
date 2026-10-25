@@ -25,7 +25,13 @@ from .prompt_registry import load_prompt_text
 from .russian_nlu import normalize_ru
 from .schedule_parse_watch import unparsed as unparsed_slot
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
-from .text_templates import PRICE_CLARIFY_NAME_TEXT, price_not_found_text
+from .text_templates import (
+    BASKET_DISCOUNT_NOTE,
+    BASKET_TAKE_NOTE,
+    PRICE_CLARIFY_NAME_TEXT,
+    basket_total_text,
+    price_not_found_text,
+)
 from .runtime_config import config as c
 
 # Бюджет свободного ответа LLM целиком: очередь, разбор промпта и генерация (владелец
@@ -498,20 +504,47 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
         lines.append(hint)
         # Подсказка «напишите: "все"» — висящий вопрос бота (наблюдатель `_expects`, решение владельца 15.10).
         expects.ask(expects.Question.SHOW_ALL, kind=expects.PICK, options=expects.SHOW_ALL_OPTIONS)
+    # Корзина-калькулятор (`basket_calc = on`, ТЗ 17.08 §6): итог и взятие биоматериала под позициями.
+    calc = payload.get("basket_calc")
+    if isinstance(calc, dict):
+        lines.extend(_basket_calc_lines(calc))
     # Позиция корзины, у которой без выбора LLM нашлась одна строка (политика сбоя под
     # `turn_parse = on`, L-15b шаг 5): её название без цены — текстом варианта B L-13.
     names_note = str(payload.get("names_note") or "").strip()
     if names_note:
-        lines.append("")
+        if lines[-1]:  # после итога корзины пустая строка уже стоит
+            lines.append("")
         lines.append(names_note)
     # П6 «корзина» (BUG-B, S3): честно показываем позиции списка, которые не
     # удалось распознать по каталогу, — не замалчиваем неполноту ответа.
     unrecognized_note = str(payload.get("unrecognized_note") or "").strip()
     if unrecognized_note:
-        lines.append("")
+        if lines[-1]:
+            lines.append("")
         lines.append(unrecognized_note)
     lines.append("Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.")
     return _append_samara_disclaimer("\n".join(lines).strip(), str(payload.get("data_as_of") or ""))
+
+
+def _basket_calc_lines(calc: dict[str, Any]) -> list[str]:
+    """Итог корзины (от двух позиций с ценой) и под ним — оговорка заказчика о взятии биоматериала с перечнем взятия по данным
+    (`_basket_select.basket_calculation`). Суммы печатает код: итог посчитан из тех же строк, что напечатаны выше."""
+
+    lines: list[str] = []
+    total = int(calc.get("positions") or 0) >= 2
+    if total:
+        low, high = int(calc.get("total_min") or 0), int(calc.get("total_max") or 0)
+        amount = _format_rub(low) if low == high else f"от {_format_rub(low)} до {_format_rub(high)}"
+        lines += ["", _close_sentence(basket_total_text(amount, forks=list(calc.get("forks") or []), partial=bool(calc.get("partial"))))]
+    takes = [take for take in calc.get("takes") or [] if isinstance(take, dict)]
+    if takes or calc.get("take_unknown"):
+        if not lines:
+            lines.append("")
+        lines.append(f"{BASKET_TAKE_NOTE}:" if takes else f"{BASKET_TAKE_NOTE}.")
+        lines += [f"— {take['serviceName']} — {_format_rub(_extract_price_amount(take))}" for take in takes]
+    if total:
+        lines.append(BASKET_DISCOUNT_NOTE)  # сумма — по прайсу; скидки не формализованы (схема калькулятора, §7)
+    return [*lines, ""] if lines else lines  # блок отделён и от «Не распознал», и от заключительной фразы
 
 
 def service_bundle_needs_operator(payload: dict[str, Any]) -> bool:
