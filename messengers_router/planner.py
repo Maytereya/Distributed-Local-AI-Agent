@@ -11,7 +11,7 @@ import contextvars
 from collections.abc import Iterator
 from typing import Any
 
-from . import address_service, expects, turn_understanding
+from . import address_service, button_flow, expects, turn_understanding
 from .entity_grounder import service_dropped_by_llm
 from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
@@ -382,6 +382,10 @@ def build_plan(
         return Plan(label=label, steps=steps)
 
     if label == "PRICE":
+        # Ответ на вопрос кнопки цены — в её области прайса (`button_price_scope`; только когда она есть).
+        scope = button_flow.price_scope(pending)
+        if scope:
+            entities = {**entities, "__price_scope": scope}
         service_known = bool(str(entities.get("service_name") or entities.get("test_name") or "").strip())
         doctor_known = bool(entities.get("doctor_id") or entities.get("doctor_name"))
         # Пациент спросил цену — строку прайса выбирает LLM (`_price_select_llm`). Цена
@@ -413,6 +417,11 @@ def build_plan(
             service_known = False
             price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
             turn_understanding.note_acted("planner_price_by_understanding")
+        if scope and service_known:
+            # Ответ на вопрос кнопки цены — путь цены по словам реплики в области кнопки: название, которое подставили
+            # дозаполнение или классификатор по всему прайсу, область не обходит.
+            service_known = False
+            price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
         if service_known and not doctor_known:
             steps.append(PlanStep(tool="service_bundle_info", input={"query": user_text, "entities": price_entities}))
         else:

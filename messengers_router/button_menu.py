@@ -44,6 +44,7 @@ class ButtonAction:
     title: str = ""  # подпись листа в меню шлюза
     section: str = ""  # кнопка первого уровня, под которой лист; пусто — лист в главном меню
     about: str = ""  # о чём лист — «Это вопрос про …» (винительный падеж)
+    scope: str = ""  # область прайса ответа на вопрос кнопки цены: `tests` — анализы, `doctor` — не анализы (`button_flow`)
 
 
 def _slot(label: str, hint: str = "", **entities: str) -> ButtonAction:
@@ -63,10 +64,10 @@ def _pass(label: str) -> ButtonAction:
     return ButtonAction(label=label, mode="pass")
 
 
-def _at(action: ButtonAction, title: str, about: str, section: str = "") -> ButtonAction:
-    """Место листа в меню: подпись, раздел (кнопка первого уровня) и о чём он."""
+def _at(action: ButtonAction, title: str, about: str, section: str = "", *, scope: str = "") -> ButtonAction:
+    """Место листа в меню: подпись, раздел (кнопка первого уровня), о чём он и область прайса кнопки цены."""
 
-    return replace(action, title=title, section=section, about=about)
+    return replace(action, title=title, section=section, about=about, scope=scope)
 
 
 # Кнопки первого уровня меню шлюза — разделы листьев.
@@ -140,7 +141,7 @@ BUTTONS: dict[str, ButtonAction] = {
             "PRICE",
             "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин».",
         ),
-        "Сколько стоит анализ", "цену анализа", _TESTS,
+        "Сколько стоит анализ", "цену анализа", _TESTS, scope="tests",
     ),
     # --- Результаты анализов
     "menu.results.lookup": _at(_slot("TEST_RESULT"), "Ввести данные", "результаты анализов", _RESULTS),
@@ -158,14 +159,14 @@ BUTTONS: dict[str, ButtonAction] = {
             "PRICE",
             "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин».",
         ),
-        "Цена анализа", "цену анализа", _PRICE,
+        "Цена анализа", "цену анализа", _PRICE, scope="tests",
     ),
     "menu.price.doctor": _at(
         _slot(
             "PRICE",
             "К какому врачу? Напишите специальность — например: «кардиолог», «невролог», «гинеколог».",
         ),
-        "Цена приёма врача", "цену приёма врача", _PRICE,
+        "Цена приёма врача", "цену приёма врача", _PRICE, scope="doctor",
     ),
     "menu.price.promo": _at(_pass("NEWS"), "Акции и скидки", "акции и скидки", _PRICE),
     # --- Адреса и часы работы (лист, решение владельца 28.09)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_price
@@ -43,6 +44,7 @@ from ._doctors_helpers import (
 )
 from ._prepare import _is_prepare_requested_in_price_query
 from ._basket_select import basket_from_phrases, choose_basket_rows
+from ._strong_match import strong_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
 from ._price_select_llm import (
@@ -446,6 +448,59 @@ def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]], *, 
     return str(_extract_price_service_from_query(query_text) or query_text or "").strip()
 
 
+def _in_price_scope(row: dict[str, Any], scope: str) -> bool:
+    """Строка прайса в области кнопки цены — по данным МИС, не по словам: у анализов есть срок готовности (то же определение,
+    что `Services.is_lab_catalog_service`), у приёмов, процедур и УЗИ — нет. `tests` — анализы, `doctor` — не анализы."""
+
+    lab = bool(str(row.get("deadline") or "").strip())
+    return lab if scope == "tests" else not lab
+
+
+def _button_scope_rows(
+    entities: dict[str, Any], query: str, search_text: str, service_name: str, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]] | None:
+    """Строки области кнопки цены (`__price_scope`, `button_price_scope`), если в области есть кандидат на фразу запроса —
+    дословный (сильная фраза разбора), развилка синонима МИС, семейство или строка по словам; нет — None: ищем по всему
+    прайсу, как без кнопки (пациент нажал «Цену анализа», а спросил УЗИ — ответ УЗИ, а не «не нашёл»). Фраза дословно, синонимом
+    МИС или кодом названа услуга только вне области («ФГДС» на «Цену анализа») — тоже None: данные сильнее кнопки, а по словам
+    в области нашлось бы чужое («профиль анализов перед ФГДС»)."""
+
+    scope = str(entities.get("__price_scope") or "")
+    if scope not in ("tests", "doctor"):
+        return None
+    scoped = [row for row in rows if _in_price_scope(row, scope)]
+    phrase = str(search_text or service_name or "").strip()
+    strong = _parse_strong_selection(query)
+    named = strong.rows if strong is not None else tuple(strong_rows(phrase, rows)) if phrase else ()
+    if named and not any(_in_price_scope(row, scope) for row in named):
+        turn_telemetry.note(price_scope="named_outside")
+        return None
+    found = bool(scoped) and (
+        (strong is not None and any(_in_price_scope(row, scope) for row in strong.rows))
+        or (
+            bool(phrase)
+            and (
+                _build_synonym_fork_payload(phrase, scoped) is not None
+                or _build_price_family_payload(phrase, scoped, show_all=False, visible_limit=10) is not None
+                or bool(_select_patient_price_rows(scoped, phrase, limit=1))
+            )
+        )
+    )
+    turn_telemetry.note(price_scope=scope if found else "fallback")
+    return scoped if found else None
+
+
+def _strong_in_scope(selection: PriceSelection | None, entities: dict[str, Any]) -> PriceSelection | None:
+    """Сильная фраза разбора в области кнопки цены: строки области, если они среди строк фразы; все вне области —
+    строки фразы как есть (дословное название и синоним МИС — данные, они сильнее кнопки)."""
+
+    scope = str(entities.get("__price_scope") or "")
+    if selection is None or not selection.rows or scope not in ("tests", "doctor"):
+        return selection
+    inside = tuple(row for row in selection.rows if _in_price_scope(row, scope))
+    return replace(selection, rows=inside) if inside and len(inside) < len(selection.rows) else selection
+
+
 async def _prefetch_price_snapshots() -> None:
     """Сегодняшние срезы прайса и priceUnits — скачать в потоке, если их нет: дальше ход читает их синхронно
     (резолвер, гард уточнения, контекст оказания), и скачивание не должно идти в цикле событий (DATA-7)."""
@@ -480,6 +535,18 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         if last_exc is not None:
             raise last_exc
         return []
+
+    async def _scope_catalog() -> list[dict[str, Any]] | None:
+        """Строки прайса области кнопки цены (`__price_scope`); области нет или прайс не читается — None."""
+
+        scope = str(entities.get("__price_scope") or "")
+        if scope not in ("tests", "doctor"):
+            return None
+        try:
+            rows = await _load_with_retry(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
+        except Exception:
+            return None
+        return [row for row in rows if isinstance(row, dict) and _in_price_scope(row, scope)] or None
 
     doctor_id = _as_int(entities.get("doctor_id"))
     doctor_name = _get_first_present(entities, ["doctor_name", "doctor", "fio", "last_name", "doctor_last_name"]) or ""
@@ -537,7 +604,13 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         if entity_service_name and _is_city_only_reply(query_text):
             query_service_name = None
         else:
-            query_service_name = resolve_price_service_name_from_catalog(
+            # Ответ на вопрос кнопки цены: название — сначала в области кнопки (`button_price_scope`), затем во всём прайсе.
+            scope_catalog = await _scope_catalog()
+            query_service_name = (
+                resolve_price_service_name_from_catalog(search_text, current_service_name=entity_service_name, rows=scope_catalog)
+                if scope_catalog
+                else None
+            ) or resolve_price_service_name_from_catalog(
                 search_text,
                 current_service_name=entity_service_name,
             )
@@ -628,6 +701,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             "service_name_effective": str(multi_payload.get("service_name") or "").strip(),
         }
         return multi_payload
+    # Ответ на вопрос кнопки цены — в её области прайса (`button_price_scope`), если в области есть кандидат на фразу;
+    # корзина и гард условия выше — по всему прайсу.
+    scoped_rows = _button_scope_rows(entities, str(query or ""), search_text, service_name, retail_rows_clean)
+    if scoped_rows is not None:
+        retail_rows_clean = price_rows = scoped_rows
     # Синоним МИС указывает на несколько услуг («оак» → 3, «рак» → 5): показываем
     # ВСЕ варианты, выбирает пациент. Стоит ПОСЛЕ мульти-пути, чтобы корзина
     # («оак, ферритин») по-прежнему считалась как корзина, и ДО семейного —
@@ -656,7 +734,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
         )
         if strong is not None:
-            return strong
+            return _strong_in_scope(strong, entities)
         if entity_name and p2_judged:
             verdict = await _p2_llm_verdict(
                 str(query or ""),

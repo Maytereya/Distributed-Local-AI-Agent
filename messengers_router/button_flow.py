@@ -21,6 +21,11 @@
   («Сколько стоит анализ» на «Цена анализа»), — не подсказка: ход идёт как без выключателя. Ничего не подошло, сбой LLM —
   общий путь, как было; это решение лимит решений хода не тратит (как «другая тема» одной функции, Q5 18.10). Ложная
   подсказка безопаснее неверного ответа, но её долю меряет карточка (`button_hint` в журнале хода).
+* `button_price_scope` (BUG-2026-10-25-BUTTON-PRICE-SCOPE; ТЗ 17.08, «сужение поиска по теме») — ответ на вопрос кнопки цены
+  ищется в её области прайса по данным МИС (`price_scope`): «Цена приёма врача» — услуги без срока готовности (не анализы),
+  «Цена анализа» и «Сколько стоит анализ» — анализы (со сроком). Режим `doctor` сужает только «Цену приёма врача»: на «Цену
+  анализа» пациенты ведут и УЗИ, и процедуры (набор buttons_v1, wb-metric 25.10: у 84 из 264 размеченных правильный ответ —
+  не только анализ), `all` — обе. Как сужать строки — путь цены (`services.prices`).
 """
 
 from __future__ import annotations
@@ -59,10 +64,28 @@ def hint_on() -> bool:
     return _on("MR_BUTTON_TOPIC_HINT")
 
 
+def price_scope_mode() -> str:
+    """`[MESSENGER_ROUTER] button_price_scope = off | doctor | all`: какие кнопки цены сужают поиск своей областью прайса."""
+
+    mode = str(getattr(_cfg, "MR_BUTTON_PRICE_SCOPE", "off") or "").strip().lower()
+    return mode if mode in ("doctor", "all") else "off"
+
+
 def marks_questions() -> bool:
     """Висящий вопрос кнопки помечается её листом — только когда пометку кто-то читает (off — состояние как было)."""
 
-    return answer_topic_on() or hint_on()
+    return answer_topic_on() or hint_on() or price_scope_mode() != "off"
+
+
+def price_scope(pending: Any) -> str:
+    """Область прайса ответа на вопрос кнопки цены (`tests` | `doctor`) — если её сужает режим `button_price_scope`; иначе
+    пусто (поиск по всему прайсу, как было)."""
+
+    mode = price_scope_mode()
+    action = button_menu.action_for(question_button(pending)) if mode != "off" else None
+    if action is None or action.label != "PRICE" or not action.scope:
+        return ""
+    return action.scope if mode == "all" or action.scope == "doctor" else ""
 
 
 def pressed(flags: Iterable[Any] | None) -> str:

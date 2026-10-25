@@ -360,6 +360,9 @@ DECLARED: dict[str, str] = {
     "messengers_router.services.prices._shown_phrase": "reader:shown_phrase",  # Ш2: «не нашёл» / похожие — фраза разбора
     "messengers_router.services.prices._service_phrase": "turns:price_one",  # Ш2: запасной поиск и кандидат розницы
     "messengers_router.services.prices._names_a_service": "reader:names_a_service",
+    # Сильное совпадение вне области кнопки цены: область не сужает (BUG-2026-10-25-BUTTON-PRICE-SCOPE, свой тест на класс).
+    "messengers_router.services.prices._button_scope_rows": "вне пути прода: область кнопки цены (`button_price_scope = off`), "
+    "закреплена tests/test_button_price_scope_class.py",
     "messengers_router.services.prices._llm_selection_service_name": "reader:shown_phrase",
     "messengers_router.turn_understanding._bare_phrase": "reader:bare_phrase",
     "messengers_router.turn_understanding._single_mention": "reader:single_mention",
