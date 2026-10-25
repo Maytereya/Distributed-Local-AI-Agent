@@ -120,15 +120,18 @@ def mark_question(pending: Any, button_id: str) -> None:
 
 
 def judges_answer(label: str, pending: Any) -> bool:
-    """Вопрос кнопки этой темы получает свободный ответ одной функции под `button_answer_topic` (кнопки цены): вопрос
-    `SLOT_TOPICS` получает его и без выключателя (`pending_buttons`)."""
+    """Вопрос кнопки этой темы получает свободный ответ одной функции под `button_answer_topic = on` (кнопки цены): вопрос
+    `SLOT_TOPICS` получает его и без выключателя (`pending_buttons`). Подсказка (`button_topic_hint`) судью кнопкам цены не
+    добавляет: под `slot` классификатор там остаётся, и судья был бы лишней секундой (карточка 25.10: p50 2,5 → 3,3 с)."""
 
-    return (answer_topic_mode() == "on" or hint_on()) and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
+    return answer_topic_mode() == "on" and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
 
 
 def judged_by_llm(pending: Any) -> bool:
-    """Ответ на вопрос кнопки судит LLM, а не сужение правилами (`filled`): правила дозаполнения находят значение слота и в
-    реплике о другом — 31 из 32 чужих вопросов, которым карточка 25.10 навязала тему кнопки, решило такое сужение."""
+    """Ответ на вопрос кнопки судит LLM и тогда, когда значение слота нашли правила (`filled`), — но только на «другую тему»:
+    правила дозаполнения находят значение и в реплике о другом (31 из 32 чужих вопросов, которым карточка 25.10 навязала тему
+    кнопки), а прочие исходы LLM там сужение правил не перебивают («Результаты» на «Ввести данные» LLM звала «не могу
+    назвать» — 32 ответа из 89 стали оффером оператора вместо инструкции)."""
 
     return (answer_topic_on() or hint_on()) and bool(question_button(pending))
 
@@ -160,7 +163,6 @@ def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any, spe
     if (
         llm_runtime.turn_decisions_spent() <= spent_before
         or answered is None
-        or answered.source is not pending_answer.Source.LLM
         or answered.outcome is not pending_answer.Outcome.ANSWER  # прочие исходы ход не закрывают — их уже вернула функция (Q5)
         or answered.type != Question.SLOT_VALUE.value
         or not judged_by_llm(pending)

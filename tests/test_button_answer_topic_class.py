@@ -215,7 +215,21 @@ def test_slot_judge_does_not_spend_turn_decision(mini_prod_world, monkeypatch): 
 
     on = _dialog(mini_prod_world, monkeypatch, [_press("menu.tests.prepare"), "колоноскопия"], switch="on")
     tel = on[1]["telemetry"]
-    assert tel.get("tu_pending_src") == "llm" and tel.get("tu_button_refund") == 1, tel
+    judged = [c for c in tel.get("choose") or [] if c.get("task") == "pending_free_reply"]
+    assert judged and tel.get("tu_pending_outcome") == "answer" and tel.get("tu_button_refund") == 1, tel
+
+
+def test_rules_value_keeps_its_answer_unless_llm_says_other_topic(mini_prod_world, monkeypatch):  # noqa: F811
+    """Карточка 25.10: значение, найденное правилами, LLM проверяет только на «другую тему» — её «не могу назвать» на
+    «Результаты» после «Ввести данные» (32 из 89) делало из инструкции оффер оператора. Правила нашли значение и LLM сказала
+    «нет» — ответ правил, как без выключателя."""
+
+    turns = [_press("menu.tests.prepare"), "колоноскопия"]
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", free="no")
+    off = _dialog(mini_prod_world, monkeypatch, turns, switch="off", free="no")
+    tel = on[1]["telemetry"]
+    assert tel.get("tu_pending_outcome") == "answer" and tel.get("tu_pending_src") == "fast", tel
+    assert on[1]["text"] == off[1]["text"]
 
 
 @pytest.mark.parametrize("button_id", _JUDGED)
