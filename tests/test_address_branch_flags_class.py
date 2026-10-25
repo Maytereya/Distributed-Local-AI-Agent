@@ -81,11 +81,14 @@ def test_walkin_analysis_answer_lists_only_lab_branches(question, mini_prod_worl
     assert _listed(on) and not _listed(on) & _NO_LAB, on
 
 
-def test_walkin_ecg_answer_lists_only_ecg_branches(mini_prod_world, monkeypatch):  # noqa: F811
-    on = _dialog(mini_prod_world, monkeypatch, ["где сделать ЭКГ без записи?"], switch="on")[0]["text"]
-    if "без записи" not in on:
-        pytest.skip("ответ не фразой «без записи»")
-    assert _listed(on) and not _listed(on) & _NO_ECG, on
+@pytest.mark.parametrize("switch", ["off", "on"])
+@pytest.mark.parametrize("question", ["где сделать ЭКГ без записи?", "где сделать ЭКГ?", "ЭКГ без записи?"])
+def test_ecg_answer_lists_only_ecg_branches(question, switch, mini_prod_world, monkeypatch):  # noqa: F811
+    """Свойство — на любом ответе с перечнем филиалов, какой бы путь его ни собрал: фразой «ЭКГ … без записи» (фильтр
+    `address_branch_flags`) или общим списком адресов (фильтр по флагу услуги из реплики, работает и при off)."""
+
+    text = _dialog(mini_prod_world, monkeypatch, [question], switch=switch)[0]["text"]
+    assert _listed(text) and not _listed(text) & _NO_ECG, text
 
 
 @pytest.mark.parametrize("follow", ["а в субботу работаете?", "а где поближе к центру?"])
