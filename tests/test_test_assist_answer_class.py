@@ -367,3 +367,12 @@ def test_price_age_follows_the_price_path(age, expect, ta_world, monkeypatch):
         assert "руб" not in out["text"] and test_assist_answer.PICKED_TAIL in out["text"], out["text"]
     else:
         assert "— Вирус кори Ig G — 800 руб." in out["text"] and expect in out["text"], out["text"]
+
+
+@pytest.mark.parametrize("path", ["messengers_router/prompts/choose_test_assist_answer.txt", "app_data/prompts/mr_choose_test_assist_answer.txt"])
+def test_partly_asks_for_all_variants_like_none(path):
+    # Карточка п. 1 (26.10): g0388 «антитела к аннексину суммарные» — в списке IgG и IgM, LLM выбрала одну: «все варианты» промпт
+    # просил только у точного ответа. С ценой одна строка из двух вариантов — неполный ответ ценой (принцип 2: сомнение → список).
+    text = (Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8")
+    partly = next(line for line in text.splitlines() if line.startswith('- "partly"'))
+    assert "выбери их все, до 6" in partly
