@@ -143,3 +143,14 @@ def test_service_answer_alone_does_not_turn_walkin_on(reply, answer_world, monke
 
     assert out["telemetry"].get("nlu_rule") == "rule_nonbookable_walkin", out["telemetry"]
     assert _WALKIN_MARK not in out["calls"] and _CLASSIFIER_MARK not in out["calls"]
+
+
+@pytest.mark.parametrize("path", ["messengers_router/prompts/choose_walkin.txt", "app_data/prompts/mr_choose_walkin.txt"])
+def test_prompt_says_outcome_none_when_a_number_is_picked(path):
+    # Карточка 26.10 (`p2on`, живая LLM): без этой строки модель отвечала {"picks": [1], "outcome": "other"} — номер «сдать
+    # анализы» и исход «о другом» сразу; модуль выбора при исходе номера не берёт, и на «нужно ли записываться на анализы» фраза
+    # «Анализы выполняются без записи» пропадала (g0075, g0092, g0294, g0370 …). Исход при выбранном номере — «none».
+    import pathlib
+
+    text = (pathlib.Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8")
+    assert 'Если номер выбран, "outcome" — всегда "none".' in text
