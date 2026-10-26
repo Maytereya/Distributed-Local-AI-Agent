@@ -206,7 +206,6 @@ class MessengerRouterConfig:
     grounder_generic_by_llm: str
     biomaterial_by_mis: str
     p1_facet_none_offer: str
-    price_budget_clarify: str
     price_general_clarify: str
     price_select_rules: str
     synonym_wordforms: str
@@ -622,10 +621,6 @@ settings = Settings(
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
         p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="off", allowed={"off", "on"}),
-        # Отказ лимита решений хода на выборе строки цены / суде условия (DESIGN-2026-10-22-TURN-DECISION-BUDGET, вариант А,
-        # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
-        # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
-        price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
         # Код после выбора строки цены LLM (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» / «не услуга» — уточнение,
         # а не ответ правил со списком цен («гастропанель» → «Гастрин»); несколько разных услуг, выбранных LLM, — список на
         # выбор, а не первая строка с её врачами («консультация врача» → приём хирурга). off — как было.
@@ -887,7 +882,6 @@ MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_GROUNDER_GENERIC_BY_LLM = settings.messenger_router.grounder_generic_by_llm
 MR_BIOMATERIAL_BY_MIS = settings.messenger_router.biomaterial_by_mis
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
-MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_PRICE_GENERAL_CLARIFY = settings.messenger_router.price_general_clarify
 MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
 MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms

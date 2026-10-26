@@ -26,7 +26,16 @@ _SERVICES = object()  # каталог подменяется — сервисн
 
 
 def _apply(
-    monkeypatch, text: str, answer, *, label: str = "APPOINTMENT", rules: str = "", flags=(), catalog=_CATALOG, entities=None
+    monkeypatch,
+    text: str,
+    answer,
+    *,
+    label: str = "APPOINTMENT",
+    rules: str = "",
+    flags=(),
+    catalog=_CATALOG,
+    entities=None,
+    in_turn: bool = False,
 ):
     fake = _LLM({_MARK: answer})
     decision = RouteDecision(label=label, entities={**({"specialty": rules} if rules else {}), **(entities or {})}, flags=set(flags))
@@ -34,12 +43,20 @@ def _apply(
     async def cat(_services):
         return catalog
 
+    async def run():
+        token = llm_runtime.begin_turn_budget() if in_turn else None  # бюджет решений хода — как в эндпоинте
+        try:
+            return await role_pick.apply(decision, text, _SERVICES)
+        finally:
+            if token is not None:
+                llm_runtime.end_turn_budget(token)
+
     with monkeypatch.context() as patch:
         patch.setattr(role_pick, "catalog", cat)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
         choice._CACHE.clear()
-        out = asyncio.run(role_pick.apply(decision, text, _SERVICES))
+        out = asyncio.run(run())
     return decision, out, fake.calls
 
 
@@ -143,8 +160,18 @@ def test_decision_that_changes_nothing_returns_the_turn_budget(monkeypatch):
 
     refunds: list[int] = []
     monkeypatch.setattr(llm_runtime, "refund_turn_decision", lambda: refunds.append(1) or True)
-    _apply(monkeypatch, "запишите к неврологу", _picks("невролог"), rules="невролог")
+    _apply(monkeypatch, "запишите к неврологу", _picks("невролог"), rules="невролог", in_turn=True)
     assert refunds == [1]
     refunds.clear()
-    _apply(monkeypatch, "нужен окулист", _picks("офтальмолог"))
+    _apply(monkeypatch, "нужен окулист", _picks("офтальмолог"), in_turn=True)
     assert refunds == []
+
+
+def test_failed_role_decision_returns_no_decision(monkeypatch):
+    """Сбой LLM роли решения хода не тратит (решение владельца 26.10, `llm_runtime`) — и не возвращает: иначе ход получил
+    бы назад чужое решение (выбор строки цены, суд условия) и превысил лимит."""
+
+    refunds: list[int] = []
+    monkeypatch.setattr(llm_runtime, "refund_turn_decision", lambda: refunds.append(1) or True)
+    _decision, _out, calls = _apply(monkeypatch, "запишите к неврологу", _down, rules="невролог", in_turn=True)
+    assert calls and refunds == []

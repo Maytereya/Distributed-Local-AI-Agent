@@ -206,9 +206,10 @@ def test_llm_failure_or_garbage_is_an_offer_not_free_text(failure, ta_world, mon
 
 
 def test_decision_budget_refusal_is_an_offer(ta_world, monkeypatch):
-    # Решения хода до ответа — разбор фраз и свойство вопроса об услуге из каталога; на ответ подбора анализов лимита не остаётся.
+    # Решение хода до ответа — свойство вопроса об услуге из каталога; на ответ подбора анализов лимита не остаётся. Разбор фраз
+    # подделка не отвечает: сбой вызова лимит не тратит (решение владельца 26.10), поэтому лимит — одно решение.
     out = turn(
-        ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=_answers(verdict("no_data")), cfg_extra={"MR_LLM_DECISION_TURN_CALLS": 2}
+        ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=_answers(verdict("no_data")), cfg_extra={"MR_LLM_DECISION_TURN_CALLS": 1}
     )
 
     assert out["telemetry"].get("ta_answer") == "failed", out["telemetry"]

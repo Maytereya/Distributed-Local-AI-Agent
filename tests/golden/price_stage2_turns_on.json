@@ -305,7 +305,7 @@
       "grounder_from_understanding",
       "planner_price_by_understanding"
      ],
-     "price_policy": "budget_names",
+     "price_policy": "names",
      "price_guard": "llm_bypass"
     },
     "llm": [
@@ -1186,7 +1186,7 @@
      "tu_acted": [
       "grounder_from_understanding"
      ],
-     "price_policy": "budget_names",
+     "price_policy": "names",
      "price_guard": "llm_bypass"
     },
     "llm": [
