@@ -742,8 +742,9 @@ settings = Settings(
         # Корзина-калькулятор, базовый объём ТЗ 17.08 §6 (ответы заказчика 16.09): под позициями корзины — итог (одна цена у
         # каждой позиции — сумма; у позиции развилка вариантов — «от … до …» без выдуманной суммы) и «Взятие биоматериала
         # оплачивается отдельно» с перечнем взятия по данным (название строки прайса и материалы МИС `biomatNames`, цены — из
-        # прайса). off — как было. [MESSENGER_ROUTER] basket_calc
-        basket_calc=_get_enum("MESSENGER_ROUTER", "basket_calc", default="off", allowed={"off", "on"}),
+        # прайса). off — как было. По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        # [MESSENGER_ROUTER] basket_calc
+        basket_calc=_get_enum("MESSENGER_ROUTER", "basket_calc", default="on", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",

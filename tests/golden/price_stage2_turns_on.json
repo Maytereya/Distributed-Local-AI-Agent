@@ -69,6 +69,10 @@
      [
       "price_basket",
       "picked"
+     ],
+     [
+      "basket_total",
+      "unavailable"
      ]
     ]
    }
@@ -155,6 +159,10 @@
      [
       "price_basket",
       "picked"
+     ],
+     [
+      "basket_total",
+      "unavailable"
      ]
     ]
    }
@@ -1671,6 +1679,10 @@
      [
       "turn_spans",
       "picked"
+     ],
+     [
+      "basket_total",
+      "unavailable"
      ]
     ]
    },
