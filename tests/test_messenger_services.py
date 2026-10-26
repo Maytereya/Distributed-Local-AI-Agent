@@ -2643,7 +2643,9 @@ def test_price_info_tooth_removal_returns_family_query_variants(monkeypatch):
 
 
 def test_price_info_oak_keeps_canonical_variants_over_noise(monkeypatch):
-    """ОАК-запрос: канонические строки должны вытеснять шум вроде «группа крови»."""
+    """ОАК-запрос: канонические строки должны вытеснять шум вроде «группа крови», а шум не попадает и в хвост списка, который
+    раскрывает «все»: хвост — только строки ОАК (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD; до 26.10 тест требовал подсказку «все»,
+    которую давал этот шум)."""
 
     svc = Services()
 
@@ -2677,8 +2679,8 @@ def test_price_info_oak_keeps_canonical_variants_over_noise(monkeypatch):
     assert len(variants) >= 2
     visible_codes = [str(row.get("serviceHomecode") or "") for row in variants[:2]]
     assert visible_codes == ["502", "501"]
-    assert res.get("remaining_count", 0) >= 1
-    assert '"все"' in str(res.get("show_all_hint") or "")
+    assert [str(row.get("serviceHomecode") or "") for row in variants] == ["502", "501"]
+    assert res.get("remaining_count") == 0 and not res.get("show_all_hint")
 
 
 def test_price_info_oak_alias_returns_canonical_variants(monkeypatch):

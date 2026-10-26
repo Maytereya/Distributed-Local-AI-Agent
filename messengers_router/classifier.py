@@ -531,6 +531,25 @@ def _is_price_family_show_all_followup(text: str, last_entities: dict[str, Any])
     return _price_show_all_requested(text, text)
 
 
+def _is_price_family_row_pick(text: str, last_entities: dict[str, Any]) -> bool:
+    """
+    Номер строки после списка семейства цены («1», «2.»): пациент выбирает строку, которую видел, — а не называет услугу и не
+    раскрывает список (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD). Строку находит одно определение — путь цены
+    (`_price_family_row_from_context`).
+
+    :param text: текущая реплика пользователя
+    :param last_entities: сессионный контекст
+    :return: True, если ответить строкой показанного списка
+    """
+
+    if str(last_entities.get("_last_label") or "").strip().upper() != "PRICE":
+        return False
+    # Импорт в функции: классификатор не тянет сервисный слой при своём импорте (как `planner`).
+    from .services._prices_helpers import _price_family_row_from_context
+
+    return _price_family_row_from_context(text, last_entities) is not None
+
+
 _PROMO_FOLLOWUP_TEXT_RE = re.compile(
     r"^\s*(?:уточни(?:те)?|подробнее|расскажи(?:те)?(?:\s+подробнее)?|условия(?:\s+акции)?|давай(?:те)?"
     r"|(?:покажи(?:те)?\s+)?вс[её](?:\s+акции)?)\s*[!.,?]*\s*$",
@@ -1270,6 +1289,15 @@ async def deterministic_rule_decision(
             confidence=0.86,
             entities={},
             flags=local_flags | {"rule_price_family_show_all"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    elif _is_price_family_row_pick(text, last_entities):
+        decision = RouteDecision(
+            label="PRICE",
+            confidence=0.86,
+            entities={},
+            flags=local_flags | {"rule_price_family_row"},
             needs_handoff=False,
             context_action="continue",
         )

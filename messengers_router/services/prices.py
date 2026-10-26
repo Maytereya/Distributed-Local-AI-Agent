@@ -75,6 +75,7 @@ from ._prices_helpers import (
     _match_drops_unsatisfiable_qualifier,
     _strong_phrase_guard_on,
     _price_family_payload_from_context,
+    _price_family_row_from_context,
     _price_query_tokens,
     _price_row_score,
     _rank_price_rows,
@@ -119,6 +120,20 @@ def _llm_family_payload(service_name: str, rows: list[dict[str, Any]], *, visibl
         if remaining_count
         else "",
         "note": "price_llm_select",
+    }
+
+
+def _family_row_payload(row: dict[str, Any], query_text: str, entities: dict[str, Any]) -> dict[str, Any]:
+    """Ответ цены одной строкой показанного списка, которую пациент выбрал номером: та же форма, что у одной строки выбора LLM
+    (`price_info._llm_answer`)."""
+
+    name = str(row.get("serviceName") or row.get("name") or "").strip()
+    kind = _classify_catalog_service_kind(name, query_text=query_text, retail_rows=[row], has_exact_doctor_link=False, is_consult_query=False)
+    return {
+        "prices": [row],
+        "service_kind": "lab" if kind == "lab" else "",
+        "note": "price_info: family_row",
+        "entities_used": {**entities, "service_name_effective": name},
     }
 
 
@@ -573,6 +588,10 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         if family_payload:
             family_payload["entities_used"] = entities
             return family_payload
+    family_row = None if doctor_id else _price_family_row_from_context(str(query or ""), entities)
+    if family_row is not None:
+        # Номер строки показанного списка («1»): ответ — эта строка (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD).
+        return _family_row_payload(family_row, query_text, entities)
     if _is_generic_uzi_price_request(query_text):
         return {
             "prices": [],
@@ -895,6 +914,8 @@ async def service_bundle_info(
         if family_payload:
             family_payload["entities_used"] = entities
             return family_payload
+    # Номер строки показанного списка («1»): дальше — путь одной строки, как выбор LLM (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD).
+    family_row = _price_family_row_from_context(str(query or ""), entities)
     if _is_generic_uzi_price_request(query_text):
         return {
             "service_name": "УЗИ",
@@ -910,7 +931,7 @@ async def service_bundle_info(
             "note": "service_bundle_info: generic_uzi_clarify",
             "entities_used": entities,
         }
-    clarify = _parse_failed_clarify(query, entities)
+    clarify = None if family_row is not None else _parse_failed_clarify(query, entities)
     if clarify is not None:
         clarify["top_n_applied"] = top_limit
         return clarify
@@ -968,7 +989,7 @@ async def service_bundle_info(
         llm_payload["entities_used"] = entities
         return llm_payload
 
-    llm_rows: list[dict[str, Any]] | None = _rows_shown_before(str(query or ""), retail_rows)
+    llm_rows: list[dict[str, Any]] | None = [family_row] if family_row is not None else _rows_shown_before(str(query or ""), retail_rows)
     if llm_rows is not None and len(llm_rows) > 1:  # показанные варианты — те же, что видел пациент
         shown_payload = _llm_family_payload(entity_service_name or str(llm_rows[0].get("serviceName") or ""), llm_rows)
         shown_payload.update(top_n_applied=top_limit, entities_used=entities, note="service_bundle_info: shown_before")

@@ -1753,8 +1753,9 @@ async def _inject_catalog_candidates(
             turn_understanding.note_acted("catalog_inject_skipped")
         # Контекст = показанное (L-14): ход раскрытия семейства — ответ на подсказку бота
         # «напишите: "все"», а не название услуги; каталог по реплике свёл бы «все» к «УЗИ … все зоны (детское)»
-        # (BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE). Список раскроет инструмент цены из контекста семейства.
-        if should_try_service and shown_context.expands_shown(decision):
+        # (BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE). Список раскроет инструмент цены из контекста семейства. Так же номер
+        # строки показанного списка («1»): строку ответит инструмент цены (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD).
+        if should_try_service and (shown_context.expands_shown(decision) or shown_context.picks_shown_row(decision)):
             should_try_service = False
             flags.add(shown_context.SHOW_ALL_KEPT_FLAG)
             updated = True
