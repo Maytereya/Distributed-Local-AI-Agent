@@ -1,7 +1,7 @@
 """«Анализы и ЭКГ — без записи»: решает LLM по правилу клиники, детектор по буквам — кандидат (класс 4, решения владельца
 21.10, принципы разметки 10 и 14).
 
-Инвариант класса под `service_answer_from_data = on`:
+Инвариант класса под `walkin_by_llm = on` (до 26.10 — под `service_answer_from_data`; связку владелец развязал 26.10):
 - ветка правил `rule_nonbookable_walkin` тему не решает — зовётся LLM-классификатор (правило — кандидат);
 - переклейка после NLU в адреса (`policy_nonbookable_walkin`) — только когда LLM подтвердила «сдать анализы / сделать ЭКГ»;
 - фраза «… без записи, в порядке живой очереди» в ответе адресами есть, только если LLM решила «без записи», и называет то,
@@ -17,7 +17,14 @@ import json
 import pytest
 
 from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
-from tests.test_service_answer_class import _classifier, answer_world, turn  # noqa: F401 — фикстура
+from tests.test_service_answer_class import _classifier, answer_world  # noqa: F401 — фикстура
+from tests.test_service_answer_class import turn as _svc_turn
+
+
+def turn(world_dir, monkeypatch, reply: str, *, switch: str, answers: dict, cfg_extra: dict | None = None) -> dict:
+    """Ход с `walkin_by_llm = switch`; ответ по данным (`service_answer_from_data`) — off, как на проде."""
+
+    return _svc_turn(world_dir, monkeypatch, reply, switch="off", answers=answers, cfg_extra={"MR_WALKIN_BY_LLM": switch, **(cfg_extra or {})})
 
 _WALKIN_MARK = "хочет ли пациент сдать анализы или сделать ЭКГ"
 _WALKIN_REPLIES = ["Хочу записаться на анализы", "Где можно сдать анализ кала?", "Хочу сдать кровь на гормоны, нужно записываться?", "Запишите на ЭКГ на завтра"]
@@ -91,3 +98,48 @@ def test_policy_relabel_needs_llm_confirmation(answer_world, monkeypatch):  # no
     assert moved["telemetry"].get("tu_label_final") == "ADDRESS", moved["telemetry"]
     assert moved["text"].startswith("Анализы выполняются без записи"), moved["text"]
     assert moved["calls"].count(_WALKIN_MARK) == 1  # решение хода спрашивается один раз
+
+
+# --------------------------------------------------------------------------- класс A разбора 95 цен (26.10)
+#
+# Вопрос о цене или о наличии анализа, который детектор «без записи» ловит по буквам («сдать» + «анализ» / «ЭКГ»), получал
+# адресный лист вместо цены или строки прайса: регулярка цены не видит «сколько будет стоить», а ветка правила решала тему до
+# LLM. Под `walkin_by_llm = on` тему решает LLM-классификатор; адреса — только если LLM сказала ADDRESS. Синтетика класса.
+_CLASS_A = [
+    "Сколько будет стоить сдать анализ на ферритин?",
+    "Хочу сдать анализ на витамин Д, сколько будет стоить?",
+    "Можно ли у вас сдать кровь на пролактин?",
+    "Нужно сдать анализы на гормоны: ТТГ и Т4 свободный",
+    "Сдать ЭКГ сколько будет стоить?",
+]
+_PROD_ON = {"MR_TEST_ASSIST_FROM_DATA": "on"}
+
+
+@pytest.mark.parametrize("reply", _CLASS_A)
+def test_class_a_is_an_address_list_under_off(reply, answer_world, monkeypatch):  # noqa: F811
+    out = turn(answer_world, monkeypatch, reply, switch="off", answers=_answers(_walkin(outcome="other")), cfg_extra=_PROD_ON)
+
+    assert out["telemetry"].get("nlu_rule") == "rule_nonbookable_walkin", out["telemetry"]
+    assert out["telemetry"].get("tu_label_final") == "ADDRESS" and _SENTENCE in out["text"], out["text"]
+
+
+@pytest.mark.parametrize("label", ["TEST_ASSIST", "PRICE"])
+@pytest.mark.parametrize("reply", _CLASS_A)
+def test_class_a_topic_is_decided_by_llm_not_by_letters(reply, label, answer_world, monkeypatch):  # noqa: F811
+    out = turn(answer_world, monkeypatch, reply, switch="on", answers=_answers(_walkin(outcome="other"), classifier_label=label), cfg_extra=_PROD_ON)
+
+    tel = out["telemetry"]
+    assert _CLASSIFIER_MARK in out["calls"] and tel.get("nlu_topic_by_llm") == "llm", tel
+    assert tel.get("tu_label_final") == label, tel  # детектор после NLU метку LLM не перебил
+    assert _SENTENCE not in out["text"] and "доступны филиалы" not in out["text"], out["text"]
+
+
+@pytest.mark.parametrize("reply", _CLASS_A[:2])
+def test_service_answer_alone_does_not_turn_walkin_on(reply, answer_world, monkeypatch):  # noqa: F811
+    # Связка 21.10 развязана (решение владельца 26.10): у ответа по данным и у walk-in — свои выключатели и карточки.
+    out = _svc_turn(
+        answer_world, monkeypatch, reply, switch="on", answers=_answers(_walkin((1,)), classifier_label="TEST_ASSIST"), cfg_extra=_PROD_ON
+    )
+
+    assert out["telemetry"].get("nlu_rule") == "rule_nonbookable_walkin", out["telemetry"]
+    assert _WALKIN_MARK not in out["calls"] and _CLASSIFIER_MARK not in out["calls"]

@@ -218,6 +218,7 @@ class MessengerRouterConfig:
     service_answer_from_data: str
     test_assist_from_data: str
     test_assist_price: str
+    walkin_by_llm: str
     address_service_llm: str
     doctors_by_service_data: str
     slot_suppress_llm: str
@@ -674,6 +675,11 @@ settings = Settings(
         # нет — уточнит оператор». Давность прайса — как у пути цены (`services/_freshness`). Действует при
         # `test_assist_from_data = on`. off — как было (название и срок без цены). [MESSENGER_ROUTER] test_assist_price
         test_assist_price=_get_enum("MESSENGER_ROUTER", "test_assist_price", default="off", allowed={"off", "on"}),
+        # «Анализы и ЭКГ — без записи» решает LLM по правилу клиники (STEP-2026-10-21-WALKIN-BY-LLM, `walkin.py`): ветка правил
+        # `rule_nonbookable_walkin` тему не решает (её решает LLM-классификатор, как у `topic_by_llm`), переклейки после NLU в
+        # адреса и фраза «… без записи» — по решению LLM. Свой выключатель — связку 21.10 с `service_answer_from_data` владелец
+        # развязал 26.10 (топ-5 разбора 95 цен, п. 2). off — как было (детектор по буквам). [MESSENGER_ROUTER] walkin_by_llm
+        walkin_by_llm=_get_enum("MESSENGER_ROUTER", "walkin_by_llm", default="off", allowed={"off", "on"}),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -860,6 +866,7 @@ MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_TEST_ASSIST_PRICE = settings.messenger_router.test_assist_price
+MR_WALKIN_BY_LLM = settings.messenger_router.walkin_by_llm
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_DOCTORS_BY_SERVICE_DATA = settings.messenger_router.doctors_by_service_data
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm

@@ -2502,7 +2502,7 @@ def _doctors_by_service_not_found(payload: Any) -> bool:
 
 
 async def _walkin_by_llm(decision: RouteDecision, user_text: str, *, site: str) -> tuple[RouteDecision, bool | None]:
-    """Детектор «без записи» сработал — кандидат; под `service_answer_from_data` решает LLM по правилу клиники (класс 4,
+    """Детектор «без записи» сработал — кандидат; под `walkin_by_llm` решает LLM по правилу клиники (класс 4,
     решения владельца 21.10, `walkin.py`). (решение с флагом хода, True — без записи, False — по записи или о другом,
     None — выключатель снят или сбой LLM: как было, решает детектор). Решение хода спрашивается один раз."""
 
