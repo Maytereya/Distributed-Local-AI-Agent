@@ -35,7 +35,8 @@ _CLASSIFIER_MARK = "Ты классификатор запросов пацие�
 _FOREIGN = json.dumps({"label": "APPOINTMENT", "confidence": 0.9, "context_action": "new_topic", "entities": {}})
 _PICK_NONE = json.dumps({"picks": []})
 _REPLY = "а можно прийти с собакой?"  # без своего правила: тему угадывал бы классификатор
-_RULED = "а у вас в субботу открыто?"  # надёжное правило часов филиалов
+# Надёжное правило адресов: его ветки нет в `topic_by_llm` прода (часы филиалов — есть с 22.10, их тему решает классификатор).
+_RULED = "а где вы находитесь?"
 _OPTIONS = [o.id for o in button_flow.menu_options()]
 
 
@@ -181,7 +182,7 @@ def test_typed_question_without_button_gets_no_hint(mini_prod_world, monkeypatch
 
 
 def test_reliable_rule_of_other_topic_answers_itself(mini_prod_world, monkeypatch):  # noqa: F811
-    """Встречный: надёжное правило другой темы («в субботу открыто?» — часы) отвечает само, как без выключателя."""
+    """Встречный: надёжное правило другой темы («где вы находитесь?» — адреса) отвечает само, как без выключателя."""
 
     turns = [_press("menu.price.test"), _RULED]
     on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", hint=_picks("menu.address"))

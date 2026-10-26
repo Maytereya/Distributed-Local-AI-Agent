@@ -638,7 +638,8 @@ settings = Settings(
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
         # [MESSENGER_ROUTER] topic_by_llm
-        topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
+        # По умолчанию — восемь веток, как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
+        topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default="rule_test_assist,rule_doctor_info_specialty,rule_schedule,rule_analysis_lookup_ambiguous,rule_website_help,rule_address_work_hours,rule_test_result,rule_prepare"),
         # Вопрос цели записи («К какому врачу или на какую услугу записать?» — кнопка «Записаться на приём» и тот же вопрос
         # текстом) — вопрос-слот одной функции ответа на висящий вопрос (`pending_buttons`): ответ, который LLM признала
         # ответом, идёт в запись, а не в вопрос «Отменить оформление?» правил смены темы

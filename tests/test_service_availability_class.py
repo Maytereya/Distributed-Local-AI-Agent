@@ -32,6 +32,12 @@ def _other(service_answer) -> dict:
     return {_CLASSIFIER_MARK: _classifier("OTHER"), _SERVICE_ANSWER_MARK: service_answer}
 
 
+def _doctor_info(service_answer) -> dict:
+    """Классификатор согласен с правилом врачей: ветка `rule_doctor_info_specialty` — в `topic_by_llm` прода (с 21.10)."""
+
+    return {_CLASSIFIER_MARK: _classifier("DOCTOR_INFO"), _SERVICE_ANSWER_MARK: service_answer}
+
+
 # --------------------------------------------------------------------------- OTHER от LLM (`topic_by_llm`)
 
 
@@ -86,12 +92,12 @@ def test_second_round_searches_the_names_suggested_by_llm(answer_world, monkeypa
     assert "— Ежегодный Чекап — 2 055 руб." in out["text"], out["text"]
 
 
-# --------------------------------------------------------------------------- «врачей по услуге не нашёл» (без `topic_by_llm`)
+# --------------------------------------------------------------------------- «врачей по услуге не нашёл» (тему DOCTOR_INFO решил классификатор)
 
 
 def test_doctors_not_found_answers_from_data(answer_world, monkeypatch):  # noqa: F811
-    off = turn(answer_world, monkeypatch, _G0277, switch="off", answers=_other(_pick(_PRICE_ROW)))
-    on = turn(answer_world, monkeypatch, _G0277, switch="on", answers=_other(_pick(_PRICE_ROW)))
+    off = turn(answer_world, monkeypatch, _G0277, switch="off", answers=_doctor_info(_pick(_PRICE_ROW)))
+    on = turn(answer_world, monkeypatch, _G0277, switch="on", answers=_doctor_info(_pick(_PRICE_ROW)))
 
     assert off["telemetry"].get("tu_label_final") == "DOCTOR_INFO" and "Биопсия" not in off["text"], off["text"]
     assert on["telemetry"].get("svc_answer_site") == "doctors_by_service", on["telemetry"]
@@ -99,8 +105,8 @@ def test_doctors_not_found_answers_from_data(answer_world, monkeypatch):  # noqa
 
 
 def test_doctors_not_found_without_data_is_as_before(answer_world, monkeypatch):  # noqa: F811
-    off = turn(answer_world, monkeypatch, _G0277, switch="off", answers=_other(verdict("no_data")))
-    on = turn(answer_world, monkeypatch, _G0277, switch="on", answers=_other(verdict("no_data")))
+    off = turn(answer_world, monkeypatch, _G0277, switch="off", answers=_doctor_info(verdict("no_data")))
+    on = turn(answer_world, monkeypatch, _G0277, switch="on", answers=_doctor_info(verdict("no_data")))
 
     assert on["text"] == off["text"]
 
