@@ -20,11 +20,31 @@
   выключатель. Выкатка — словом владельца. Параллельно другая ветка снимает `turn_spans_llm`, `synonym_wordforms`,
   `price_general_clarify`, `price_select_rules`; списки цены (`_PRICE_QUERY_STOPWORDS` и др.) читает `price_by_parse` — не тронуты.
 - Строки `<ключ> = on` в `config.ini` прода после снятия не мешают: неизвестный ключ раздела не читается.
+- **Проверка (26.10, ветка на `98f6cc4`, коммиты 1–4):** гейт после каждого коммита — зелёный (на вершине ruff 0, 6677 passed / 13 xfailed;
+  база `05847f3` — 6683 / 13); повтор из кэша (replay, конфиг прогонов `d18p2_*`, мир 20261008) против `base28_*` (код `05847f3`) —
+  **кнопки 0 / 1008, test 0 / 201, dev 0 / 867** отличий ответов, все прогоны `valid`: снятие поведения прода не меняет.
 
 | Выключатель | На проде `on` с | Коммит (по порядку в ветке) | Снято | Тесты |
 |---|---|---|---|---|
 | `grounder_generic_by_llm` | деплой 17 (24.10) | 1 | `_llm_service_name_is_generic`, `grounder_generic_by_llm_enabled`, регулярка `_GENERIC_SERVICE_FALLBACK_RE` (значение `service_name` классификатора на метке без каталога — всегда услуга); ключ, атрибут. `SERVICE_GENERIC_STOPWORDS` читает `service_phrase` — оставлен; `_NONBOOKABLE_GENERIC_HINTS` снят раньше (`walkin.is_class`); храповик `re.compile` 259 → 258 | `test_stage2_docs_phrase_class.py`: тесты пути off и мутации регулярки удалены, «регулярки больше нет» — проверкой модуля |
+| `biomaterial_by_mis` | деплой 17 (24.10) | 2 | `biomaterial_by_mis`, `_place_words`, список `_LOCATIVE_FILLER` (хвост-биоматериал — только слова материалов МИС и предлоги); ключ, атрибут; храповик списков 102 → 101 | `test_stage2_docs_phrase_class.py`: тест пути off и мутации списка удалены, «списка больше нет» — проверкой модуля; `test_biomaterial_and_synonyms.py` (живой срез): «с поверхности задней стенки глотки» правило больше не снимает и цену по буквам не находит (решает выбор строки LLM, как на проде) — случай прода 10.08 переведён в «слово места вне МИС правилом не снимается», подтверждение материала МИС — на «мазок на микрофлору с задней стенки глотки» |
+| `button_pass_rules` | деплой 17 (24.10) | 3 | `nlu_pipeline._button_pass_rules` (ход-кнопка `pass` тему у LLM не переспрашивает — всегда); ключ, атрибут. Регулярок и списков у пути off не было | `test_button_pass_topic_class.py`: проверка «off — тему решает LLM» удалена, ход кнопки часов — «решает правило»; остальные — без параметра |
+| `prepare_general_memo_llm` | деплой 17 (24.10) | 4 | `prepare._general_memo_llm` (общая памятка о сдаче крови — всегда вариант выбора памятки LLM, на обоих путях подготовки); ключ, атрибут. Регулярок и списков у пути off не было | `test_prepare_general_memo_class.py`: тест «off — общей памятки нет» удалён, остальные — без параметра; `test_prepare_by_parse_class.py`: «без варианта общей памятки — просьба назвать анализ» → «LLM отклонила общую памятку — просьба назвать анализ»; `test_messenger_services.py` (ЭКГ) — среди вариантов LLM и общая памятка |
 
+
+- **Не снято в этой ветке (26.10) — `prepare_by_parse` и `test_assist_from_data`.** Замер: гейт с умолчанием `on` у выключателя (в гейте
+  умолчание всех шести — `off`, т. е. тесты гоняют путь, которого на проде нет): `prepare_by_parse` — **63 красных** теста, `test_assist_from_data` —
+  **51**, остальные четыре — 2 / 1 / 0 / 0 (исправлены в коммитах 2–4). Среди красных — **эталоны**: `prepare_by_parse` меняет ход
+  `after_price_prepare` (`test_price_turns_golden` ×3 + `list_over_stale_context-on`, `test_choose_price`, `test_pending_reply`,
+  `test_turn_parse_*`), `test_assist_from_data` — `readiness_named`, `readiness_generic`, `assist_goal`, `category_checkup`, `list_bare_two`
+  (`test_price_turns_golden` ×12, `test_pending_reply` ×5, `test_choose_price` ×5, `test_turn_parse_*` ×13, `test_t7_k1_k3_switches` ×2) и
+  `test_service_answer_class` ×13. То есть эталоны гейта записаны на пути `off`, а прод с 24.10 отвечает иначе: TEST_ASSIST при
+  недоступной LLM — «По этому вопросу у меня нет данных — точно ответит оператор… Перевести?» (оффер, `handoff = false`) вместо
+  «Сейчас не удалось получить данные автоматически. Соединяю с оператором.» (`handoff = true`, `readiness_named`); подготовка после цены —
+  «Такой памятки по подготовке у меня нет…» без названия вместо «Памятки по подготовке к «Ферритин» у меня нет…» (`after_price_prepare`).
+  Снятие = перезапись эталонов с разбором каждого отличия — отдельный шаг (решение владельца: эталоны — на путь прода?); списки подготовки (`_PREPARE_QUERY_STOPWORDS`, `_PREPARE_SERVICE_INFO_GENERIC_TOKENS`, `_PREPARE_GENERIC_HEADINGS`,
+  `_GENERIC_PREPARE_QUERY_RE`, `_VARIANT_NOISE_RE`) пока на месте — их читает путь `off`. Поимённые списки красных — заметка сессии
+  `rm31b_*_failing_tests.txt`; заготовка снятия `test_assist_from_data` (код и тест класса, без эталонов) — `rm31b_test_assist_from_data_wip.patch`.
 ---
 
 ## STEP-2026-10-25-BUTTONS-METRIC — метрика «рабочий бот»: успех внутри меню-кнопок, набор `buttons_v1`, первый замер деплой 17 → 18 — СДЕЛАНО (решение владельца 25.10)
