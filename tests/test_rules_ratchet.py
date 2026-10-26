@@ -29,8 +29,8 @@ _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
 # Потолки на 11.10.2026 (после хода (б) шаг 1). Эвристики шага 1 — долг с ходом снятия, журнал
 # STEP-2026-10-10-B1-TURN-UNDERSTANDING.
 _CEILINGS = {
-    "re.compile": 258,  # 259 → 258: снят путь off `grounder_generic_by_llm` — регулярка общих слов заземления (STEP-2026-10-31-SWITCH-REMOVAL-CONSUMERS)
-    "регулярка-литерал в вызове re.*": 158,  # 160 → 158: мёртвые литералы `_extract_schedule_specialty` — их слова раньше ловит `extract_specialty` (STEP-2026-10-27-DEAD-RULES)
+    "re.compile": 257,  # 258 → 257: мёртвый `_PREPARE_TARGET_RE` — заголовок памятки передаётся всегда (STEP-2026-10-27-DEAD-RULES)
+    "регулярка-литерал в вызове re.*": 157,  # 160 → 158 → 157: мёртвые литералы `_extract_schedule_specialty` и `_extract_target_phrase` (STEP-2026-10-27-DEAD-RULES)
     "список слов на уровне модуля (≥5 строк)": 100,  # 101 → 100: мёртвый `_CYR_TO_LAT` (`fold_cyrillic_homoglyphs` без вызовов) (STEP-2026-10-27-DEAD-RULES)
 }
 

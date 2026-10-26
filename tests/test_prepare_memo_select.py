@@ -338,7 +338,7 @@ def test_fallback_answer_keeps_sentences_whole():
         "Кровь лучше сдавать утром натощак, после 8-14 часового\n      перерыва в еде.\n"
         "Важно! Проба крови отбирается только до проведения\n      рентгеноконтрастных исследований."
     )
-    answer = build_prepare_fallback_answer("подготовка к ттг", memo)
+    answer = build_prepare_fallback_answer("подготовка к ттг", memo, intro="Памятка клиники «ТТГ»:")
     assert "после 8-14 часового перерыва в еде." in answer
     assert "\n- рентгеноконтрастных" not in answer and "\n- перерыва" not in answer
 

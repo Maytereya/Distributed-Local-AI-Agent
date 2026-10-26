@@ -11,10 +11,6 @@ import re
 from .russian_nlu import normalize_ru
 
 _WORD_RE = re.compile(r"[a-zа-я0-9]{2,}", re.I)
-_PREPARE_TARGET_RE = re.compile(
-    r"подготов(?:иться|ка)\s*(?:к|для)\s+(?P<target>.+?)(?:[?.!,]|$)",
-    re.I,
-)
 _PREPARE_ACTION_HINTS = (
     "натощак",
     "за ",
@@ -174,18 +170,6 @@ def _query_roots(query: str) -> set[str]:
     return roots
 
 
-def _extract_target_phrase(query: str) -> str:
-    text = str(query or "").strip()
-    if not text:
-        return ""
-    m = _PREPARE_TARGET_RE.search(text)
-    if not m:
-        return ""
-    target = str(m.group("target") or "").strip(" \t\n\r.,:;!?")
-    target = re.sub(r"\s+", " ", target)
-    return target
-
-
 _LINE_END_RE = re.compile(r"[.!?:;»)]$")
 _LIST_ITEM_RE = re.compile(r"\d+[.)]\s")
 
@@ -317,13 +301,9 @@ def _pick_segments(query: str, source_text: str, *, max_points: int) -> list[str
     return [row[2] for row in top]
 
 
-def _format_answer(query: str, segments: list[str], *, max_chars: int, intro: str = "") -> str:
+def _format_answer(segments: list[str], *, max_chars: int, intro: str) -> str:
     if not segments:
         return ""
-
-    if not intro:
-        target = _extract_target_phrase(query)
-        intro = f"Подготовка к {target}:" if target else "Краткая подготовка по вашему запросу:"
 
     bullets = [f"- {re.sub(r'\\s+', ' ', seg).strip()}" for seg in segments if str(seg).strip()]
     if not bullets:
@@ -354,7 +334,7 @@ def build_prepare_fallback_answer(
     *,
     max_chars: int = 1600,
     max_points: int = 7,
-    intro: str = "",
+    intro: str,
 ) -> str:
     """
     Строит короткий детерминированный PREPARE-ответ без участия LLM.
@@ -363,7 +343,7 @@ def build_prepare_fallback_answer(
     :param source_text: сырой текст из выбранного источника
     :param max_chars: верхняя граница длины ответа
     :param max_points: максимум пунктов в итоговом ответе
-    :param intro: первая строка ответа; по умолчанию «Подготовка к …» из запроса
+    :param intro: первая строка ответа — заголовок памятки (`services/prepare._memo_block`)
     :return: компактный ответ; пустая строка, если собрать его не удалось
     """
 
@@ -374,7 +354,7 @@ def build_prepare_fallback_answer(
     limit = max(400, min(4000, int(max_chars)))
 
     chosen = _pick_segments(query, source, max_points=points)
-    answer = _format_answer(query, chosen, max_chars=limit, intro=intro)
+    answer = _format_answer(chosen, max_chars=limit, intro=intro)
     if answer.strip():
         return answer.strip()
     return ""
