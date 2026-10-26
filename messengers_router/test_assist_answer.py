@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from . import evidence_keys as ek
 from . import turn_telemetry
 from .choice import Option, Status, Task, choose
 from .runtime_config import config as _cfg
@@ -48,6 +49,10 @@ FAILED = "failed"
 _TOOL_ROWS = 8
 _ALL_ROWS = 12
 _PREVIOUS_CHARS = 300
+
+# Сущность хода с догадкой каталога: суд «да/нет» по ней пропущен, строку выбирает ответ хода. В состояние диалога не
+# попадает — роутер переносит её в данные хода (`evidence_keys.TEST_ASSIST_CATALOG_GUESS`).
+CATALOG_GUESS_KEY = "_test_assist_catalog_guess"
 
 PICKED_HEADING = "В прайсе клиники есть:"
 PICKED_TAIL = "Цену и подготовку подскажу по названию."
@@ -108,8 +113,15 @@ def _search_texts(question: str, evidence: Any) -> list[str]:
     return [t for t in texts if t]
 
 
+def _catalog_guess(evidence: Any) -> str:
+    items = getattr(evidence, "items", None) or {}
+    return " ".join(str(items.get(ek.TEST_ASSIST_CATALOG_GUESS) or "").split())
+
+
 def _candidates(question: str, evidence: Any) -> tuple[list[dict[str, Any]], int]:
-    """Строки инструмента хода, затем пул выбора строки цены по реплике (поиск правил, синонимы МИС, редкие слова).
+    """Строки догадки каталога и инструмента хода, затем пул выбора строки цены по реплике (поиск правил, синонимы МИС,
+    редкие слова). Догадку каталога суд «да/нет» больше не судит — без неё в кандидатах верной строки нет вовсе
+    («уровень железа в крови»: поиск по реплике нашёл «CA 15-3 (молочная железа)», каталог — «Железо в сыворотке»).
 
     :return: (кандидаты, сколько из них — строки инструмента хода)
     """
@@ -126,16 +138,20 @@ def _candidates(question: str, evidence: Any) -> tuple[list[dict[str, Any]], int
             seen.add(name.lower())
             out.append(row)
 
+    try:
+        rows = _catalog_rows(None)
+        pool = _price_rows(_search_texts(question, evidence), question, rows, ())
+    except Exception as exc:  # каталог недоступен — выбираем из строк инструмента
+        logger.warning("test_assist_answer_pool_unavailable: %s", type(exc).__name__)
+        rows, pool = [], []
+    guess = _catalog_guess(evidence).lower()
+    if guess:
+        for row in rows:
+            if isinstance(row, dict) and _row_name(row).lower() == guess:
+                add(row, _TOOL_ROWS)
     for row in evidence_rows(evidence):
         add(row, _TOOL_ROWS)
     tool_count = len(out)
-    try:
-        rows = _catalog_rows(None)
-        texts = _search_texts(question, evidence)
-        pool = _price_rows(texts, question, rows, ())
-    except Exception as exc:  # каталог недоступен — выбираем из строк инструмента
-        logger.warning("test_assist_answer_pool_unavailable: %s", type(exc).__name__)
-        pool = []
     for row in pool:
         add(row, _ALL_ROWS)
     return out, tool_count

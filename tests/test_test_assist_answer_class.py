@@ -109,6 +109,7 @@ def turns(world_dir, monkeypatch, replies: list[str], *, switch: str, answers: d
             result["calls"] = list(fake.calls)
             result["prompts"] = dict(fake.prompts)
             result["pending_offer"] = bool(memory.get(session).last_entities.get("_operator_offer_pending"))
+            result["entities"] = dict(memory.get(session).last_entities)
             out.append(result)
     return out
 
@@ -226,6 +227,23 @@ def test_row_the_turn_tool_missed_is_a_candidate(ta_world, monkeypatch):
 
     assert out["telemetry"].get("ta_tool_rows") == 0, out["telemetry"]
     assert "— Mg+ (магний) — срок готовности 1–2 дня" in out["text"], out["text"]
+
+
+def test_catalog_guess_is_a_candidate_without_confirm(ta_world, monkeypatch):
+    # Суд «да/нет» по нечёткой догадке каталога на этом ходе пропущен (он тратил решения хода), но сама догадка — кандидат
+    # ответа: поиск по реплике её строку находит не всегда («уровень железа в крови» → только «CA 15-3 (молочная железа)»).
+    from messengers_router.services import Services
+
+    async def fuzzy(_self, raw_text_or_name, **_kwargs):
+        return {"status": "fuzzy", "canonical": "Железо в сыворотке", "query": str(raw_text_or_name)}
+
+    monkeypatch.setattr(Services, "match_catalog_service", fuzzy)
+    out = turn(ta_world, monkeypatch, "Есть анализ на ЖС?", switch="on", answers=_answers(_pick("Железо в сыворотке")))
+
+    assert _number_of(out["prompts"][_TA_MARK], "Железо в сыворотке") == 1  # первой — до строк поиска по реплике
+    assert "— Железо в сыворотке — срок готовности" in out["text"], out["text"]
+    assert "Похоже, вы имели в виду" not in out["text"]
+    assert test_assist_answer.CATALOG_GUESS_KEY not in out["entities"]  # служебный ключ хода в состояние диалога не попадает
 
 
 def test_previous_bot_message_is_the_context_of_a_short_reply(ta_world, monkeypatch):
