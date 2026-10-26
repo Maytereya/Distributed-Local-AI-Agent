@@ -15,6 +15,7 @@ import asyncio
 import json
 import re
 import socket
+import time
 from pathlib import Path
 
 import pytest
@@ -104,6 +105,28 @@ def test_client_modes_return_real_ollama_types_and_count_calls():
     with pytest.raises(ConnectionError):
         asyncio.run(down.generate(model="m", prompt="чужой промпт без шаблона"))
     assert [c.outcome for c in down.take_turn_calls()] == ["down", "unknown_site"]
+
+
+def test_down_timeout_hangs_until_the_call_site_timeout():
+    """`down_timeout` с `hang_s` — зависшая LLM: вызов ждёт тайм-аут места вызова (исход `cancelled`), без него — тайм-аут
+    после зависания; `hang_s = 0` — тайм-аут сразу, как было (BUG-2026-10-27-CLASSIFIER-NO-TIMEOUT: время хода off/on)."""
+
+    index = ev_llm.SiteIndex.from_templates({"service_normalizer": _templates()["service_normalizer"]})
+    prompt = _filled(_templates()["service_normalizer"])
+
+    async def call(client, site_timeout: float) -> float:
+        started = time.monotonic()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(client.generate(model="m", prompt=prompt), site_timeout)
+        return time.monotonic() - started
+
+    hung = ev_llm.HarnessClient(mode="down_timeout", sites=index, hang_s=10)
+    assert 0.05 <= asyncio.run(call(hung, 0.05)) < 1
+    short = ev_llm.HarnessClient(mode="down_timeout", sites=index, hang_s=0.05)
+    assert asyncio.run(call(short, 5)) >= 0.05
+    instant = ev_llm.HarnessClient(mode="down_timeout", sites=index)
+    assert asyncio.run(call(instant, 5)) < 0.05
+    assert [c.outcome for c in hung.take_turn_calls() + short.take_turn_calls() + instant.take_turn_calls()] == ["cancelled", "timeout", "timeout"]
 
 
 def test_replay_serves_recorded_answer_and_counts_miss(tmp_path):

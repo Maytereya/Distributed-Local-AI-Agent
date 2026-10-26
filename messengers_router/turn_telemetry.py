@@ -24,6 +24,8 @@
   `tu_relabel_src` — сработавшие строки таблицы политик темы (`topic_policy`), `<строка>:<было>><стало>`, по порядку;
 - `nlu_fallback = rules` и `nlu_fail` (`unavailable` | `invalid`) — под `llm_primary` разбор LLM не состоялся и ход решили
   правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
+- `nlu_timeout_s` — LLM-классификатор не уложился в потолок `classifier_timeout_s` (очередь и генерация вместе), значение —
+  потолок; ход пошёл путём сбоя LLM (BUG-2026-10-27-CLASSIFIER-NO-TIMEOUT);
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;
 - ход (е), 22.10: `tool_ms` — время шагов плана по инструментам (`{"price_info": мс, …}`, повторы суммируются);
   `tu_decisions_spent` — сколько решений хода потрачено (лимит `llm_decision_turn_calls`); `tu_decisions_denied` —

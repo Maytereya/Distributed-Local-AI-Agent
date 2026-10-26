@@ -239,7 +239,11 @@ async def generate_text_with_usage(
     llm: str | None = None,
     think: bool | None = None,
     options: dict[str, Any] | None = None,
+    deadline_s: float | None = None,
 ) -> tuple[str, dict[str, int]]:
+    """`deadline_s` — потолок всего вызова, очередь и генерация вместе (предохранитель классификатора); исход сбоя —
+    прежний `queue_timeout` или `timeout`. None — как было: очередь и генерация ограничены каждая своим."""
+
     model = llm or LLMName.get()
     resolved_think = ollama_settings.resolve_think(think)
     request_id = _uuid.uuid4().hex[:12] if _prompt_log_enabled() else ""
@@ -258,9 +262,14 @@ async def generate_text_with_usage(
         )
     site = _caller_site()
     queue_ms = 0
+    if deadline_s is not None:
+        queue_timeout_ms = min(queue_timeout_ms, int(deadline_s * 1000))
     try:
         async with llm_slot(queue_timeout_ms):
             queue_ms = int((_time.monotonic() - started_at) * 1000)
+            generation_s: float = max(5, int(timeout_s))
+            if deadline_s is not None:
+                generation_s = min(generation_s, max(0.0, deadline_s - (_time.monotonic() - started_at)))
             res = await asyncio.wait_for(
                 _OLLAMA_CLIENT.generate(
                     model=model,
@@ -270,7 +279,7 @@ async def generate_text_with_usage(
                     keep_alive=-1,
                     think=resolved_think,
                 ),
-                timeout=max(5, int(timeout_s)),
+                timeout=generation_s,
             )
     except BaseException as exc:
         err = error_detail(exc)
@@ -539,6 +548,7 @@ async def generate_text(
     llm: str | None = None,
     think: bool | None = None,
     options: dict[str, Any] | None = None,
+    deadline_s: float | None = None,
 ) -> str:
     text, _usage = await generate_text_with_usage(
         prompt,
@@ -548,6 +558,7 @@ async def generate_text(
         llm=llm,
         think=think,
         options=options,
+        deadline_s=deadline_s,
     )
     return text
 

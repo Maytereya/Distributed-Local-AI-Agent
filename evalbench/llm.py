@@ -10,7 +10,8 @@
 - `cached` — ответ из кэша, при промахе — настоящая LLM с записью;
 - `replay` — только кэш; промах — отказ соединения и счётчик промахов;
 - `adversary` — уверенно-неверный, но разбираемый ответ для каждого места;
-- `down` — отказ соединения (как упавший ollama); `down_timeout` — тайм-аут.
+- `down` — отказ соединения (как упавший ollama); `down_timeout` — тайм-аут: сразу или, с `hang_s`, после «зависания» на
+  столько секунд (время хода при зависшей LLM: вызов обрывает тайм-аут места вызова, исход — `cancelled`).
 
 Место вызова (site) определяется отпечатком шаблона промпта: прод читает шаблоны через
 `prompt_registry.load_prompt_text`, стенд берёт их оттуда же в том дереве кода, которое
@@ -270,6 +271,7 @@ class HarnessClient:
     cache: ResponseCache | None = None
     live_pause_s: float = 0.0
     max_live_calls: int | None = None
+    hang_s: float = 0.0
     calls: list[CallRecord] = field(default_factory=list)
     live_calls: int = 0
     default_options: dict[str, Any] | None = None
@@ -326,6 +328,12 @@ class HarnessClient:
             record("down")
             raise ConnectionError("стенд: LLM недоступна")
         if self.mode == "down_timeout":
+            if self.hang_s:
+                try:
+                    await asyncio.sleep(self.hang_s)
+                except asyncio.CancelledError:
+                    record("cancelled")
+                    raise
             record("timeout")
             raise asyncio.TimeoutError()
         if self.mode == "adversary":
