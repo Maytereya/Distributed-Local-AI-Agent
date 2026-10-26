@@ -31,7 +31,7 @@ _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
 _CEILINGS = {
     "re.compile": 258,  # 259 → 258: снят путь off `grounder_generic_by_llm` — регулярка общих слов заземления (STEP-2026-10-31-SWITCH-REMOVAL-CONSUMERS)
     "регулярка-литерал в вызове re.*": 160,  # 161 → 160: выбор акции — одно определение (STEP-2026-10-16-ONE-PHRASING)
-    "список слов на уровне модуля (≥5 строк)": 102,  # 103 → 102: снят словарь «однозначного да» подтверждения записи (CONFIRM)
+    "список слов на уровне модуля (≥5 строк)": 101,  # 102 → 101: снят путь off `biomaterial_by_mis` — локативная обвязка `_LOCATIVE_FILLER` (STEP-2026-10-31-SWITCH-REMOVAL-CONSUMERS)
 }
 
 _INLINE_RE = re.compile(r"re\.(?:search|match|fullmatch|findall|finditer|sub|subn|split)\(\s*r?[\"']")

@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from agent_logic_2 import config as cfg
 from messengers_router import entity_grounder as G
 from messengers_router import walkin
 from messengers_router.choice import Choice, Status
@@ -116,8 +115,8 @@ def test_letter_regex_of_generic_words_is_gone() -> None:
 
 # --------------------------------------------------------------------------- биоматериал: хвост — только слова МИС
 
-# Слово места забора во всех формах: путь off знал «поверхности», «поверхность», «области», «область», «участка», «участке»,
-# «зоны», «зоне» — и не знал «поверхностью», «областью», «участком», «зоной», «зону».
+# Слово места забора во всех формах: снятый путь off знал «поверхности», «поверхность», «области», «область», «участка»,
+# «участке», «зоны», «зоне» — и не знал «поверхностью», «областью», «участком», «зоной», «зону».
 _PLACE_FORMS = ("поверхности", "поверхностью", "поверхность", "области", "областью", "участка", "участком", "зоны", "зоной", "зону")
 _SERVICE = "посев на микрофлору"
 
@@ -132,10 +131,9 @@ def _vocab() -> B._MisVocabularies:
     return vocab
 
 
-def _tail_answers(monkeypatch, *, mode: str) -> dict[str, tuple[str, str, bool | None]]:
+def _tail_answers(monkeypatch) -> dict[str, tuple[str, str, bool | None]]:
     """Для каждой формы слова места: что правило снимает как материал и принимает ли его услуга по МИС."""
 
-    monkeypatch.setattr(cfg, "MR_BIOMATERIAL_BY_MIS", mode, raising=False)
     vocab = _vocab()
     monkeypatch.setattr(B, "_vocabularies", lambda: vocab)
     out = {}
@@ -145,27 +143,12 @@ def _tail_answers(monkeypatch, *, mode: str) -> dict[str, tuple[str, str, bool |
     return out
 
 
-def test_on_every_form_of_a_place_word_gets_one_answer(monkeypatch) -> None:
-    answers = set(_tail_answers(monkeypatch, mode="on").values())
+def test_every_form_of_a_place_word_gets_one_answer(monkeypatch) -> None:
+    answers = set(_tail_answers(monkeypatch).values())
     assert answers == {("мазок на микрофлору с <место>", "задней стенки глотки", False)}
 
 
-def test_off_split_the_forms_by_the_list_as_before(monkeypatch) -> None:
-    """Характеристика пути off: формы из списка уходят в материал (и услуга его «принимает»), прочие — нет."""
+def test_place_list_is_gone() -> None:
+    """Выключатель `biomaterial_by_mis` снят 31.10 вместе с путём off: локативной обвязки в коде нет."""
 
-    answers = _tail_answers(monkeypatch, mode="off")
-    assert answers["поверхности"] == ("мазок на микрофлору", "с <место> задней стенки глотки", True)
-    assert answers["поверхностью"] == ("мазок на микрофлору с <место>", "задней стенки глотки", False)
-
-
-def test_on_does_not_depend_on_the_place_list(monkeypatch) -> None:
-    """Мутация: в списке места — все слова реплики; под on ответы те же."""
-
-    before = _tail_answers(monkeypatch, mode="on")
-    monkeypatch.setattr(B, "_LOCATIVE_FILLER", frozenset({"мазок", "на", "микрофлору", *_PLACE_FORMS}))
-    assert _tail_answers(monkeypatch, mode="on") == before
-    assert _tail_answers(monkeypatch, mode="off") != before
-
-
-def test_only_the_off_helper_reads_the_place_list() -> None:
-    assert _readers(Path(B.__file__), "_LOCATIVE_FILLER") == {"_place_words"}
+    assert not hasattr(B, "_LOCATIVE_FILLER") and not hasattr(B, "_place_words")
