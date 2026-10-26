@@ -152,3 +152,17 @@ def test_city_word_in_an_address_does_not_name_the_branch(mini_prod_world, monke
     stems = address_flow._common_words(addresses) | frozenset(address_flow._address_words(city))
     assert not address_flow.named_in(f"как работаете в праздники в {city}е?", addresses[0], common=stems)
     assert address_flow.named_in("на Победы 126 в субботу?", addresses[0], common=stems)
+
+
+@pytest.mark.parametrize("button_id", _ADDRESS_LEAVES)
+def test_when_to_bring_biomaterial_gets_lab_hours(button_id, mini_prod_world, monkeypatch):  # noqa: F811
+    """BUG-2026-10-26-ADDRESS-FOLLOWUP-HOURS: «кал в 15:00?», «ХГЧ вечером?» после адресного листа получали «нет в данных» и
+    лишний оффер оператора — ответ есть в данных: пункты забора (`analysis`) и их график; время сдачи, которое задаёт подготовка
+    анализа, графиком не подменяется — отсылка к подготовке."""
+
+    on = _dialog(mini_prod_world, monkeypatch, [_press(button_id), "я смогу принести кал на анализ в 15.00?"], switch="on", followup=_answer("hours"))
+    text = on[1]["text"]
+    assert text.startswith(address_flow.HOURS_HEAD) and text.endswith(address_flow.HOURS_NOTE), text
+    assert _listed(text) == {r["addressForSite"] for r in _REGIONS if r["analysis"]}, text
+    assert "будни 07:00–18:30" in text and not on[1]["state"].get("_operator_offer_pending"), on[1]
+    assert on[1]["telemetry"].get("address_followup") == "hours"
