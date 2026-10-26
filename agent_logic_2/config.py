@@ -474,7 +474,8 @@ settings = Settings(
         # 14–19.10 лимит отрезал 7 из 73 выборов строки цены — второй круг поиска после «ни одна» (разбор реплики,
         # выбор строки, второй выбор). Прежде — 2 и 10 (решение 13.10, Q4).
         llm_decision_turn_calls=_get_int("MESSENGER_ROUTER", "llm_decision_turn_calls", 3, min_value=0, max_value=20),
-        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 20, min_value=0, max_value=120),
+        # 25 с — прод с 26.10 (деплой 18, runbook §3: секунды LLM-решений хода не возвращаются; STEP-2026-10-15-DEFAULTS-B).
+        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 25, min_value=0, max_value=120),
         # Предохранитель LLM-решений (L-11): N сбоев генерации подряд → S секунд без вызовов; таймаут
         # очереди не считается (иначе качество бота зависит от нагрузки соседей). 0 сбоев — выключен.
         llm_decision_breaker_failures=_get_int("MESSENGER_ROUTER", "llm_decision_breaker_failures", 3, min_value=0, max_value=100),
