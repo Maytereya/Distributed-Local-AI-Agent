@@ -2501,6 +2501,24 @@ def _doctors_by_service_not_found(payload: Any) -> bool:
     return bool(str(used.get("service_query") or "").strip()) and not str(used.get("doctor_query") or "").strip()
 
 
+_TEST_ASSIST_NAME_SLOT = "_any_of:test_goal,test_name"
+
+
+def _test_assist_guess_as_name(decision: RouteDecision, state: SessionState, memory: MemoryStore, guess: str) -> None:
+    """Догадка каталога — имя анализа для поиска, если своего у хода подбора нет (`test_assist_from_data`).
+
+    Суд «да/нет» по догадке на этом ходе пропущен — строку выбирает LLM ответа по данным. Но под висящим вопросом кнопки
+    «Цена анализа» (ждёт `service_name`) заземление выбрасывает `test_name` хода, и пустой слот подбора строил воронку
+    «Для какой цели хотите подобрать анализы?», хотя анализ назван (карточка 26.10, `buttons_v1`: g0812, g0829, g0852;
+    до слияния — «Похоже, вы имели в виду …? да/нет»). Догадка — только слова поиска инструмента: что показать, решает LLM.
+    """
+
+    if not guess or decision.label != "TEST_ASSIST" or _TEST_ASSIST_NAME_SLOT not in missing_slots("TEST_ASSIST", state.last_entities):
+        return
+    memory.merge_entities(state, {"test_name": guess}, label="TEST_ASSIST")
+    decision.flags = set(decision.flags) | {"test_assist_guess_as_name"}
+
+
 async def _walkin_by_llm(decision: RouteDecision, user_text: str, *, site: str) -> tuple[RouteDecision, bool | None]:
     """Детектор «без записи» сработал — кандидат; под `walkin_by_llm` решает LLM по правилу клиники (класс 4,
     решения владельца 21.10, `walkin.py`). (решение с флагом хода, True — без записи, False — по записи или о другом,
@@ -3655,6 +3673,7 @@ async def _complete_route_after_doctor_guard(
             memory.merge_entities(state, {slot: value}, label=str(pend_label))
 
     fill_date_from_schedule_windows(state, decision.label)
+    _test_assist_guess_as_name(decision, state, memory, test_assist_guess)
 
     if turn_understanding.prepare_by_parse():
         # Подготовка читает фразы разбора (этап 2 «без стоп-слов»): разбор хода — и на ходу подготовки, по теме, по которой
