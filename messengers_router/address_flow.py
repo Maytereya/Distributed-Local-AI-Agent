@@ -9,8 +9,9 @@
   записи, называет ответ (`walkin`: LLM по правилу клиники), флаги — данные МИС (`/site/regions`).
 * `address_followup_llm` (BUG-2026-10-25-ADDRESS-FOLLOWUP-TEMPLATE) — реплика сразу после адресного листа: LLM выбирает из
   закрытого списка филиалов, какие названы, и что спрошено (`FOLLOWUP_TASK`, промпт `choose_address_followup`, принцип 2); ответ
-  печатает код из данных филиалов — адрес, телефон, график, что там делают (принцип 1). Чего в данных нет (праздники, дети,
-  конкретная услуга, кроме анализов / УЗИ / ЭКГ, до какого часа принимают биоматериал) — честно и оффер оператора (принцип 3).
+  печатает код из данных филиалов — адрес, телефон, график, что там делают (принцип 1). Когда можно прийти или принести
+  биоматериал («кал в 15:00?», «ХГЧ вечером?») — пункты забора (`analysis`) с их графиком (BUG-2026-10-26-ADDRESS-FOLLOWUP-HOURS).
+  Чего в данных нет (праздники, дети, конкретная услуга, кроме анализов / УЗИ / ЭКГ) — честно и оффер оператора (принцип 3).
   Общий вопрос, другая тема, сбой LLM — общий путь, как было; решение тогда лимит хода не тратит.
 
 Метка адресной кнопки: нажатый лист адресов режима `pass` и возраст в ходах — на нажатии 0, на следующей реплике 1; другое
@@ -141,13 +142,17 @@ def region_flags(region: dict[str, Any] | None) -> dict[str, bool]:
 FOLLOWUP_TASK = Task(
     name="address_followup",
     max_picks=3,
-    outcomes=("branch", "weekend", "no_data", "list", "other_topic"),
+    outcomes=("branch", "weekend", "hours", "no_data", "list", "other_topic"),
     num_predict=64,
     timeout_s=8,
     queue_timeout_ms=3000,
 )
 NO_DATA_TEXT = "Этого в данных о филиалах у меня нет — точно подскажет оператор. Перевести на оператора?"
 _CAN = {"analysis": "сдать анализы", "usi": "сделать УЗИ", "ecg": "сделать ЭКГ"}
+HOURS_HEAD = "Анализы принимают без записи, в порядке живой очереди, в часы работы пунктов забора:"
+# Часов забора по анализам в `/site/regions` нет, а у части анализов время сдачи задаёт подготовка в справочнике МИС («оптимальное
+# время сдачи с 8 до 11 часов») — графиком филиала на них не отвечаем, отсылаем к подготовке.
+HOURS_NOTE = "Если у анализа особые условия сдачи — натощак или в определённые часы, — они в подготовке к нему: спросите, как подготовиться к этому анализу, и я пришлю памятку."
 
 
 @dataclass(frozen=True)
@@ -179,7 +184,7 @@ async def followup(text: str, branches: list[dict[str, Any]]) -> Followup | None
     if len(named) < len(picks):
         turn_telemetry.note(address_followup_vetoed=len(picks) - len(named))  # филиал выбран, но в реплике не назван
     picks = named
-    decided = outcome in ("no_data", "weekend") or (bool(picks) and outcome in ("branch", "list"))
+    decided = outcome in ("no_data", "weekend", "hours") or (bool(picks) and outcome in ("branch", "list"))
     turn_telemetry.note(address_followup=outcome or "none", address_followup_picks=len(picks))
     if not decided:
         if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
@@ -248,6 +253,11 @@ def followup_text(found: Followup, branches: list[dict[str, Any]]) -> tuple[str,
     blocks: list[str] = []
     if found.branches:
         blocks = ["\n".join(_card(b)) for b in found.branches]
+    elif found.outcome == "hours":
+        rows = [b for b in branches if isinstance(b, dict) and b.get("address") and b.get("work_time")]
+        labs = [b for b in rows if b.get("analysis")] if any("analysis" in b for b in rows) else rows
+        if labs:
+            blocks = ["\n".join([HOURS_HEAD] + [f"{i}. {b['address']} — {b['work_time']}" for i, b in enumerate(labs, 1)])]
     elif found.outcome == "weekend":
         scope = button_menu.action_for(address_button())
         rows = [b for b in branches if isinstance(b, dict) and b.get("address") and b.get("work_time")]
@@ -260,4 +270,6 @@ def followup_text(found: Followup, branches: list[dict[str, Any]]) -> tuple[str,
     offer = found.outcome == "no_data" or not blocks
     if offer:
         blocks.append(NO_DATA_TEXT)
+    elif found.outcome == "hours":
+        blocks.append(HOURS_NOTE)
     return "\n\n".join(blocks), offer
