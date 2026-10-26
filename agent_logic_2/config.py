@@ -210,7 +210,6 @@ class MessengerRouterConfig:
     price_general_clarify: str
     price_select_rules: str
     synonym_wordforms: str
-    prepare_general_memo_llm: str
     turn_spans_llm: str
     prepare_by_parse: str
     price_by_parse: str
@@ -640,11 +639,6 @@ settings = Settings(
         # совпадение: общее начало слова склеивает и разные слова — их отсеет выбор). off — как было.
         # [MESSENGER_ROUTER] synonym_wordforms
         synonym_wordforms=_get_enum("MESSENGER_ROUTER", "synonym_wordforms", default="off", allowed={"off", "on"}),
-        # Общая памятка клиники «как сдавать кровь» — вариант выбора памятки LLM (BUG-2026-10-22-PREPARE-GENERAL-BY-LETTERS,
-        # решение владельца 22.10 «по смыслу»): на «подготовка к анализам крови» LLM выбирает её сама, а не наименее плохую из
-        # найденных по буквам («Анализ мочи по Нечипоренко»). Без LLM не выбирается. off — как было.
-        # [MESSENGER_ROUTER] prepare_general_memo_llm
-        prepare_general_memo_llm=_get_enum("MESSENGER_ROUTER", "prepare_general_memo_llm", default="off", allowed={"off", "on"}),
         # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
@@ -886,7 +880,6 @@ MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_PRICE_GENERAL_CLARIFY = settings.messenger_router.price_general_clarify
 MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
 MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
-MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse

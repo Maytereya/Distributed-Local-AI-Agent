@@ -1499,7 +1499,10 @@ def test_test_prepare_prefers_exact_service_info_row_over_generic_similar_name(m
 
     res = run(svc.test_prepare("ЭКГ подскажите", {"service_name": "ЭКГ"}))
 
-    assert _offered_titles(offered) == ["ЭКГ"]
+    # Общая памятка о сдаче крови — всегда вариант выбора LLM (выключатель `prepare_general_memo_llm` снят 31.10).
+    from messengers_router.services.prepare import _BLOOD_GENERAL_TITLE
+
+    assert _offered_titles(offered) == ["ЭКГ", _BLOOD_GENERAL_TITLE]
     assert "к экг" in str(res.get("prepare") or "").lower()
     assert res["note"] == "prepare: serviceInfoAll"
 
