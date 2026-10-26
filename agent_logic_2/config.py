@@ -658,7 +658,8 @@ settings = Settings(
         # анализов (со сроком готовности); в области нет кандидата на фразу — весь прайс, как без кнопки. `doctor` — только
         # «Цена приёма врача» (на «Цену анализа» пациенты ведут и УЗИ, и процедуры — набор buttons_v1: 84 из 264), `all` — обе.
         # off — как было. [MESSENGER_ROUTER] button_price_scope
-        button_price_scope=_get_enum("MESSENGER_ROUTER", "button_price_scope", default="off", allowed={"off", "doctor", "all"}),
+        # По умолчанию doctor — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        button_price_scope=_get_enum("MESSENGER_ROUTER", "button_price_scope", default="doctor", allowed={"off", "doctor", "all"}),
         # Список филиалов в ответе о сдаче анализов (ЭКГ, УЗИ) без записи и на кнопке «Где и до скольки принимают» (раздел
         # «Сдать анализы») — только филиалы с этим флагом данных филиалов (`analysis` / `ecg` / `usi`): карточка buttons_v1 25.10 —
         # в 26 ответах «где сдать» был филиал без забора анализов. off — как было. [MESSENGER_ROUTER] address_branch_flags
