@@ -37,7 +37,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
-from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import SPANS_MARK, spans_groups
 from tests.test_price_turns_golden import mini_prod_world, run_dialog, synonym_fork  # noqa: F401 — фикстуры
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_stage2_turns.json"
@@ -69,7 +69,6 @@ PROD_D17: dict[str, Any] = {
     "MR_LLM_DECISION_BREAKER_FAILURES": 0,
 }
 
-_SPANS_MARK = "Слова сообщения с номерами:"
 _ROWS_MARKS = ("ответить на вопрос о ценах нескольких услуг", "ответить пациенту на вопрос о цене")
 MODES = ("llm", "down")
 
@@ -179,20 +178,11 @@ class _Oracle:
         self.asked: list[str] = []
 
     def _spans(self, prompt: str) -> dict[str, Any]:
-        numbered = prompt.split(_SPANS_MARK, 1)[1].strip().splitlines()[0].split()
-        words = [_normalise_catalog_text(item.partition(":")[2]) for item in numbered]
-        groups = []
-        for phrase in self.case.phrases:
-            want = _normalise_catalog_text(phrase).split()
-            for k in range(len(words) - len(want) + 1):
-                if words[k : k + len(want)] == want:
-                    groups.append([k + 1, k + len(want)])
-                    break
-        return {"phrases": groups}
+        return {"phrases": spans_groups(prompt, self.case.phrases)}
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
-        if _SPANS_MARK in prompt:
+        if SPANS_MARK in prompt:
             self.asked.append("spans")
             return GenerateResponse(model="m", response=self.case.spans or json.dumps(self._spans(prompt)), done=True)
         if self.case.rows is not None and any(mark in seen for mark in _ROWS_MARKS):
