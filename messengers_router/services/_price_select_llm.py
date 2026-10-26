@@ -117,6 +117,12 @@ PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
 # снят 31.10 — режим `general` на проде с деплоя 17); суд записи — прежние промпты.
 PRICE_GENERAL_TASK = replace(PRICE_TASK, name="price_service_general")
 PRICE_QUALIFIER_GENERAL_TASK = replace(PRICE_TASK, name="price_service_qualifier_general")
+# Под `price_select_named = on` (топ-5 разбора 95 цен, п. 3): те же задачи пути ответа о цене с правилами 6 и 7 — «Cito» — это
+# «срочно» (P1: строка Cito была в списке, LLM отвечала «условия нет»); строка для другого пациента, которого пациент не называл
+# (ЭхоКГ плода к «эхо сердца»), — не та, и тогда второй круг по терминам (F: ближайшая чужая строка вместо «ни одна»). Шире
+# правила (термин / латиница, «другой предмет») карточки 26.10 отвергли: подменяли марку и делали выбор строже нужного.
+PRICE_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_general_named")
+PRICE_QUALIFIER_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_qualifier_general_named")
 _VARIANT_B_LIMIT = 5
 
 
@@ -126,12 +132,23 @@ def price_task(*, judge_qualifier: bool = False, price_answer: bool = True) -> T
     (уточнённое правило 3 `price_judge_conditions` в них не входит: на проде он off). Суд записи (`price_answer=False`) —
     прежний промпт: «запись к неврологу» правилом приёма без специальности не судится."""
 
+    named = price_answer and named_enabled()
     if judge_qualifier:
+        if named:
+            return PRICE_QUALIFIER_GENERAL_NAMED_TASK
         return PRICE_QUALIFIER_GENERAL_TASK if price_answer else PRICE_QUALIFIER_TASK
     on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
     if on:
         return PRICE_CONDITIONS_TASK
+    if named:
+        return PRICE_GENERAL_NAMED_TASK
     return PRICE_GENERAL_TASK if price_answer else PRICE_TASK
+
+
+def named_enabled() -> bool:
+    """`[MESSENGER_ROUTER] price_select_named = on`; мусор и отсутствие — off (прежние промпты, как было)."""
+
+    return str(getattr(_cfg, "MR_PRICE_SELECT_NAMED", "off") or "").strip().lower() == "on"
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
@@ -866,8 +883,11 @@ async def select_price_rows(
     # «Rh- принадлежность», «эхо сердца» → «Эхокардиография» находились именно так, проба 20.10), но только если LLM
     # признала в реплике услугу: термины к «слишком общему» и «не услуге» («цены на анализы можешь озвучить?») — догадка
     # LLM, и строки по их редким словам она же потом выбирала (карточка dev 20.10: список «Биохимия…»).
+    # Под `price_select_named`: первый круг был пуст — «слишком общее» модель сказала, не видя ни одной строки (g0043: список
+    # пуст, `too_general`), это не суждение о названии, и редкие слова её терминов тоже идут в поиск.
+    first_empty = named_enabled() and price_answer and not pool
     rare_by_terms = (
-        await asyncio.to_thread(_rare_rows, terms, rows) if reason not in _NOT_A_SERVICE_NAME else []
+        await asyncio.to_thread(_rare_rows, terms, rows) if reason not in _NOT_A_SERVICE_NAME or (first_empty and reason == "too_general") else []
     )
     pool_by_terms = await asyncio.to_thread(
         _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, first=rare_by_terms, fallback_texts=term_words

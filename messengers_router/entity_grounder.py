@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import address_service, booking_slots, llm_runtime, turn_names, turn_understanding, walkin
+from . import address_service, booking_slots, llm_runtime, test_assist_answer, turn_names, turn_understanding, walkin
 from .city import looks_like_address, match_city
 from .flow_policy import is_patient_name_value, looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -41,6 +41,7 @@ _CONTROL_KEYS = {
     "_catalog_doctor_query",
     "_catalog_service_candidate",
     "_catalog_service_query",
+    test_assist_answer.CATALOG_GUESS_KEY,
     # NEWS promo follow-up (rule_news_promo_followup): выбор акции из списка
     # номером/названием + прокинутый контекст показанных акций для news_info.
     # promo_query_for — маркер «выдано для этого хода» (анти-протухание).
@@ -312,6 +313,14 @@ async def judge_fuzzy_service_candidate(
         out["_catalog_service_query"] = query
         flags.add(candidate_flag)
 
+    if label == "TEST_ASSIST" and test_assist_answer.enabled():
+        # Подбор анализов отвечает по данным хода (`test_assist_from_data`): строку выбирает LLM ответа хода среди всех
+        # кандидатов, как у цены, — суд догадки и «да/нет» по ней дублировали это решение и съедали лимит решений хода
+        # («исследование клеща»: разбор, два круга суда здесь, суд ещё раз в заземлении — ответу решения не осталось).
+        # Сама догадка — кандидат ответа хода: поиск по реплике её строку находит не всегда («уровень железа в крови»).
+        out[test_assist_answer.CATALOG_GUESS_KEY] = candidate
+        flags.add("catalog_confirm_skipped_test_assist_data")
+        return
     if label not in _LLM_JUDGED_FUZZY_LABELS:
         _confirm(candidate)
         return

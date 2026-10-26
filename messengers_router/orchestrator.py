@@ -805,7 +805,10 @@ async def _render_impl(
     # 4b. Ответ о клинике — только по её данным (`service_answer_from_data`, решения владельца 21.10): свободный текст LLM
     # утверждал факты, которых в данных нет («да, берём анализы у детей 2 лет», g0509). Сначала данные: ответ или близкое —
     # из прайса и памяток, нет данных — честный оффер; «не о клинике» и сбой LLM — свободный текст, как было.
-    if ctx.decision is not None and ctx.evidence is not None and service_answer.enabled():
+    # Под `service_answer_no_similar` ход подбора анализов отвечает своим ответом по данным (4c, строже — «partly», варианты), а не
+    # ответом о клинике: карточка 26.10 — «есть ли анализы на мочу?» → «Да, по данным клиники это есть: — Лебеда (W15)».
+    yields_to_test_assist = service_answer.no_similar() and test_assist_answer.applies(ctx.decision, ctx.evidence)
+    if ctx.decision is not None and ctx.evidence is not None and service_answer.enabled() and not yields_to_test_assist:
         verdict = await service_answer.decide(ctx.text, site="free_text", first_rows=service_answer.evidence_rows(ctx.evidence))
         answer = service_answer.envelope(verdict, ctx.state, memory)
         if answer is not None:

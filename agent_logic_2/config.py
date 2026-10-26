@@ -217,6 +217,12 @@ class MessengerRouterConfig:
     turn_understanding_one: str
     service_answer_from_data: str
     test_assist_from_data: str
+    test_assist_price: str
+    walkin_by_llm: str
+    price_select_named: str
+    bare_name_overview: str
+    booking_options_price: str
+    service_answer_no_similar: str
     address_service_llm: str
     doctors_by_service_data: str
     slot_suppress_llm: str
@@ -668,6 +674,33 @@ settings = Settings(
         # (BUG-2026-10-21-WALKIN-LLM-FREE-TEXT): строки прайса выбирает LLM (`choose`, задача `test_assist_answer`), название
         # и срок печатает код, нет данных и сбой — честный оффер оператора. off — как было. [MESSENGER_ROUTER] test_assist_from_data
         test_assist_from_data=_get_enum("MESSENGER_ROUTER", "test_assist_from_data", default="off", allowed={"off", "on"}),
+        # Цена у строк, выбранных ответом подбора анализов по данным хода (решение владельца 26.10, топ-5 разбора 95 цен, п. 1):
+        # сумму печатает код из той же строки прайса (принцип 1), частичный ответ — цены найденных строк и «остального в прайсе
+        # нет — уточнит оператор». Давность прайса — как у пути цены (`services/_freshness`). Действует при
+        # `test_assist_from_data = on`. off — как было (название и срок без цены). [MESSENGER_ROUTER] test_assist_price
+        test_assist_price=_get_enum("MESSENGER_ROUTER", "test_assist_price", default="off", allowed={"off", "on"}),
+        # «Анализы и ЭКГ — без записи» решает LLM по правилу клиники (STEP-2026-10-21-WALKIN-BY-LLM, `walkin.py`): ветка правил
+        # `rule_nonbookable_walkin` тему не решает (её решает LLM-классификатор, как у `topic_by_llm`), переклейки после NLU в
+        # адреса и фраза «… без записи» — по решению LLM. Свой выключатель — связку 21.10 с `service_answer_from_data` владелец
+        # развязал 26.10 (топ-5 разбора 95 цен, п. 2). off — как было (детектор по буквам). [MESSENGER_ROUTER] walkin_by_llm
+        walkin_by_llm=_get_enum("MESSENGER_ROUTER", "walkin_by_llm", default="off", allowed={"off", "on"}),
+        # Выбор строки прайса на пути ответа о цене (топ-5 разбора 95 цен, п. 3, классы F + P1): промпты `*_general_named` с
+        # правилами 6 «Cito — это срочно» и 7 «позиция для другого пациента, которого пациент не называл
+        # (плод, ребёнок до года), — не та»; второй круг по редким словам терминов LLM — и
+        # при пустом первом. Суд записи — прежние промпты. off — как было. [MESSENGER_ROUTER] price_select_named
+        price_select_named=_get_enum("MESSENGER_ROUTER", "price_select_named", default="off", allowed={"off", "on"}),
+        # Голое название услуги → максимум по данным (STEP-2026-10-21-BARE-NAME-OVERVIEW) — своим выключателем, без
+        # `service_answer_from_data` (решение владельца 26.10, топ-5 разбора 95 цен, п. 4): и на темах APPOINTMENT / ADDRESS /
+        # DOCTOR_INFO, голое ли название — решает LLM; на записи и врачах — без строк приёма врача (цену приёма к специальности
+        # не называем, пока врач не выбран — 25.09). off — как было. [MESSENGER_ROUTER] bare_name_overview
+        bare_name_overview=_get_enum("MESSENGER_ROUTER", "bare_name_overview", default="off", allowed={"off", "on"}),
+        # Варианты записи на услугу («на какую услугу вас записать: — …») — с ценой строки прайса процедуры (п. 4); строки
+        # приёма врача — без цены (25.09). off — названия без цен, как было. [MESSENGER_ROUTER] booking_options_price
+        booking_options_price=_get_enum("MESSENGER_ROUTER", "booking_options_price", default="off", allowed={"off", "on"}),
+        # Ответ о клинике по данным (`service_answer_from_data`) без исхода «похожее» (BUG-2026-10-21-SVC-SIMILAR-NOISE; топ-5
+        # разбора 95 цен, п. 5): близкое, но другое — «нет данных» и честный оффер, как у подбора анализов по данным; промпт
+        # `choose_service_answer_exact`. Включение — после окна (е), решение владельца. off — как было. [MESSENGER_ROUTER] service_answer_no_similar
+        service_answer_no_similar=_get_enum("MESSENGER_ROUTER", "service_answer_no_similar", default="off", allowed={"off", "on"}),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -853,6 +886,12 @@ MR_ADDRESS_FOLLOWUP_LLM = settings.messenger_router.address_followup_llm
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
+MR_TEST_ASSIST_PRICE = settings.messenger_router.test_assist_price
+MR_WALKIN_BY_LLM = settings.messenger_router.walkin_by_llm
+MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
+MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview
+MR_BOOKING_OPTIONS_PRICE = settings.messenger_router.booking_options_price
+MR_SERVICE_ANSWER_NO_SIMILAR = settings.messenger_router.service_answer_no_similar
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_DOCTORS_BY_SERVICE_DATA = settings.messenger_router.doctors_by_service_data
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm

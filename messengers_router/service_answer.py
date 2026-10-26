@@ -14,6 +14,11 @@
 круг поиска. Текст печатает код (принцип 1): название и цена — из прайса, строка памятки — как есть, без цены. Нет
 данных — честный оффер оператора (принцип 3).
 
+Под `service_answer_no_similar = on` (BUG-2026-10-21-SVC-SIMILAR-NOISE; топ-5 разбора 95 цен, п. 5) «похожее» пациенту не
+показывается — как у подбора анализов по данным (`test_assist_answer`): близкое, но другое — честный оффер, второй круг по
+терминам модели. Исход у модели остаётся: карточка 26.10 без него показала, что модель называет близкое ответом «да» («3D/4D УЗИ» →
+обычное УЗИ беременных). Задача `service_answer_exact`, промпт — прежний с синтетическими примерами вместо двух вопросов эталона.
+
 Где спрашивается (там, где бот иначе написал бы свободный текст или сдался бы, не заглянув в данные):
 - `free_text` — перед свободным текстом LLM (оркестратор): ответ, близкое или оффер; «не о клинике» и сбой — как было;
 - `other_offer` — OTHER от LLM под `topic_by_llm`; `empty_evidence` — вопрос без данных (L-05); `doctors_by_service` —
@@ -36,6 +41,18 @@ logger = logging.getLogger(__name__)
 
 TASK = Task(
     name="service_answer",
+    max_picks=4,
+    outcomes=("similar", "no_data", "not_about_clinic"),
+    max_terms=3,
+    num_predict=96,
+    timeout_s=8.0,
+    queue_timeout_ms=2000,
+)
+
+# Под `service_answer_no_similar`: своё имя — свой промпт (синтетические примеры), своё место в телеметрии и на стенде. «Похожее»
+# у модели есть, пациенту — нет (`_ask`).
+EXACT_TASK = Task(
+    name="service_answer_exact",
     max_picks=4,
     outcomes=("similar", "no_data", "not_about_clinic"),
     max_terms=3,
@@ -69,6 +86,12 @@ def enabled() -> bool:
     """`[MESSENGER_ROUTER] service_answer_from_data = on`; мусор и отсутствие — off (как было)."""
 
     return str(getattr(_cfg, "MR_SERVICE_ANSWER_FROM_DATA", "off") or "").strip().lower() == "on"
+
+
+def no_similar() -> bool:
+    """`[MESSENGER_ROUTER] service_answer_no_similar = on`; мусор и отсутствие — off (исход «похожее» есть, как было)."""
+
+    return str(getattr(_cfg, "MR_SERVICE_ANSWER_NO_SIMILAR", "off") or "").strip().lower() == "on"
 
 
 @dataclass(frozen=True)
@@ -255,11 +278,15 @@ def _merge(old: Sequence[Fact], new: Sequence[Fact]) -> list[Fact]:
 
 async def _ask(question: str, facts: Sequence[Fact]) -> tuple[Verdict, tuple[str, ...]]:
     options = [Option(id=str(i), text=fact.option_text()) for i, fact in enumerate(facts)]
-    picked = await choose(TASK, question, options)
+    picked = await choose(EXACT_TASK if no_similar() else TASK, question, options)
     if picked.failed:
         return Verdict(FAILED), ()
     chosen = tuple(facts[int(i)] for i in picked.ids)
     if picked.status is Status.OUTCOME:
+        if picked.outcome == SIMILAR and no_similar():
+            # Близкое, но другое — не ответ пациенту: честный оффер (и второй круг по терминам модели, как у «нет данных»).
+            turn_telemetry.note(svc_answer_similar_hidden=len(chosen))
+            return Verdict(NO_DATA), picked.terms
         if picked.outcome == SIMILAR:
             return (Verdict(SIMILAR, chosen) if chosen else Verdict(NO_DATA)), picked.terms
         return Verdict(picked.outcome), picked.terms

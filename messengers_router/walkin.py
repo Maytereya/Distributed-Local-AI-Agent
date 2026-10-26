@@ -6,7 +6,8 @@
 фразу «Анализы выполняются без записи, в порядке живой очереди» в ответ адресами ставил `nonbookable_service_hint` по
 тем же буквам — даже когда пациент спрашивал цену списка анализов (g0716: адреса вместо корзины) или процедуру по записи.
 
-Под `service_answer_from_data = on` (`choose`, задача `walkin`, правило клиники и примеры — в промпте, две локации):
+Под `walkin_by_llm = on` (`choose`, задача `walkin`, правило клиники и примеры — в промпте, две локации; до 26.10 — под
+`service_answer_from_data`, связку владелец развязал: топ-5 разбора 95 цен, п. 2):
 - ветка правил `rule_nonbookable_walkin` тему не решает — решает LLM-классификатор (как `topic_by_llm`; его промпт это
   правило знает);
 - переклейка после NLU в адреса — только если LLM подтвердила «сдать анализы / сделать ЭКГ»; «по записи» или «о другом» —
@@ -47,9 +48,10 @@ def is_class(value: Any) -> bool:
 
 
 def enabled() -> bool:
-    """Класс 4 — под тем же выключателем, что ответ по данным (`service_answer_from_data = on`)."""
+    """`[MESSENGER_ROUTER] walkin_by_llm = on`; мусор и отсутствие — off (детектор по буквам, как было). Ответ по данным
+    (`service_answer_from_data`) этот путь не включает: у каждого свой выключатель и своя карточка (решение владельца 26.10)."""
 
-    return str(getattr(_cfg, "MR_SERVICE_ANSWER_FROM_DATA", "off") or "").strip().lower() == "on"
+    return str(getattr(_cfg, "MR_WALKIN_BY_LLM", "off") or "").strip().lower() == "on"
 
 
 def decided(flags: Any) -> str | None:

@@ -14,6 +14,11 @@
 (BUG-2026-10-21-SVC-SIMILAR-NOISE). Текст печатает код (принцип 1): название и срок готовности — из строки прайса, без
 цены (свободный текст цен не печатал — карточка цены не меняется). Нет данных и сбой LLM — честный оффер оператора
 (принцип 3), не свободный текст.
+
+Под `test_assist_price = on` (решение владельца 26.10, топ-5 разбора 95 цен, п. 1) у выбранных строк — цена из той же
+строки прайса: «Антитела на корь» → «Вирус кори Ig G — 800 руб.» вместо «цену подскажу по названию» рядом с уже
+напечатанным названием. Частичный ответ — цены найденных строк и «остального в прайсе нет — уточнит оператор». Давность
+прайса — по правилам пути цены (`services/_freshness`): срез старше недели — строки без цен, как под off.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from . import evidence_keys as ek
 from . import turn_telemetry
 from .choice import Option, Status, Task, choose
 from .runtime_config import config as _cfg
@@ -49,16 +55,33 @@ _TOOL_ROWS = 8
 _ALL_ROWS = 12
 _PREVIOUS_CHARS = 300
 
+# Сущность хода с догадкой каталога: суд «да/нет» по ней пропущен, строку выбирает ответ хода. В состояние диалога не
+# попадает — роутер переносит её в данные хода (`evidence_keys.TEST_ASSIST_CATALOG_GUESS`).
+CATALOG_GUESS_KEY = "_test_assist_catalog_guess"
+
 PICKED_HEADING = "В прайсе клиники есть:"
 PICKED_TAIL = "Цену и подготовку подскажу по названию."
 PARTLY_TAIL = "Остального из вашего вопроса в данных клиники нет — точно ответит оператор."
 NEED_NAME_TEXT = "Ответ зависит от конкретного анализа. Напишите, пожалуйста, названия анализов — подскажу по данным клиники."
+# Под `test_assist_price = on`: цена уже напечатана — хвост о ней не обещает; частичный ответ — формулировка владельца 26.10.
+PRICED_TAIL = "Подготовку подскажу по названию."
+PRICED_PARTLY_TAIL = "Остального из вашего вопроса в прайсе нет — уточнит оператор."
+# Частичный ответ с ценой (решение владельца 26.10, вариант 3): «нет» — до строк и цен, иначе «В прайсе клиники есть: … —
+# 2 300 руб.» читалось как «да, стоит 2 300» на «отдельно, не в комплексе» (g0811) и «суммарные» при строке IgG (g0388).
+# «Ближайшее» не пишем: `partly` — и «из перечня нашлась только часть», там строки — те самые анализы.
+PRICED_PARTLY_HEADING = "Точно в таком виде в прайсе нет. Есть:"
 
 
 def enabled() -> bool:
     """`[MESSENGER_ROUTER] test_assist_from_data = on`; мусор и отсутствие — off (как было)."""
 
     return str(getattr(_cfg, "MR_TEST_ASSIST_FROM_DATA", "off") or "").strip().lower() == "on"
+
+
+def price_enabled() -> bool:
+    """`[MESSENGER_ROUTER] test_assist_price = on`; мусор и отсутствие — off (строки без цены, как было)."""
+
+    return str(getattr(_cfg, "MR_TEST_ASSIST_PRICE", "off") or "").strip().lower() == "on"
 
 
 def applies(decision: Any, evidence: Any) -> bool:
@@ -108,8 +131,15 @@ def _search_texts(question: str, evidence: Any) -> list[str]:
     return [t for t in texts if t]
 
 
+def _catalog_guess(evidence: Any) -> str:
+    items = getattr(evidence, "items", None) or {}
+    return " ".join(str(items.get(ek.TEST_ASSIST_CATALOG_GUESS) or "").split())
+
+
 def _candidates(question: str, evidence: Any) -> tuple[list[dict[str, Any]], int]:
-    """Строки инструмента хода, затем пул выбора строки цены по реплике (поиск правил, синонимы МИС, редкие слова).
+    """Строки догадки каталога и инструмента хода, затем пул выбора строки цены по реплике (поиск правил, синонимы МИС,
+    редкие слова). Догадку каталога суд «да/нет» больше не судит — без неё в кандидатах верной строки нет вовсе
+    («уровень железа в крови»: поиск по реплике нашёл «CA 15-3 (молочная железа)», каталог — «Железо в сыворотке»).
 
     :return: (кандидаты, сколько из них — строки инструмента хода)
     """
@@ -126,16 +156,20 @@ def _candidates(question: str, evidence: Any) -> tuple[list[dict[str, Any]], int
             seen.add(name.lower())
             out.append(row)
 
+    try:
+        rows = _catalog_rows(None)
+        pool = _price_rows(_search_texts(question, evidence), question, rows, ())
+    except Exception as exc:  # каталог недоступен — выбираем из строк инструмента
+        logger.warning("test_assist_answer_pool_unavailable: %s", type(exc).__name__)
+        rows, pool = [], []
+    guess = _catalog_guess(evidence).lower()
+    if guess:
+        for row in rows:
+            if isinstance(row, dict) and _row_name(row).lower() == guess:
+                add(row, _TOOL_ROWS)
     for row in evidence_rows(evidence):
         add(row, _TOOL_ROWS)
     tool_count = len(out)
-    try:
-        rows = _catalog_rows(None)
-        texts = _search_texts(question, evidence)
-        pool = _price_rows(texts, question, rows, ())
-    except Exception as exc:  # каталог недоступен — выбираем из строк инструмента
-        logger.warning("test_assist_answer_pool_unavailable: %s", type(exc).__name__)
-        pool = []
     for row in pool:
         add(row, _ALL_ROWS)
     return out, tool_count
@@ -187,6 +221,48 @@ def _rows_block(rows: Sequence[dict[str, Any]]) -> str:
     return "\n".join([PICKED_HEADING, *(f"— {_option_text(row)}" for row in rows)])
 
 
+def _priced_line(row: dict[str, Any]) -> str:
+    """«Название — 800 руб., срок готовности 2–3 дня»: сумма — из этой же строки прайса (принцип 1)."""
+
+    from .renderer import _extract_price_amount, _format_rub
+
+    amount = _extract_price_amount(row)
+    if amount is None:
+        return _option_text(row)
+    deadline = _deadline(row)
+    price = f"{_row_name(row)} — {_format_rub(amount)}"
+    return f"{price}, срок готовности {deadline}" if deadline else price
+
+
+def _price_as_of(rows: Sequence[dict[str, Any]]) -> str | None:
+    """Можно ли печатать цены и с какой датой: правила давности пути цены (`services/_freshness`, ход (д)).
+
+    :return: None — цены не печатать (срез старше недели или его нет); "" — молча; «ДД.ММ» — приписка давности
+    """
+
+    from .services.core import prices_checked
+
+    checked = prices_checked({"prices": list(rows)})
+    if not isinstance(checked, dict) or checked.get("handoff_required") or not checked.get("prices"):
+        return None
+    return str(checked.get("data_as_of") or "")
+
+
+def _priced_text(rows: Sequence[dict[str, Any]], tail: str, heading: str = PICKED_HEADING) -> str | None:
+    """Заголовок, строки с ценами и хвост; приписка о ценах региона — до оффера. None — цен печатать нельзя (ответ как под off)."""
+
+    from .renderer import _bundle_text, _extract_price_amount
+
+    as_of = _price_as_of(rows)
+    priced = sum(1 for row in rows if _extract_price_amount(row) is not None)
+    if as_of is None or not priced:
+        return None
+    turn_telemetry.note(ta_priced=priced)
+    if tail == PRICED_TAIL and priced < len(rows):
+        tail = PICKED_TAIL  # строка без суммы (в прайсе бывает пустая) — о её цене ответ ничего не сказал
+    return _bundle_text([heading, *(f"— {_priced_line(row)}" for row in rows), "", tail], as_of, priced=True)
+
+
 def envelope(answer: Answer, state: Any, memory: Any | None, *, attachments: Sequence[Any] = ()) -> tuple[Any, bool]:
     """Ответ пациенту по решению. Строки — название и срок из прайса; «нет данных» и сбой — честный оффер оператора.
 
@@ -197,12 +273,17 @@ def envelope(answer: Answer, state: Any, memory: Any | None, *, attachments: Seq
     from .response_builder import UNSUPPORTED_CATALOG_OPERATOR_OFFER, mark_operator_offer_pending
     from .service_answer import NO_DATA_TEXT
 
+    priced = price_enabled() and answer.kind in (PICKED, PARTLY) and bool(answer.rows)
     if answer.kind == PICKED and answer.rows:
         text, offer = f"{_rows_block(answer.rows)}\n\n{PICKED_TAIL}", False
+        if priced:
+            text = _priced_text(answer.rows, PRICED_TAIL) or text
     elif answer.kind == NEED_NAME:
         text, offer = NEED_NAME_TEXT, False
     elif answer.kind == PARTLY and answer.rows:
         text, offer = f"{_rows_block(answer.rows)}\n\n{PARTLY_TAIL}", True
+        if priced:
+            text = _priced_text(answer.rows, PRICED_PARTLY_TAIL, PRICED_PARTLY_HEADING) or text
     else:
         text, offer = NO_DATA_TEXT, True
     if offer and memory is not None:

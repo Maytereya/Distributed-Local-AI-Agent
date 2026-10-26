@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import address_flow, booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import address_flow, booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2333,6 +2333,38 @@ def _maybe_start_catalog_confirm(
     )
 
 
+def _booking_option_lines(names: list[str]) -> tuple[str, bool]:
+    """Строки вариантов записи: под `booking_options_price = on` — «— Название — N руб.» из строки прайса процедуры с тем же
+    названием (принцип 1; давность прайса — как у пути цены); строка приёма врача и название без строки — без цены (25.09).
+
+    :return: (строки, напечатана ли хоть одна цена)
+    """
+
+    if str(getattr(c, "MR_BOOKING_OPTIONS_PRICE", "off") or "").strip().lower() != "on":
+        return "\n".join(f"— {name}" for name in names), False
+    from .renderer import _extract_price_amount, _format_rub
+    from .services._doctors_helpers import _is_consultation_service_query
+    from .services._prices_helpers import _catalog_rows
+    from .services.core import prices_checked
+
+    try:
+        rows = {" ".join(str(r.get("serviceName") or "").split()).casefold(): r for r in _catalog_rows(None) if isinstance(r, dict)}
+    except Exception:  # каталог недоступен — названия без цен, как было
+        rows = {}
+    amounts: dict[str, int] = {}
+    for name in names:
+        row = rows.get(" ".join(name.split()).casefold())
+        amount = _extract_price_amount(row) if row is not None and not _is_consultation_service_query(name) else None
+        if amount is not None:
+            amounts[name] = amount
+    checked = prices_checked({"prices": list(amounts)}) if amounts else {}
+    if not isinstance(checked, dict) or checked.get("handoff_required") or not checked.get("prices"):
+        amounts = {}
+    turn_telemetry.note(booking_options_priced=len(amounts))
+    lines = "\n".join(f"— {name} — {_format_rub(amounts[name])}" if name in amounts else f"— {name}" for name in names)
+    return lines, bool(amounts)
+
+
 def _maybe_ask_booking_service_choice(
     *,
     decision: RouteDecision,
@@ -2360,13 +2392,17 @@ def _maybe_ask_booking_service_choice(
     expects.ask(expects.Question.BOOKING_SERVICE, kind=expects.PICK, options=tuple(names))
     # Без номеров: ответ «1» правила не разбирают (ответ на висящий вопрос силами LLM — подбаг A
     # BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH, решение владельца о `_expects`); название из списка — сильное совпадение.
-    lines = "\n".join(f"— {name}" for name in names)
+    lines, priced = _booking_option_lines(names)
     if general:
         # Названа группа услуг («массаж»): названия — примеры, пациент может назвать и свою.
         text = "Уточните, пожалуйста, какую именно услугу записать — как в направлении врача"
         text += f", например:\n{lines}" if names else "."
     else:
         text = f"Уточните, пожалуйста, на какую услугу вас записать:\n{lines}\nНапишите название из списка."
+    if priced:
+        from .renderer import _bundle_text
+
+        text = _bundle_text([text], "", priced=True)
     clean = {k: v for k, v in entities.items() if k not in {BOOKING_SERVICE_OPTIONS_KEY, BOOKING_SERVICE_CLARIFY_KEY}}
     return (
         _copy_decision(decision, entities=clean, flags=set(decision.flags) | {"booking_service_choice_requested"}),
@@ -2465,7 +2501,13 @@ _WALKIN_FLAGS = frozenset({"rule_nonbookable_walkin", "policy_nonbookable_walkin
 
 
 # Темы, где реплика — не голое название услуги по смыслу хода: безопасность, запись и результаты решают свои пути.
-_OVERVIEW_SKIP_LABELS = role_pick._SAFETY_LABELS | {"APPOINTMENT", "TEST_RESULT"}
+# Обзор голого названия — и на темах записи, адресов и врачей (решение владельца 26.10, п. 4 топ-5): «УЗИ щитовидки» правило ставит
+# в запись, «Фгдс» — во врачей, и вместо цены пациент получал «на какую услугу вас записать» или список врачей. На цене и подборе
+# анализов у хода свой ответ по данным (выбор строки цены, ответ подбора) — строже, и обзор его не перебивает: карточка 26.10 —
+# «мазок на онкоцитологию» → «Мазок на эозинофилы…», «соскоб на лишай» → «ЗППП: соскоб», «комплекс на ИППП» → «Обязательный комплекс».
+_OVERVIEW_SKIP_LABELS = role_pick._SAFETY_LABELS | {"TEST_RESULT", "PRICE", "TEST_ASSIST"}
+# На этих темах строки приёма врача — не кандидаты обзора: цену приёма к специальности не называем, пока врач не выбран (25.09).
+_OVERVIEW_NO_RECEPTION_LABELS = frozenset({"APPOINTMENT", "DOCTOR_INFO", "DOCTOR_SCHEDULE"})
 
 
 async def _maybe_service_overview(
@@ -2486,7 +2528,7 @@ async def _maybe_service_overview(
         or turn_understanding.price_turn_facet(user_text)[0] in {"price", "readiness", "prepare"}
     ):
         return None
-    overview = await service_overview.decide(user_text)
+    overview = await service_overview.decide(user_text, without_reception=decision.label in _OVERVIEW_NO_RECEPTION_LABELS)
     if overview is None:
         return None
     return decision, Plan(label=decision.label), Evidence(items={ek.SERVICE_OVERVIEW: overview.payload()})
@@ -2501,8 +2543,28 @@ def _doctors_by_service_not_found(payload: Any) -> bool:
     return bool(str(used.get("service_query") or "").strip()) and not str(used.get("doctor_query") or "").strip()
 
 
+_TEST_ASSIST_NAME_SLOT = "_any_of:test_goal,test_name"
+
+
+def _test_assist_guess_as_name(decision: RouteDecision, state: SessionState, memory: MemoryStore, guess: str, user_text: str) -> None:
+    """Анализ назван (каталог нашёл догадку), а слота названия у хода подбора нет — слова пациента в слот (`test_assist_from_data`).
+
+    Суд «да/нет» по догадке на этом ходе пропущен — строку выбирает LLM ответа по данным, догадка — его первый кандидат. Но под
+    висящим вопросом кнопки «Цена анализа» (ждёт `service_name`) заземление выбрасывает `test_name` хода, и пустой слот подбора
+    строил воронку «Для какой цели хотите подобрать анализы?», хотя анализ назван (карточка 26.10, `buttons_v1`: g0812, g0829,
+    g0852; до слияния — «Похоже, вы имели в виду …? да/нет»). В слот — реплика, как её дал бы классификатор без кнопки: поиск по
+    самой догадке тянул соседние строки, и LLM выбирала их (g0812 — «Расширенная копрология» вместо исследования на паразиты).
+    """
+
+    text = " ".join(str(user_text or "").split())
+    if not guess or not text or decision.label != "TEST_ASSIST" or _TEST_ASSIST_NAME_SLOT not in missing_slots("TEST_ASSIST", state.last_entities):
+        return
+    memory.merge_entities(state, {"test_name": text}, label="TEST_ASSIST")
+    decision.flags = set(decision.flags) | {"test_assist_guess_as_name"}
+
+
 async def _walkin_by_llm(decision: RouteDecision, user_text: str, *, site: str) -> tuple[RouteDecision, bool | None]:
-    """Детектор «без записи» сработал — кандидат; под `service_answer_from_data` решает LLM по правилу клиники (класс 4,
+    """Детектор «без записи» сработал — кандидат; под `walkin_by_llm` решает LLM по правилу клиники (класс 4,
     решения владельца 21.10, `walkin.py`). (решение с флагом хода, True — без записи, False — по записи или о другом,
     None — выключатель снят или сбой LLM: как было, решает детектор). Решение хода спрашивается один раз."""
 
@@ -3534,7 +3596,9 @@ async def _complete_route_after_doctor_guard(
     if booking_choice is not None:
         return booking_choice
 
-    # Служебные каталожные ключи не должны попадать в долгоживущий state.
+    # Служебные каталожные ключи не должны попадать в долгоживущий state. Догадка каталога подбора анализов уходит в данные
+    # хода — кандидатом ответа по данным (`test_assist_answer`).
+    test_assist_guess = str(decision.entities.get(test_assist_answer.CATALOG_GUESS_KEY) or "").strip()
     if any(
         k in decision.entities
         for k in (
@@ -3542,6 +3606,7 @@ async def _complete_route_after_doctor_guard(
             "_catalog_doctor_query",
             "_catalog_service_candidate",
             "_catalog_service_query",
+            test_assist_answer.CATALOG_GUESS_KEY,
         )
     ):
         clean_entities = dict(decision.entities)
@@ -3550,6 +3615,7 @@ async def _complete_route_after_doctor_guard(
             "_catalog_doctor_query",
             "_catalog_service_candidate",
             "_catalog_service_query",
+            test_assist_answer.CATALOG_GUESS_KEY,
         ):
             clean_entities.pop(key, None)
         decision = _copy_decision(decision, entities=clean_entities)
@@ -3651,6 +3717,7 @@ async def _complete_route_after_doctor_guard(
             memory.merge_entities(state, {slot: value}, label=str(pend_label))
 
     fill_date_from_schedule_windows(state, decision.label)
+    _test_assist_guess_as_name(decision, state, memory, test_assist_guess, user_text)
 
     if turn_understanding.prepare_by_parse():
         # Подготовка читает фразы разбора (этап 2 «без стоп-слов»): разбор хода — и на ходу подготовки, по теме, по которой
@@ -3659,6 +3726,8 @@ async def _complete_route_after_doctor_guard(
         await turn_understanding.observe_prepare_turn(planned, user_text=user_text)
     plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
     evidence = await execute_plan(plan, state, services)
+    if test_assist_guess and decision.label == "TEST_ASSIST":
+        evidence.put(ek.TEST_ASSIST_CATALOG_GUESS, test_assist_guess)
     if _doctors_by_service_not_found(evidence.get(ek.DOCTORS_INFO)):
         # Врачей по услуге не нашли («не нашёл в справочнике», L-06(б); «информация о враче не найдена») — до отказа данные
         # клиники: услуга бывает в прайсе и памятке, а врачей по её словам справочник не даёт (g0277 «делают ли ФКС с

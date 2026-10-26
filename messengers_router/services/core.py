@@ -719,6 +719,14 @@ async def _service_bundle_info_checked(self: "Services", query: str, entities: d
     return _freshness.apply(await _service_bundle_info_impl(self, query, entities, **kwargs), snapshots.last)
 
 
+def prices_checked(payload: dict[str, Any]) -> dict[str, Any]:
+    """Цены вне инструментов цены (подбор анализов по данным хода, `test_assist_price`) — тем же правилом давности прайса."""
+
+    from . import _freshness
+
+    return _freshness.apply(payload, snapshots.last)
+
+
 Services.price_info = _price_info_checked
 Services.service_bundle_info = _service_bundle_info_checked
 
