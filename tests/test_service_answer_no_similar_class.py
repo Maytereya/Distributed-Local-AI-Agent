@@ -19,11 +19,13 @@ import pathlib
 import pytest
 
 from messengers_router import service_answer
+from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
 from tests.test_service_answer_class import (  # noqa: F401 — фикстура
     CLAIM_QUESTIONS,
     FABRICATED,
     _RENDER_MARK,
     _SERVICE_ANSWER_MARK,
+    _classifier,
     _free_text_answers,
     _number_of,
     answer_world,
@@ -48,6 +50,14 @@ def _picked(prompt: str) -> str:
     return verdict(picks=(_number_of(prompt, _CHECKUP),))
 
 
+def _other_answers(service_answer) -> dict:
+    """Место «OTHER от LLM» (`topic_other_offer`): под `test_assist_from_data = on` (прод с 24.10) ход подбора анализов под on
+    уступает своему ответу по данным (`test_test_assist_turn_keeps_its_own_data_answer_under_on`), и исходы самого ответа о
+    клинике видны там, где он на проде действует, — на OTHER от классификатора (`topic_by_llm`, прод с 22.10)."""
+
+    return {_CLASSIFIER_MARK: _classifier("OTHER"), _SERVICE_ANSWER_MARK: service_answer, _RENDER_MARK: FABRICATED}
+
+
 def test_exact_prompt_is_the_old_one_with_synthetic_examples_in_both_places():
     exact = _text("messengers_router/prompts/choose_service_answer_exact.txt")
     assert exact == _text("app_data/prompts/mr_choose_service_answer_exact.txt")
@@ -67,7 +77,7 @@ def test_task_by_switch(value, task, monkeypatch):
 
 
 def test_similar_is_an_honest_offer_not_rows_under_on(answer_world, monkeypatch):  # noqa: F811
-    out = turn(answer_world, monkeypatch, "Чекап для собаки делаете?", switch="on", answers=_free_text_answers(_similar), cfg_extra=_ON)
+    out = turn(answer_world, monkeypatch, "Чекап для собаки делаете?", switch="on", answers=_other_answers(_similar), cfg_extra=_ON)
 
     assert out["telemetry"].get("svc_answer") == "no_data" and out["telemetry"].get("svc_answer_similar_hidden") == 1, out["telemetry"]
     assert "Есть похожие" not in out["text"] and "2 055 руб." not in out["text"], out["text"]
@@ -83,15 +93,15 @@ def test_similar_is_shown_as_before_under_off(answer_world, monkeypatch):  # noq
 
 @pytest.mark.parametrize("reply", CLAIM_QUESTIONS[:4])
 def test_no_data_is_an_honest_offer_under_on(reply, answer_world, monkeypatch):  # noqa: F811
-    out = turn(answer_world, monkeypatch, reply, switch="on", answers=_free_text_answers(verdict("no_data")), cfg_extra=_ON)
+    out = turn(answer_world, monkeypatch, reply, switch="on", answers=_other_answers(verdict("no_data")), cfg_extra=_ON)
 
-    assert out["telemetry"].get("answer_source") == "service_answer", out["telemetry"]
+    assert out["telemetry"].get("svc_answer") == "no_data", out["telemetry"]
     assert "нет данных" in out["text"] and "Перевести?" in out["text"] and out["pending_offer"], out["text"]
     assert FABRICATED not in out["text"] and _RENDER_MARK not in out["calls"]
 
 
 def test_answer_prints_name_and_price_from_the_row_under_on(answer_world, monkeypatch):  # noqa: F811
-    out = turn(answer_world, monkeypatch, "Чекап делаете?", switch="on", answers=_free_text_answers(_picked), cfg_extra=_ON)
+    out = turn(answer_world, monkeypatch, "Чекап делаете?", switch="on", answers=_other_answers(_picked), cfg_extra=_ON)
 
     assert _SERVICE_ANSWER_MARK in out["calls"]
     assert out["text"].startswith(service_answer.ANSWER_HEADING) and "— Ежегодный Чекап — 2 055 руб." in out["text"], out["text"]

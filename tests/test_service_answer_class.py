@@ -4,7 +4,9 @@
 утверждал факт о клинике, которого нет в данных («Вы берёте анализы крови у детей 2 лет?» → «Да, мы проводим анализы
 крови для детей», g0509 — так отвечал прод). Инвариант: под `service_answer_from_data = on` утверждение о клинике — только
 из пунктов данных (прайс, памятки), выбранных LLM; данных нет — честный оффер оператора; «не о клинике» и сбой LLM —
-как было. Под off — как было (подделка рендера здесь «выдумывает», и тест класса на базе падает).
+как было. Под off — как было. Свободного текста на ходе подбора анализов на проде нет и под off: с 24.10
+(`test_assist_from_data = on`) ход отвечает по данным хода (`answer_source = test_assist_data`) — он же запасной путь при сбое и
+«не о клинике» (до переворота умолчаний 27.10 здесь был свободный текст, и подделка рендера «выдумывала»).
 
 Через обработчик эндпоинта; LLM — подделка настоящего типа (`GenerateResponse`, поток — как у ollama).
 """
@@ -197,17 +199,19 @@ def test_off_is_as_before(reply, answer_world, monkeypatch):
     out = turn(answer_world, monkeypatch, reply, switch="off", answers=_free_text_answers(verdict("no_data")))
 
     assert _SERVICE_ANSWER_MARK not in out["calls"]
-    assert out["telemetry"].get("answer_source") == "llm_free", out["telemetry"]
+    # Как на проде: ход подбора анализов отвечает по данным хода, свободного текста нет (`test_assist_from_data = on`).
+    assert out["telemetry"].get("answer_source") == "test_assist_data", out["telemetry"]
+    assert FABRICATED not in out["text"] and _RENDER_MARK not in out["calls"], out["text"]
 
 
 @pytest.mark.parametrize("failure", [ConnectionError("тест: LLM недоступна"), "не json", verdict("not_about_clinic")])
-def test_failure_or_not_about_clinic_keeps_free_text(failure, answer_world, monkeypatch):
+def test_failure_or_not_about_clinic_answers_as_off(failure, answer_world, monkeypatch):
     reply = CLAIM_QUESTIONS[0]
     off = turn(answer_world, monkeypatch, reply, switch="off", answers=_free_text_answers(verdict("no_data")))
     on = turn(answer_world, monkeypatch, reply, switch="on", answers=_free_text_answers(failure))
 
     assert on["text"] == off["text"]
-    assert on["telemetry"].get("answer_source") == "llm_free"
+    assert on["telemetry"].get("answer_source") == "test_assist_data"  # как off на проде: ответ подбора по данным
 
 
 def test_claim_is_printed_from_the_picked_price_row(answer_world, monkeypatch):
@@ -228,7 +232,7 @@ def test_claim_is_printed_from_the_picked_price_row(answer_world, monkeypatch):
 def test_llm_cannot_pick_outside_the_data(answer_world, monkeypatch):
     out = turn(answer_world, monkeypatch, CLAIM_QUESTIONS[0], switch="on", answers=_free_text_answers(verdict(picks=(99,))))
 
-    assert out["telemetry"].get("answer_source") == "llm_free"  # номер вне списка — мусор: не верим, как было
+    assert out["telemetry"].get("answer_source") == "test_assist_data"  # номер вне списка — мусор: не верим, ход как под off
     assert out["telemetry"].get("svc_answer") == "failed", out["telemetry"]
 
 
@@ -240,7 +244,7 @@ def _number_of(prompt: str, text: str) -> int:
     raise AssertionError(f"нет пункта «{text}» в промпте:\n{prompt}")
 
 
-def test_free_text_fallthrough_returns_the_turn_budget(answer_world, monkeypatch):
+def test_fallthrough_returns_the_turn_budget(answer_world, monkeypatch):
     out = turn(
         answer_world,
         monkeypatch,
@@ -250,5 +254,5 @@ def test_free_text_fallthrough_returns_the_turn_budget(answer_world, monkeypatch
         cfg_extra={"MR_LLM_DECISION_TURN_CALLS": 2},  # первое решение хода — разбор фраз
     )
 
-    assert out["telemetry"].get("answer_source") == "llm_free"
+    assert out["telemetry"].get("answer_source") == "test_assist_data"  # ход как под off (прод: ответ подбора по данным)
     assert out["telemetry"].get("svc_answer_refund") == 1, out["telemetry"]  # ход как был — лимит решений не потрачен

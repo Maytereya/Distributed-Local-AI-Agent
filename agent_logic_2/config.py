@@ -687,7 +687,8 @@ settings = Settings(
         # Ход подбора анализов (TEST_ASSIST), дошедший до свободного текста LLM, отвечает по данным хода
         # (BUG-2026-10-21-WALKIN-LLM-FREE-TEXT): строки прайса выбирает LLM (`choose`, задача `test_assist_answer`), название
         # и срок печатает код, нет данных и сбой — честный оффер оператора. off — как было. [MESSENGER_ROUTER] test_assist_from_data
-        test_assist_from_data=_get_enum("MESSENGER_ROUTER", "test_assist_from_data", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 24.10 (деплой 17; STEP-2026-10-15-DEFAULTS-B).
+        test_assist_from_data=_get_enum("MESSENGER_ROUTER", "test_assist_from_data", default="on", allowed={"off", "on"}),
         # Цена у строк, выбранных ответом подбора анализов по данным хода (решение владельца 26.10, топ-5 разбора 95 цен, п. 1):
         # сумму печатает код из той же строки прайса (принцип 1), частичный ответ — цены найденных строк и «остального в прайсе
         # нет — уточнит оператор». Давность прайса — как у пути цены (`services/_freshness`). Действует при

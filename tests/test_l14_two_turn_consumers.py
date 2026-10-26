@@ -647,15 +647,16 @@ def test_readiness_answer_leaves_no_service_pending_or_label_in_state(config, mi
     """Срок из МИС кодом (ответ о «Ферритин»): ход уходит ранним возвратом (`_maybe_readiness_reply`) мимо
     слияния сущностей — ни ожидания, ни метки хода; срок назвал одну услугу — она в контексте (правило владельца 14.10).
 
-    Набор `default`: понимание хода в тени — вопрос о сроке не обрабатывается, ответ — перевод на оператора."""
+    Набор `default`: понимание хода в тени — вопрос о сроке не обрабатывается, подбор анализов без данных (LLM гейта
+    недоступна) — честный оффер оператора с висящим подтверждением (`test_assist_from_data = on`, прод с 24.10; до — перевод)."""
 
     turn = _state_after("сколько готовится ферритин", config, mini_prod_world, monkeypatch, "state-readiness")
     if config == "default":
-        assert turn.handoff
-    else:
-        assert turn.text == "Срок готовности «Ферритин» — 1–2 дня." and not turn.handoff
-    held = None if config == "default" else "Ферритин"
-    assert (turn.state["service_name"], turn.state["pending"], turn.state["last_label"]) == (held, None, None)
+        assert "точно ответит оператор" in turn.text and not turn.handoff, turn.text
+        assert (turn.state["service_name"], turn.state["pending"]) == (None, ("OTHER", ("operator_offer_confirm",))), turn.state
+        return
+    assert turn.text == "Срок готовности «Ферритин» — 1–2 дня." and not turn.handoff
+    assert (turn.state["service_name"], turn.state["pending"], turn.state["last_label"]) == ("Ферритин", None, None)
 
 
 # До 17.10 под `context_shown = off` сводка переживала снятие услуги (красное); теперь сводка обновляется при расхождении.

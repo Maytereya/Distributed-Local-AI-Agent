@@ -7,7 +7,8 @@
 Инварианты (выключатель `catalog_confirm_llm` снят 29.10, путь `on` — единственный; тесты пути off удалены):
 - LLM подтвердила — переспрос с догадкой; назвала другую — переспрос с её названием; «не услуга» / «ничего не подходит» /
   «слишком общее» — переспроса нет; LLM недоступна — как было;
-- у цены переспроса нет (строку выбирает LLM) — догадку не судим.
+- у цены переспроса нет (строку выбирает LLM) — догадку не судим; у подбора анализов (TEST_ASSIST) — тоже: под
+  `test_assist_from_data = on` (прод с 24.10) догадка — кандидат ответа подбора, суд пропущен (`test_test_assist_decisions_class`).
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ def _run(label: str, verdict: BookingServiceVerdict | None, monkeypatch) -> tupl
     return out, flags, calls
 
 
-@pytest.mark.parametrize("label", ["APPOINTMENT", "ADDRESS", "TEST_ASSIST"])
+@pytest.mark.parametrize("label", ["APPOINTMENT", "ADDRESS"])
 @pytest.mark.parametrize("status", ["none_fit", "not_a_service"])
 def test_on_llm_refuses_no_confirm(monkeypatch, label: str, status: str) -> None:
     out, flags, calls = _run(label, BookingServiceVerdict("refuse", status=status), monkeypatch)
@@ -61,7 +62,7 @@ def test_on_llm_refuses_no_confirm(monkeypatch, label: str, status: str) -> None
 
 def test_on_too_general_no_yes_no_confirm(monkeypatch) -> None:
     verdict = BookingServiceVerdict("clarify", names=("Общий анализ крови", "Глюкоза"), status="too_general")
-    out, _, _ = _run("TEST_ASSIST", verdict, monkeypatch)
+    out, _, _ = _run("APPOINTMENT", verdict, monkeypatch)
     assert "_catalog_service_candidate" not in out
 
 
@@ -101,7 +102,7 @@ def test_on_budget_exhausted_after_judgement_no_letter_confirm(monkeypatch) -> N
     flags: set = {"catalog_confirm_judged_none_fit"}
     asyncio.run(
         G.judge_fuzzy_service_candidate(
-            label="TEST_ASSIST",
+            label="APPOINTMENT",  # у TEST_ASSIST суд пропущен (`test_assist_from_data`) — механизм лимита судим на записи
             candidate="Вирус клещевого энцефалита Ig G",
             query="инцифалит",
             user_text="есть ли исследование клеща на инцифалит?",
@@ -125,7 +126,7 @@ def test_on_budget_exhausted_after_router_judgement_no_letter_confirm(monkeypatc
     out: dict = {}
     asyncio.run(
         G.judge_fuzzy_service_candidate(
-            label="TEST_ASSIST",
+            label="APPOINTMENT",  # у TEST_ASSIST суд пропущен (`test_assist_from_data`) — механизм лимита судим на записи
             candidate="Вирус клещевого энцефалита Ig G",
             query="инцифалит",
             user_text="есть ли исследование клеща на инцифалит?",
@@ -153,7 +154,7 @@ def test_on_budget_exhausted_by_other_decisions_no_letter_confirm(monkeypatch) -
     out: dict = {}
     asyncio.run(
         G.judge_fuzzy_service_candidate(
-            label="TEST_ASSIST",
+            label="APPOINTMENT",  # у TEST_ASSIST суд пропущен (`test_assist_from_data`) — механизм лимита судим на записи
             candidate="Анализ крови на аминокислоты (48 показателей)",
             query="анализ",
             user_text="Я смогу принести кал на анализ в 15.00?",
@@ -193,7 +194,7 @@ def _run_query(query: str, verdict: BookingServiceVerdict, monkeypatch, *, label
     return out, flags, calls
 
 
-@pytest.mark.parametrize("label", ["APPOINTMENT", "ADDRESS", "TEST_ASSIST"])
+@pytest.mark.parametrize("label", ["APPOINTMENT", "ADDRESS"])
 def test_on_phrase_names_no_service_no_letter_confirm(monkeypatch, label: str) -> None:
     """Фраза догадки не называет услугу («анализы» правила walk-in): выбор строки LLM не зовёт, «оставить» без решения —
     не подтверждение; переспроса по буквам нет (прод 22.10 после деплоя 15: «кровь ребенку 9 месяцев», «Анализ T-SPOT» →
