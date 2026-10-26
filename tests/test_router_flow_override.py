@@ -40,6 +40,7 @@ from messengers_router.policies import (
     nonbookable_service_hint,
     detect_prepare_intent,
     detect_unsupported_catalog,
+    handoff_message,
     is_test_assist_category_term,
 )
 from messengers_router.services import Services
@@ -946,8 +947,10 @@ def test_route_message_short_circuits_on_catalog_health_degraded(monkeypatch):
     assert "catalog_health_degraded" in decision.flags
     payload = evidence.get("catalog_health_response")
     assert isinstance(payload, dict)
-    assert "каталог услуг" in str(payload.get("text") or "").lower()
-    assert payload.get("handoff") is False
+    # Каталог услуг пуст — сбой МИС: перевод, а не «попробуйте через 5 минут или напишите «оператор»»
+    # (`mis_honest_degradation = on`, прод с 18.10; класс — `test_catalog_unavailable_hands_off.py`).
+    assert handoff_message("service_error") in str(payload.get("text") or "")
+    assert payload.get("handoff") is True
 
 
 def test_patient_routing_stream_renders_catalog_health_response(monkeypatch):

@@ -178,7 +178,10 @@ def test_stale_price_answers_the_same_and_reports_its_age(mini_prod_world, monke
     fresh, _rows = _play(mini_prod_world, monkeypatch, "snapshot-same")
     stale, rows = _play(mini_prod_world, monkeypatch, "snapshot-same", shift_to="20261012")
 
-    assert [r["text"] for r in stale] == [r["text"] for r in fresh]  # наблюдатель ответа не меняет
+    # Наблюдатель ответа не меняет; срез 4 дней под `mis_honest_degradation = on` (прод с 18.10) — приписка даты данных
+    # (вариант «Б», `services/_freshness`), остальное — как у свежего.
+    assert stale[0]["text"].rstrip().endswith("по данным на 08.10._"), stale[0]["text"]
+    assert [r["text"].replace(", по данным на 08.10._", "._") for r in stale] == [r["text"] for r in fresh]
     assert _price_src(rows)[0] == {"status": "stale", "age_days": 4}
 
 

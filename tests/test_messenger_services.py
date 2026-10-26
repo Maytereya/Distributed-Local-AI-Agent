@@ -31,6 +31,7 @@ from messengers_router.response_builder import build_price_response, build_test_
 from messengers_router.services import Services, resolve_price_service_name_from_catalog
 from messengers_router.services import prepare as prepare_mod
 from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
+from messengers_router.services.addresses import APPOINTMENT_BRANCHES_UNAVAILABLE_TEXT
 from messengers_router.policies import (
     build_branch_index,
     extract_specialty,
@@ -637,10 +638,10 @@ def test_doctors_schedule_week_clears_stale_no_slots_reason_on_later_match(monke
     )
 
 
-def test_doctors_schedule_week_api_error_string_serves_stale(monkeypatch):
-    """При строке-ошибке CRM отдаём последний валидный (positive) ответ из
-    stale-окна, если он есть — и без удвоения вызовов retry-петлёй (api_error
-    re-raise'ится сразу, в отличие от raised exception)."""
+def test_doctors_schedule_week_api_error_string_does_not_serve_stale(monkeypatch):
+    """При строке-ошибке CRM последний валидный ответ из stale-окна пациенту не отдаётся: расписание — только
+    живое, сбой — честный перевод (`mis_honest_degradation = on`, прод с 18.10; решения владельца 08.10 и 18.10).
+    Без удвоения вызовов retry-петлёй (api_error re-raise'ится сразу, в отличие от raised exception)."""
     svc = Services(
         schedule_fresh_ttl_seconds=10,
         schedule_stale_ttl_seconds=120,
@@ -688,11 +689,11 @@ def test_doctors_schedule_week_api_error_string_serves_stale(monkeypatch):
     clock["ts"] += 11
     second = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
 
-    # api_error НЕ ретраится на уровне _fetch_schedule_source: +1 вызов (не +2),
-    # затем отдаётся stale из кэша.
+    # api_error НЕ ретраится на уровне _fetch_schedule_source: +1 вызов (не +2); stale из кэша не отдаётся.
     assert calls["count"] == 2
-    assert second["schedule"], "Expected stale schedule when source returns api error"
-    assert not second.get("handoff_required", False)
+    assert second["schedule"] == [], "устаревшее расписание при сбое не выдаётся за живое"
+    assert second.get("handoff_required") is True
+    assert second.get("handoff_message") == handoff_message("service_error_schedule")
 
 
 def test_doctors_schedule_week(monkeypatch):
@@ -1121,7 +1122,8 @@ def test_doctors_schedule_week_cache_miss_after_fresh_ttl(monkeypatch):
     assert calls["count"] == 2
 
 
-def test_doctors_schedule_week_returns_stale_on_source_error(monkeypatch):
+def test_doctors_schedule_week_hands_off_instead_of_stale_on_source_error(monkeypatch):
+    """Сбой источника при живом stale-окне кэша — перевод, а не устаревшие слоты (`mis_honest_degradation = on`, прод)."""
     svc = Services(
         schedule_fresh_ttl_seconds=10,
         schedule_stale_ttl_seconds=120,
@@ -1171,10 +1173,11 @@ def test_doctors_schedule_week_returns_stale_on_source_error(monkeypatch):
     clock["ts"] += 11
     second = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
 
-    # Вторая проверка делает 2 попытки запроса (retry), затем отдает stale из кэша.
+    # Вторая проверка делает 2 попытки запроса (retry); stale из кэша не отдаётся.
     assert calls["count"] == 3
-    assert second["schedule"], "Expected stale schedule when source is unavailable"
-    assert not second.get("handoff_required", False)
+    assert second["schedule"] == [], "устаревшее расписание при сбое не выдаётся за живое"
+    assert second.get("handoff_required") is True
+    assert second.get("handoff_message") == handoff_message("service_error_schedule")
 
 
 def test_doctors_schedule_week_negative_cache_ttl(monkeypatch):
@@ -3238,7 +3241,9 @@ def test_address_info_appointment_mode_uses_price_units_care_setting_addresses(m
         ]
 
     async def fake_ensure_doctors_cache():
-        return []
+        # Срез врачей не пуст, как на проде (пустой — сбой МИС: под `mis_honest_degradation = on` перевод, DATA-5);
+        # адреса стационара — из места оказания priceUnits, не из филиалов врача.
+        return [{"id": 9, "fio": "Лорова Анна", "regions": ["г. Самара, ул. Победы, 83"], "units": ["Врач-оториноларинголог"], "specialization": "оториноларинголог"}]
 
     def fake_price_by_region(_region_id):
         return [
@@ -3391,7 +3396,9 @@ def test_news_info(monkeypatch):
         }]
 
     monkeypatch.setattr(news_mod.api_nayka, "site_promotions", fake_promos)
-    monkeypatch.setattr(news_mod.api_nayka, "site_regions", lambda **_kw: [])
+    # Справочник филиалов — как у МИС (пустой — сбой: под `mis_honest_degradation = on` перевод, DATA-14).
+    regions = [{"id": 1, "name": "Все", "parent": None}, {"id": 2, "name": "Самарская область", "parent": 1}, {"id": 3, "name": "Самара", "parent": 2}]
+    monkeypatch.setattr(news_mod.api_nayka, "site_regions", lambda **_kw: list(regions))
 
     res = run(svc.news_info("акция", {}))
 
@@ -5061,9 +5068,9 @@ def test_address_info_regions_tech_failure_marks_degraded_uses_cache(monkeypatch
     assert _LAB_ONLY_BRANCH not in (r.get("addresses") or [])
 
 
-def test_address_info_regions_tech_failure_no_cache_is_tech_unavailable(monkeypatch):
-    # /regions tech-failure + EMPTY doctors-cache → honest tech_unavailable payload:
-    # no misleading addresses, honest text, marked degraded, NOT auto-handoff.
+def test_address_info_regions_tech_failure_no_cache_hands_off(monkeypatch):
+    # /regions tech-failure + EMPTY doctors-cache → no misleading addresses, marked degraded, and the honest
+    # handoff (`mis_honest_degradation = on`, prod since 18.10: «сбой МИС → оператор», вариант «а» — филиалы врача не проверить).
     svc = Services()
 
     async def boom():
@@ -5077,10 +5084,10 @@ def test_address_info_regions_tech_failure_no_cache_is_tech_unavailable(monkeypa
     ent = {"city": "Самара", "specialty": "гинеколог", "__appointment_mode": True}
     r = run(svc.address_info("Запись к врачу-гинекологу", ent))
     assert r.get("degraded") is True
-    assert r.get("degraded_upstream") == "regions"
+    assert r.get("degraded_upstream") == "doctors"   # пустой срез врачей проверяется первым
     assert not (r.get("addresses") or [])             # no guessing
-    assert "техническ" in str(r.get("handoff_message") or "").lower()
-    assert not r.get("handoff_required")              # no auto-escalation
+    assert r.get("handoff_required") is True
+    assert r.get("handoff_message") == APPOINTMENT_BRANCHES_UNAVAILABLE_TEXT
 
 
 def test_address_info_regions_clean_empty_is_not_degraded(monkeypatch):

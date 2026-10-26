@@ -115,16 +115,6 @@ def test_list_mode_filters_expired_and_foreign_regions(promo_env):
     assert "Истёкшая акция" not in titles
 
 
-def test_regions_unavailable_keeps_only_explicit_vse(promo_env, monkeypatch):
-    def _boom(*, realtime=False):
-        raise RuntimeError("regions down")
-
-    monkeypatch.setattr(news_mod.api_nayka, "site_regions", _boom)
-    payload = run(news_mod.news_info(None, "акции", {}))
-    titles = _titles(payload)
-    assert titles == ["ЧЕКАП + ВИТАМИН D"], "при недоступном /regions — только явное «Все»"
-
-
 def test_source_unavailable_is_soft(promo_env, monkeypatch):
     def _boom(*, realtime=False):
         raise RuntimeError("promotions down")

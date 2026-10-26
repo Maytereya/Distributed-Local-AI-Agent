@@ -206,6 +206,24 @@ def _fresh_llm_decision_state(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_mis_failure_state(monkeypatch):
+    """«Последний прочитанный срез» (`snapshots._last`) и отметка сбоя `/regions` (`api_nayka._REGIONS_FAILED`) —
+    состояние процесса: тест не наследует их.
+
+    Под `mis_honest_degradation = on` (прод с 18.10) оба видны пациенту. Давность прайса в ответе (`services/_freshness`)
+    читает последний срез, о котором сообщил загрузчик: тест с подделкой загрузчика (о срезе не сообщает) получал давность
+    среза соседа по воркеру — локальный срез прайса 08.10 «старше недели», цены врача уходили в перевод. Отметку сбоя
+    филиалов оставлял тест, у которого запрос `/regions` упал в закрытой сети, — адресные ответы соседей уходили в перевод.
+    27.10, переворот умолчаний: 5 тестов `test_messenger_services` и 22 адресных хода — красные только под `-n`.
+    """
+    from agent_logic_2.nayka_api import api_nayka, snapshots
+
+    monkeypatch.setattr(snapshots, "_last", {})
+    monkeypatch.setitem(api_nayka._REGIONS_FAILED, "at", 0.0)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_shown_context():
     """«Показанное прошлым ответом» (`shown_context._PREVIOUS` / `_BEFORE`) — переменные хода: тест, который зовёт
     `begin_turn` напрямую, а не через эндпоинт, не оставляет их следующему (17.10: `test_sync_address_boundaries`

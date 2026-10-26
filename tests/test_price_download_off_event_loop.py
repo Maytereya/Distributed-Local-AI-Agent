@@ -64,4 +64,6 @@ def test_answers_are_the_same_as_before(mini_prod_world, monkeypatch):  # noqa: 
     shifted, _ = _play(mini_prod_world, monkeypatch, "download-same", shift_to="20261012")
 
     assert downloads == []  # срез «на сегодня» есть — качать нечего
-    assert [r["text"] for r in shifted] == [r["text"] for r in fresh]
+    # Ответ тот же; срез 4 дней под `mis_honest_degradation = on` (прод с 18.10) — с припиской даты данных (`services/_freshness`).
+    assert shifted[0]["text"].rstrip().endswith("по данным на 08.10._"), shifted[0]["text"]
+    assert [r["text"].replace(", по данным на 08.10._", "._") for r in shifted] == [r["text"] for r in fresh]

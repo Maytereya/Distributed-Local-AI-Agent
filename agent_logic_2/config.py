@@ -596,9 +596,9 @@ settings = Settings(
         variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
         # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
         # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
-        # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
-        # выключателем, умолчание «как было»). [MESSENGER_ROUTER] mis_honest_degradation
-        mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="off", allowed={"off", "on"}),
+        # приписка «по данным на ДД.ММ» или оператор. off — как было. По умолчанию on — как на проде с 18.10 (деплой 8;
+        # STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] mis_honest_degradation
+        mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="on", allowed={"off", "on"}),
         # Тема реестра перебивает метку OTHER только после подтверждения LLM по смыслу (решение владельца 18.10:
         # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
         # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
