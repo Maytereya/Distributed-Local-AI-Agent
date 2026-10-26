@@ -22,6 +22,7 @@
 | Выключатель | На проде `on` с | Коммит (по порядку в ветке) | Снято | Тесты |
 |---|---|---|---|---|
 | `roles_catalog_llm` | деплой 13 (21.10) | 1 | режимы `off` / `shadow`: `role_pick.mode`, тень `launch` / `_decide` / `settle` (строка `role_shadow`), выбор роли — всегда в бюджете хода (`decide` без `shadow`); ключ, атрибут `MR_ROLES_CATALOG_LLM`. `evalbench.world.settle_shadows` — `settle` модуля по `getattr` (база без тени). Отчёт `evalbench.role_shadow` читает старые прогоны — оставлен | `test_role_pick_on_class.py`: тест «off и shadow не трогают решение» удалён, режим не ставится; `test_role_pick_shadow_class.py`: тесты тени через эндпоинт удалены, тесты `decide` остались; из словарей прода тестов ключ убран |
+| `catalog_confirm_llm` | деплой 14 (22.10) | 2 | `entity_grounder.catalog_confirm_llm_enabled`: нечёткую догадку каталога на метках записи, адресов и подбора анализов перед «Похоже, вы имели в виду …?» судит LLM всегда (политика «недоступна» и «фраза не называет услугу» — как на проде); ключ, атрибут `MR_CATALOG_CONFIRM_LLM` | `test_catalog_confirm_llm_class.py`: тесты пути off (`test_off_keeps_letter_guess_without_llm`, `test_off_phrase_names_no_service_as_before`) удалены, выключатель не ставится; `test_stage15_prefetch.py` — подделке сервисов дан каталог суда (`_ensure_service_catalog_rows_loaded`): на пути прода нечёткую догадку записи судит LLM |
 
 ## STEP-2026-10-25-BUTTONS-METRIC — метрика «рабочий бот»: успех внутри меню-кнопок, набор `buttons_v1`, первый замер деплой 17 → 18 — СДЕЛАНО (решение владельца 25.10)
 

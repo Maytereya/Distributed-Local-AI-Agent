@@ -225,6 +225,9 @@ def test_inject_refetches_when_prefetch_query_differs(monkeypatch):
             observed_query.append(query)
             return {"status": "fuzzy", "canonical": "Холтер", "query": query}
 
+        async def _ensure_service_catalog_rows_loaded(self):  # каталог суда догадки (LLM в тесте недоступна — переспрос как был)
+            return []
+
     decision = RouteDecision(
         label="APPOINTMENT",
         confidence=0.9,

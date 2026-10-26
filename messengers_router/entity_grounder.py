@@ -306,15 +306,9 @@ def _apply_service_verdict(
     return None
 
 
-# Метки, где нечёткую догадку каталога перед «Похоже, вы имели в виду …?» судит LLM (`catalog_confirm_llm = on`); у цены
+# Метки, где нечёткую догадку каталога перед «Похоже, вы имели в виду …?» судит LLM; у цены
 # переспроса нет вовсе — строку выбирает LLM (`router._maybe_start_catalog_confirm`).
 _LLM_JUDGED_FUZZY_LABELS = frozenset({"APPOINTMENT", "ADDRESS", "TEST_ASSIST"})
-
-
-def catalog_confirm_llm_enabled() -> bool:
-    from agent_logic_2 import config as _cfg  # noqa: PLC0415 — настройка читается на ход (стенд меняет её на прогон)
-
-    return str(getattr(_cfg, "MR_CATALOG_CONFIRM_LLM", "off") or "off").strip().lower() == "on"
 
 
 async def judge_fuzzy_service_candidate(
@@ -332,10 +326,10 @@ async def judge_fuzzy_service_candidate(
 ) -> None:
     """Нечёткая догадка каталога → переспрос «Похоже, вы имели в виду …?» (BUG-2026-10-22-CATALOG-CONFIRM-BY-LETTERS).
 
-    Под off — как было: догадка правил по буквам идёт на «да/нет» («анализ» → «Анализ крови на аминокислоты»,
-    «фадиатоп» → «Кровь на ВИЧ»). Под on её судит LLM тем же выбором, что точное совпадение записи
-    (`judge_booking_service`): подтвердила — переспрос как был; назвала другую — переспрос с её названием; «не услуга»,
-    «слишком общее», «ничего не подходит» — переспроса нет, ход идёт без услуги; LLM недоступна — как было.
+    Догадку правил по буквам («анализ» → «Анализ крови на аминокислоты», «фадиатоп» → «Кровь на ВИЧ») судит LLM тем же
+    выбором, что точное совпадение записи (`judge_booking_service`): подтвердила — переспрос как был; назвала другую —
+    переспрос с её названием; «не услуга», «слишком общее», «ничего не подходит» — переспроса нет, ход идёт без услуги; LLM
+    недоступна — как было. Выключатель `catalog_confirm_llm` снят 29.10 (неделя `on` на проде, STEP-2026-10-29-SWITCH-REMOVAL).
     """
 
     def _confirm(name: str) -> None:
@@ -343,7 +337,7 @@ async def judge_fuzzy_service_candidate(
         out["_catalog_service_query"] = query
         flags.add(candidate_flag)
 
-    if not catalog_confirm_llm_enabled() or label not in _LLM_JUDGED_FUZZY_LABELS:
+    if label not in _LLM_JUDGED_FUZZY_LABELS:
         _confirm(candidate)
         return
     if not names_service(query):

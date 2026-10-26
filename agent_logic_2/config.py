@@ -203,7 +203,6 @@ class MessengerRouterConfig:
     mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
-    catalog_confirm_llm: str
     grounder_generic_by_llm: str
     biomaterial_by_mis: str
     p1_facet_none_offer: str
@@ -610,11 +609,6 @@ settings = Settings(
         # LLM-классификатор решает её параллельно ходу, вне его бюджета; строка `topic_shadow` после ответа — матрица
         # «правило × LLM». Ответ не меняется. off — как было. [MESSENGER_ROUTER] topic_shadow_llm
         topic_shadow_llm=_get_enum("MESSENGER_ROUTER", "topic_shadow_llm", default="off", allowed={"off", "on"}),
-        # «Похоже, вы имели в виду …?» (BUG-2026-10-22-CATALOG-CONFIRM-BY-LETTERS): нечёткую догадку каталога по буквам перед
-        # переспросом судит LLM (`judge_booking_service`, как у точного совпадения записи): подтвердила или назвала другую —
-        # переспрос с её названием; «не услуга» / «ничего не подходит» — переспроса нет; LLM недоступна — как было. off — как было.
-        # [MESSENGER_ROUTER] catalog_confirm_llm
-        catalog_confirm_llm=_get_enum("MESSENGER_ROUTER", "catalog_confirm_llm", default="off", allowed={"off", "on"}),
         # Значение `service_name` LLM-классификатора на метке без каталога (DOCTOR_INFO, PREPARE) без фразы услуги в реплике
         # (STEP-2026-10-24-S2-DOCS-PHRASE, решения владельца 22.10): что это услуга, решила LLM — без перепроверки буквами
         # общих слов (`_GENERIC_SERVICE_FALLBACK_RE`: запись, врач, услуга, хочу…). off — как было.
@@ -890,7 +884,6 @@ MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
-MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
 MR_GROUNDER_GENERIC_BY_LLM = settings.messenger_router.grounder_generic_by_llm
 MR_BIOMATERIAL_BY_MIS = settings.messenger_router.biomaterial_by_mis
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer

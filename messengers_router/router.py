@@ -1852,7 +1852,7 @@ async def _inject_catalog_candidates(
             flags.add("catalog_service_exact")
             updated = True
         elif status == "fuzzy" and canonical and any(f.startswith("catalog_confirm_judged_") for f in flags):
-            # Догадку этого хода уже судила LLM в заземлении (`catalog_confirm_llm = on`): вторая догадка по буквам —
+            # Догадку этого хода уже судила LLM в заземлении: вторая догадка по буквам —
             # с другой строкой запроса — переспрос не получает (g0196: заземление сняло «клещ на энцефалит», роутер
             # предложил «Вирус клещевого энцефалита IgG» после исчерпанного лимита решений хода).
             pass
