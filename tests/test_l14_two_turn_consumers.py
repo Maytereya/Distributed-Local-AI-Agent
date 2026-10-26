@@ -392,11 +392,11 @@ KNOWN_CONTEXT: dict[tuple[str, str], dict[str, str]] = {}
 
 # Красное продолжений после ответа X, объявленное до 17.10 под `context_shown = off` («а цена?» искала букву «а», повтор
 # после одной строки «Глюкоза» показывал семью, «а как подготовиться» печаталось предметом памятки, после «а где сдать?»
-# класс «анализы» затирал показанную услугу), закрыто «контекстом = показанным» — единственный путь с 17.10.
+# класс «анализы» затирал показанную услугу), закрыто «контекстом = показанным» — единственный путь с 17.10. «1» на список с
+# подсказкой «напишите: "все"» (раскрывало весь список с чужими строками) закрыто 26.10: цифра — номер показанной строки
+# (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD, `tests/test_show_all_hint_class.py`).
 # (сценарии, вопрос, наборы, {код: причина}) → построчно в KNOWN_FOLLOWUP.
-_FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = (
-    (("family_oak",), "one", tuple(_SETS), {"rows": 'BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD: под одной функцией (прод с деплоя 10; тест молча проверял путь off до снятия pending_reply) «1» на список с подсказкой «напишите: "все"» читается как пункт 1 подсказки — «все», а полный список семейства ОАК несёт чужие строки (ОАМ, «ЗППП: анализ крови»)'}),
-)
+_FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = ()
 # (сценарий, вопрос, набор) → {код: причина}. Пусто — зелёный. Вопрос — метка из FOLLOWUPS.
 KNOWN_FOLLOWUP: dict[tuple[str, str, str], dict[str, str]] = {
     (scenario, question, config): codes for scenarios, question, configs, codes in _FOLLOWUP_RED for scenario in scenarios for config in configs
@@ -622,13 +622,14 @@ def test_cart_leaves_no_single_service_and_no_continuation_in_state(config, mini
 
 @pytest.mark.parametrize("config", CONFIGS)
 def test_family_list_keeps_the_first_variant_and_the_announced_family(config, mini_prod_world, monkeypatch):  # noqa: F811
-    """Семейство правил («оак»: два варианта и «ещё 6»): в состоянии первый показанный вариант (пациент не
-    выбирал — его выбрало заземление) и семейство для «все» — ровно то, что ответ пообещал показать (8)."""
+    """Семейство правил («оак»: два варианта и «ещё 3»): в состоянии первый показанный вариант (пациент не
+    выбирал — его выбрало заземление) и семейство для «все» — ровно то, что ответ пообещал показать (5). До 26.10 —
+    «ещё 6» и 8: хвост добирал ОАМ и «ЗППП: анализ крови» (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD)."""
 
     turn = _state_after("сколько стоит оак", config, mini_prod_world, monkeypatch, "state-family")
-    assert "найдено еще 6 вариантов" in turn.text
+    assert "найдено еще 3 вариантов" in turn.text
     assert turn.state["service_name"] == "Общий анализ крови (Le, Er, Hb, СОЭ)"
-    assert turn.state["family_context"] == {"service_name": "общий анализ крови", "variants": 8}
+    assert turn.state["family_context"] == {"service_name": "общий анализ крови", "variants": 5}
     assert turn.state["service_name"] in turn.text and turn.state["pending"] is None
 
 

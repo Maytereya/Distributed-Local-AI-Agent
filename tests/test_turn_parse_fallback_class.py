@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,8 @@ from evalbench import world as ev_world
 from messengers_router import llm_runtime, turn_parse
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
-from tests.test_turn_parse_t3 import _FOLLOW_UPS, _assert_follow_up_stays_on_what_was_shown, _Oracle
+from tests.test_price_one_or_many_class import _norm
+from tests.test_turn_parse_t3 import _FOLLOW_UPS, _assert_follow_up_stays_on_what_was_shown, _Oracle, _priced
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_turns_parse_fallback.json"
 UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
@@ -234,10 +236,12 @@ def test_the_corpus_reaches_each_guard_on_the_fallback():
 _TWO_TURNS = ("run_on_bare", "run_on_extra_words", "one_name_covers_igg", "phrase_smear_pharynx")
 
 
-# Известное красное (xfail strict): «да» на ответ с подсказкой «напишите: "все"» одна функция читает как «показать все»
-# (решение 15.10), а полный список семейства ОАК несёт чужие строки — BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD (прод с деплоя 10;
-# до снятия `pending_reply` тест молча проверял путь off).
-_FOLLOW_UP_RED = {("run_on_bare", "да"): "BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD: «да» → полный список семейства ОАК с чужими строками"}
+# Известное красное (xfail strict) — пусто. «да» на ответ с подсказкой «напишите: "все"» — «показать все» (решения владельца 15.10
+# и 26.10): новые строки допустимы, но только той же услуги; до 26.10 полный список ОАК нёс ОАМ и «ЗППП: анализ крови»
+# (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD).
+_FOLLOW_UP_RED: dict[tuple[str, str], str] = {}
+_SHOW_ALL_HINT = 'напишите: "все"'
+_LIST_TITLE = re.compile(r"По запросу «([^»]+)»")
 
 
 def _follow_up_params():
@@ -256,4 +260,10 @@ def test_follow_up_after_the_fallback_answer_stays_on_what_was_shown(name, follo
     first, second = _dialog(name, "prod", [CASES[name].text, follow_up], monkeypatch, mini_prod_world)
     expected = _load()[f"{name}-prod"][0]
     assert first["text"] == expected["text"] and first["tu_rule"] == expected["tu_rule"]
-    _assert_follow_up_stays_on_what_was_shown(first, second)
+    title = _LIST_TITLE.search(first["text"])
+    if follow_up == "да" and _SHOW_ALL_HINT in first["text"] and title:
+        # «да» на подсказку «все» — раскрытие списка: показанные строки на месте, новые — той же услуги (название списка в каждой)
+        shown, now, service = _priced(first["text"]), _priced(second["text"]), _norm(title.group(1)).casefold()
+        assert shown <= now and all(service in name.casefold() for name in now - shown), (second["text"], service)
+    else:
+        _assert_follow_up_stays_on_what_was_shown(first, second)

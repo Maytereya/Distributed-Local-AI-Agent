@@ -303,8 +303,9 @@ def split_anchor(text: str) -> tuple[Outcome, str | None, bool] | None:
     return outcome, tail, contrast
 
 
-def _number(text: str) -> int | None:
-    """Реплика — только номер пункта («1», «2.», «№3», «4)»); иначе None."""
+def number(text: str) -> int | None:
+    """Реплика — только номер пункта («1», «2.», «№3», «4)»); иначе None. Одно определение «реплика — номер»: им же путь цены
+    читает номер строки показанного списка (`_prices_helpers._price_family_row_from_context`)."""
 
     bare = str(text or "").strip().lstrip("№").strip().rstrip(".)").strip()
     return int(bare) if bare.isdigit() and len(bare) <= 2 else None
@@ -315,7 +316,7 @@ def exact_pick(text: str, options: tuple[str, ...]) -> str | None:
 
     if not options:
         return None
-    index = _number(text)
+    index = number(text)
     if index is not None:
         return options[index - 1] if 1 <= index <= len(options) else None
     norm = _normalize_confirmation_text(text)
@@ -438,6 +439,11 @@ async def answer(
         return await _free_answer(question_type, question, reply, filled=filled, confirm_topic=confirm_topic)
     many = policy.many and buttons_on()
 
+    if question_type == Question.SHOW_ALL.value and number(reply) is not None:
+        # Цифра на подсказку «напишите: "все"» — номер строки показанного списка, а не пункт подсказки (пункт один — «все»):
+        # нумерации совпадали, и «1» раскрывало весь список (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD). Строку с этим номером
+        # отвечает путь цены (`_prices_helpers._price_family_row_from_context`), без LLM.
+        return _remember(Answer(question_type, Outcome.NONE, source=Source.FAST, text=reply))
     picked = exact_pick(reply, options)
     if picked is None and question_type == Question.SHOW_ALL.value and _is_show_all_reply(reply):
         picked = SHOW_ALL_OPTIONS[0]  # «покажи все», «все варианты» — тот же единственный пункт, одно определение

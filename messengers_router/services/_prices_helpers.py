@@ -2757,6 +2757,10 @@ def _build_oak_canonical_payload(
     for row in extra_source:
         if not isinstance(row, dict):
             continue
+        # Хвост списка (его раскрывает «все») — только строки самого ОАК: ранжирование по словам «общий анализ крови»
+        # тянуло «Общий анализ мочи» и «ЗППП: анализ крови» (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD).
+        if not _OAK_PHRASE_RE.search(_normalise_input(str(row.get("serviceName") or row.get("name") or ""))):
+            continue
         key = (
             _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
             _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
@@ -2785,6 +2789,32 @@ def _build_oak_canonical_payload(
         "show_all_hint": show_all_hint,
         "note": "price_oak_canonical",
     }
+
+
+def _same_service_tail(query_text: str, ranked: list[dict[str, Any]], visible_limit: int) -> list[dict[str, Any]]:
+    """
+    Хвост списка семейства — строки за подсказкой «напишите: "все"» — только той же услуги: в названии есть каждое
+    информативное слово запроса (`_family_query_root_tokens`; «одно слово» — как у расширения семейства, `tokens_share_stem`,
+    4 буквы). Расширение по одному корню тянуло в хвост чужие строки: «вирус гепатита» → «Вирус герпеса», «Вирус Эпштейна-Барр»
+    (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD, решение владельца 26.10: полный список — только строки той же услуги). Видимые строки
+    — как были; информативных слов нет — как было.
+
+    :param query_text: исходный запрос пользователя
+    :param ranked: кандидаты семейства по порядку показа
+    :param visible_limit: сколько строк видно до «все»
+    :return: видимые строки и хвост той же услуги
+    """
+
+    roots = _family_query_root_tokens(query_text)
+    if not roots or len(ranked) <= visible_limit:
+        return ranked
+
+    def same_service(row: dict[str, Any]) -> bool:
+        raw_name = str(row.get("serviceName") or row.get("name") or "")
+        row_tokens = _augment_price_tokens([_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(raw_name)], raw_text=raw_name)
+        return all(any(tokens_share_stem(root, token, length=4) for token in row_tokens) for root in roots)
+
+    return ranked[:visible_limit] + [row for row in ranked[visible_limit:] if isinstance(row, dict) and same_service(row)]
 
 
 def _build_price_family_payload(
@@ -2838,7 +2868,7 @@ def _build_price_family_payload(
     if _match_drops_unsatisfiable_qualifier(query_text, offered_names, rows):
         return None
 
-    ranked = _annotate_price_rows_with_care_context(ranked)
+    ranked = _annotate_price_rows_with_care_context(_same_service_tail(query_text, ranked, visible_limit))
 
     service_name = family_query
     visible_count = len(ranked) if show_all else min(len(ranked), visible_limit)
@@ -2897,6 +2927,39 @@ def _price_family_payload_from_context(entities: dict[str, Any], *, show_all: bo
         "show_all_hint": show_all_hint,
         "note": "price_family_context",
     }
+
+
+def _family_rows_numbered_in_order(rows: list[Any]) -> bool:
+    """Рендер нумерует варианты семейства подряд, в их порядке, — если строки в одной группе формата оказания, адреса или
+    позиции корзины (`renderer._group_family_variants_by_care_context`); групп несколько — у каждой своя нумерация."""
+
+    keys = ("care_setting_label", "care_setting_address", "price_group_heading")
+    return len({tuple(str(row.get(key) or "").strip() for key in keys) for row in rows if isinstance(row, dict)}) <= 1
+
+
+def _price_family_row_from_context(query_text: str, entities: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Строка показанного списка семейства по её номеру: реплика — только номер («1», «2.», «№3»), и строка с этим номером была
+    в прошлом ответе. Пациент нумерует строки, которые видел, — отвечаем этой строкой, без LLM (решение владельца 26.10,
+    BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD: «1» на список с подсказкой «напишите: "все"» раскрывало весь список).
+
+    :param query_text: реплика пациента
+    :param entities: сессионный контекст (`_price_family_context` — список, который видел пациент)
+    :return: строка прайса; номер не из показанных, списка нет или нумерация в группах (номер неоднозначен) — None
+    """
+
+    # Импорт в функции: сервисный слой не тянет модуль хода при своём импорте.
+    from ..pending_answer import number
+
+    index = number(query_text)
+    raw_ctx = entities.get("_price_family_context")
+    if index is None or not isinstance(raw_ctx, dict) or not isinstance(raw_ctx.get("family_variants"), list):
+        return None
+    visible = raw_ctx["family_variants"][: max(1, int(raw_ctx.get("visible_limit") or 10))]
+    if len(visible) < 2 or not 1 <= index <= len(visible) or not _family_rows_numbered_in_order(visible):
+        return None
+    row = visible[index - 1]
+    return row if isinstance(row, dict) else None
 
 
 def _annotate_price_rows_with_care_context(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

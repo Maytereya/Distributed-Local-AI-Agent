@@ -194,7 +194,7 @@ def build_catalog_health_response(evidence: Evidence) -> ResponseEnvelope | None
 
 def _sync_price_family_context(state: SessionState, payload: dict[str, Any]) -> None:
     """
-    Сохраняет или очищает family-query контекст для follow-up `все`.
+    Сохраняет или очищает family-query контекст для follow-up `все` и номера строки.
 
     :param state: состояние сессии
     :param payload: payload `price` или `service_bundle`
@@ -203,11 +203,17 @@ def _sync_price_family_context(state: SessionState, payload: dict[str, Any]) -> 
 
     kind = str(payload.get("service_kind") or "").strip().lower()
     variants = payload.get("family_variants")
-    if kind == "family_query" and isinstance(variants, list) and variants and not payload.get("showing_all"):
+    # Список, раскрытый по «все» из контекста (`_price_family_payload_from_context`), тоже держим: на виду все строки, и номер
+    # строки («3») — о нём (`_price_family_row_from_context`, BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD). Прочие полные списки
+    # (корзина) — как было.
+    expanded = bool(payload.get("showing_all"))
+    if expanded and str(payload.get("note") or "") != "price_family_context":
+        variants = None
+    if kind == "family_query" and isinstance(variants, list) and variants:
         state.last_entities["_price_family_context"] = {
             "service_name": str(payload.get("service_name") or "").strip(),
             "family_variants": variants,
-            "visible_limit": int(payload.get("visible_limit") or 10),
+            "visible_limit": len(variants) if expanded else int(payload.get("visible_limit") or 10),
         }
         return
     state.last_entities.pop("_price_family_context", None)

@@ -39,6 +39,8 @@ WALKIN_SHOWN_FLAG = "walkin_shown_service"
 # (`_prices_helpers._price_family_payload_from_context`).
 SHOW_ALL_FLAG = "rule_price_family_show_all"
 SHOW_ALL_KEPT_FLAG = "show_all_context_kept"
+# Номер строки показанного списка семейства («1», «2.»; `classifier._is_price_family_row_pick`): тоже не название услуги.
+ROW_PICK_FLAG = "rule_price_family_row"
 _EXPANDED_NOTE = "price_family_context"
 _RENDERED_PRICE_ROWS = 5  # рендер цены печатает не больше пяти строк (`renderer.format_price_for_patient`)
 
@@ -126,6 +128,13 @@ def expands_shown(decision: RouteDecision) -> bool:
     ходом отвечала про это УЗИ, которого пациент не видел)."""
 
     return SHOW_ALL_FLAG in decision.flags
+
+
+def picks_shown_row(decision: RouteDecision) -> bool:
+    """Ход выбора строки показанного списка по номеру («1»): реплика — номер строки, а не название услуги; каталог по ней
+    роутер не ищет — строку отвечает инструмент цены из контекста семейства (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD)."""
+
+    return ROW_PICK_FLAG in decision.flags
 
 
 def _keep_service_on_expand(state: SessionState, payload: dict[str, Any], names: list[str]) -> None:
