@@ -2,7 +2,7 @@
 
 Второй слой характеристик (первый — `tests/test_price_stage2_readers.py`, каждый читатель по отдельности): ходы через
 обработчик эндпоинта `messenger_generate_once` с выключателями прода деплоя 17 (`turn_spans_llm`, `turn_understanding_one`,
-`prepare_by_parse`, `price_select_rules = general` и др.), мини-прод, день, сеть закрыта. Здесь видно то, чего не видит
+`prepare_by_parse` и др.; снятые выключатели — путь прода без настройки), мини-прод, день, сеть закрыта. Здесь видно то, чего не видит
 читатель по отдельности: какой путь хода выбран (разбор LLM или правила), что пациент прочитал, что ушло клинике в журнал
 синонимов (K7) и сколько решений LLM потратил ход.
 
@@ -68,7 +68,6 @@ PROD_D17: dict[str, Any] = {
     "MR_DOCTORS_BY_SERVICE_DATA": "shadow",
     "MR_PREPARE_GENERAL_MEMO_LLM": "on",
     "MR_BUTTON_PASS_RULES": "on",
-    "MR_PRICE_SELECT_RULES": "general",
     "MR_PREPARE_BY_PARSE": "on",
     "MR_GROUNDER_GENERIC_BY_LLM": "on",
     "MR_BIOMATERIAL_BY_MIS": "on",

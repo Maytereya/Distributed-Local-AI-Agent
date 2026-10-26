@@ -209,7 +209,6 @@ class MessengerRouterConfig:
     biomaterial_by_mis: str
     p1_facet_none_offer: str
     price_budget_clarify: str
-    price_select_rules: str
     prepare_general_memo_llm: str
     turn_spans_llm: str
     prepare_by_parse: str
@@ -636,10 +635,6 @@ settings = Settings(
         # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
         # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
         price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
-        # Правила промпта выбора строки на пути ответа о цене (BUG-2026-10-24-FOREIGN-PRICE-D17; суд записи — прежний промпт):
-        # general — слишком общее название («анализы», приём врача без специальности) — не группа услуг правила 5, подходящих
-        # позиций нет (промпты `*_general`). off — прежние промпты. [MESSENGER_ROUTER] price_select_rules
-        price_select_rules=_get_enum("MESSENGER_ROUTER", "price_select_rules", default="off", allowed={"off", "general"}),
         # Общая памятка клиники «как сдавать кровь» — вариант выбора памятки LLM (BUG-2026-10-22-PREPARE-GENERAL-BY-LETTERS,
         # решение владельца 22.10 «по смыслу»): на «подготовка к анализам крови» LLM выбирает её сама, а не наименее плохую из
         # найденных по буквам («Анализ мочи по Нечипоренко»). Без LLM не выбирается. off — как было.
@@ -890,7 +885,6 @@ MR_GROUNDER_GENERIC_BY_LLM = settings.messenger_router.grounder_generic_by_llm
 MR_BIOMATERIAL_BY_MIS = settings.messenger_router.biomaterial_by_mis
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
-MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse

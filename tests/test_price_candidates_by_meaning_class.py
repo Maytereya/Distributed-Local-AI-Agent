@@ -193,14 +193,15 @@ def test_bypassed_guard_is_judged_with_the_price_changing_variant_prompt(monkeyp
         Choice(Status.NONE_FIT, reason="qualifier_absent"),
     )
     _run_rows(monkeypatch, "on", "Сколько стоит экспресс 17-ОН, чтобы результат был день в день?", on)
-    assert on.tasks == ["price_service_qualifier", "price_service_qualifier"]  # оба круга судят условие
+    # Оба круга судят условие; путь ответа о цене — промпт с правилом «слишком общее» (`price_select_rules` снят 31.10).
+    assert on.tasks == ["price_service_qualifier_general", "price_service_qualifier_general"]
 
 
 @pytest.mark.parametrize(
     ("mode", "judge", "task"),
     [
-        ("on", True, "price_service_qualifier"),  # суд условия от разбора хода — тоже строгий промпт
-        ("on", False, "price_service"),  # без суда условия — прежний промпт для всех вопросов о цене
+        ("on", True, "price_service_qualifier_general"),  # суд условия от разбора хода — тоже строгий промпт
+        ("on", False, "price_service_general"),  # без суда условия — общий промпт пути цены для всех вопросов о цене
     ],
 )
 def test_qualifier_prompt_only_for_judged_questions_under_on(mode, judge, task, monkeypatch):

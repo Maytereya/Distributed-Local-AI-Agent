@@ -112,35 +112,26 @@ PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
 # наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» → обычная цена. Уточнение `price_judge_conditions`
 # («как сдать, подготовиться…» — не условие) входит в тот же текст: строгое правило без него отсекало бы вопросы о сдаче.
 PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
-# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 на пути ответа о цене (`price_select_rules`): `general` — слишком
-# общее название («анализы», приём врача без специальности) — не группа услуг правила 5. Свои промпты.
-_RULES_TASKS = {
-    mode: (replace(PRICE_TASK, name=f"price_service_{mode}"), replace(PRICE_TASK, name=f"price_service_qualifier_{mode}"))
-    for mode in ("general",)
-}
+# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 на пути ответа о цене: слишком общее название («анализы»,
+# приём врача без специальности) — не группа услуг правила 5. Свои промпты `*_general` (выключатель `price_select_rules`
+# снят 31.10 — режим `general` на проде с деплоя 17); суд записи — прежние промпты.
+PRICE_GENERAL_TASK = replace(PRICE_TASK, name="price_service_general")
+PRICE_QUALIFIER_GENERAL_TASK = replace(PRICE_TASK, name="price_service_qualifier_general")
 _VARIANT_B_LIMIT = 5
-
-
-def _select_rules() -> str:
-    """`[MESSENGER_ROUTER] price_select_rules = off | general`; мусор — off (как было)."""
-
-    mode = str(getattr(_cfg, "MR_PRICE_SELECT_RULES", "off") or "").strip().lower()
-    return mode if mode in _RULES_TASKS else "off"
 
 
 def price_task(*, judge_qualifier: bool = False, price_answer: bool = True) -> Task:
     """Задача выбора строки прайса: суд условия — свой промпт; под `[MESSENGER_ROUTER] price_judge_conditions = on` — с
-    уточнённым правилом 3; на пути ответа о цене (`price_answer`) под `price_select_rules` — промпты с правилами (уточнённое
-    правило 3 `price_judge_conditions` в них не входит: на проде он off). Суд записи (`price_answer=False`) — прежний промпт:
-    «запись к неврологу» правилом приёма без специальности не судится."""
+    уточнённым правилом 3; на пути ответа о цене (`price_answer`) — промпты с правилом «слишком общее — не группа»
+    (уточнённое правило 3 `price_judge_conditions` в них не входит: на проде он off). Суд записи (`price_answer=False`) —
+    прежний промпт: «запись к неврологу» правилом приёма без специальности не судится."""
 
-    rules = _RULES_TASKS.get(_select_rules()) if price_answer else None
     if judge_qualifier:
-        return rules[1] if rules else PRICE_QUALIFIER_TASK
+        return PRICE_QUALIFIER_GENERAL_TASK if price_answer else PRICE_QUALIFIER_TASK
     on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
     if on:
         return PRICE_CONDITIONS_TASK
-    return rules[0] if rules else PRICE_TASK
+    return PRICE_GENERAL_TASK if price_answer else PRICE_TASK
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
@@ -731,7 +722,7 @@ async def select_price_rows(
     :param general_as_none_fit: «слишком общее» и «не услуга» — тоже `none_fit` с кодом причины и названиями варианта B
         (`names`), а не None. Для записи (`_booking_service_select`): там «ответ правил» — молчаливая запись на догадку
         («массаж» → «Массаж век»), а не уточнение, как у цены (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
-    :param price_answer: выбор отвечает на вопрос о цене — промпты с правилами `price_select_rules`; суд записи — False
+    :param price_answer: выбор отвечает на вопрос о цене — промпты с правилами `*_general`; суд записи — False
         (прежний промпт: правила пути цены записи не касаются, карточка 24.10 — g0792)
     :return: выбор LLM; None — оставить ответ правил
     """
