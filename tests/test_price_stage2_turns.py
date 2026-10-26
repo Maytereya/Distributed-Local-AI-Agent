@@ -72,7 +72,6 @@ PROD_D17: dict[str, Any] = {
     "MR_SYNONYM_WORDFORMS": "on",
     "MR_PRICE_SELECT_RULES": "general",
     "MR_PREPARE_BY_PARSE": "on",
-    "MR_GROUNDER_GENERIC_BY_LLM": "on",
     "MR_BIOMATERIAL_BY_MIS": "on",
     "MR_TEST_ASSIST_FROM_DATA": "on",
     # Оракул отвечает только разметке и выбору строки; сбои прочих мест не должны размыкать предохранитель для них.

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import re
 from pathlib import Path
 
 import pytest
@@ -78,14 +77,13 @@ def test_no_module_keeps_its_own_copy_of_walkin_classes() -> None:
 # --------------------------------------------------------------------------- заземление: значение LLM на метке без каталога
 
 # Значения `service_name`, которые LLM-классификатор кладёт на метке без каталога, а фразы услуги в реплике нет: общие слова
-# в разных формах (регулярка пути off знала их по основам и точным словам) и обычное название — эталон ответа.
+# в разных формах (регулярка снятого пути off знала их по основам и точным словам) и обычное название — эталон ответа.
 _REPLY = "подскажите, кто ведёт"
 _CONTROL = "общий анализ крови"
 _GENERIC_FORMS = ("приём врача-кардиолога", "консультация доктора", "запись к специалисту", "консультацию специалиста")
 
 
-def _ground(label: str, value: str, monkeypatch, *, mode: str) -> tuple[dict, set]:
-    monkeypatch.setattr(cfg, "MR_GROUNDER_GENERIC_BY_LLM", mode, raising=False)
+def _ground(label: str, value: str) -> tuple[dict, set]:
     decision = RouteDecision(label=label, confidence=0.9, entities={"service_name": value}, flags=set())
     out = asyncio.run(
         G.ground_decision_entities(decision=decision, user_text=_REPLY, state=SessionState(session_id=f"g-{label}"), services=Services())
@@ -101,32 +99,19 @@ def test_values_reach_the_llm_value_branch() -> None:
 
 
 @pytest.mark.parametrize("label", ["DOCTOR_INFO", "PREPARE"])
-def test_on_every_form_of_a_generic_word_gets_the_answer_of_a_plain_name(label, monkeypatch) -> None:
-    control, _ = _ground(label, _CONTROL, monkeypatch, mode="on")
+def test_every_form_of_a_generic_word_gets_the_answer_of_a_plain_name(label) -> None:
+    control, _ = _ground(label, _CONTROL)
     assert control == {"service_name": _CONTROL}
     for value in _GENERIC_FORMS:
-        entities, flags = _ground(label, value, monkeypatch, mode="on")
+        entities, flags = _ground(label, value)
         assert entities == {"service_name": value} and "entity_kept_llm_service_name" in flags, value
 
 
-@pytest.mark.parametrize("label", ["DOCTOR_INFO", "PREPARE"])
-def test_off_drops_generic_words_by_letters_as_before(label, monkeypatch) -> None:
-    assert _ground(label, _CONTROL, monkeypatch, mode="off")[0] == {"service_name": _CONTROL}
-    for value in _GENERIC_FORMS:
-        entities, flags = _ground(label, value, monkeypatch, mode="off")
-        assert entities == {} and "entity_dropped_unverified_service_name" in flags, value
+def test_letter_regex_of_generic_words_is_gone() -> None:
+    """Выключатель `grounder_generic_by_llm` снят 31.10 вместе с путём off: регулярки общих слов в заземлении нет."""
 
-
-def test_on_does_not_depend_on_the_letter_regex(monkeypatch) -> None:
-    """Мутация: регулярка «общее слово» совпадает со всем — под on ответ тот же, под off значение отброшено."""
-
-    monkeypatch.setattr(G, "_GENERIC_SERVICE_FALLBACK_RE", re.compile("."))
-    assert _ground("PREPARE", _CONTROL, monkeypatch, mode="on")[0] == {"service_name": _CONTROL}
-    assert _ground("PREPARE", _CONTROL, monkeypatch, mode="off")[0] == {}
-
-
-def test_only_the_off_helper_reads_the_letter_regex() -> None:
-    assert _readers(Path(G.__file__), "_GENERIC_SERVICE_FALLBACK_RE") == {"_llm_service_name_is_generic"}
+    assert not hasattr(G, "_GENERIC_SERVICE_FALLBACK_RE")
+    assert not hasattr(G, "_llm_service_name_is_generic")
 
 
 # --------------------------------------------------------------------------- биоматериал: хвост — только слова МИС
