@@ -663,12 +663,14 @@ settings = Settings(
         # Список филиалов в ответе о сдаче анализов (ЭКГ, УЗИ) без записи и на кнопке «Где и до скольки принимают» (раздел
         # «Сдать анализы») — только филиалы с этим флагом данных филиалов (`analysis` / `ecg` / `usi`): карточка buttons_v1 25.10 —
         # в 26 ответах «где сдать» был филиал без забора анализов. off — как было. [MESSENGER_ROUTER] address_branch_flags
-        address_branch_flags=_get_enum("MESSENGER_ROUTER", "address_branch_flags", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        address_branch_flags=_get_enum("MESSENGER_ROUTER", "address_branch_flags", default="on", allowed={"off", "on"}),
         # Реплика сразу после «Адреса и часы работы» / «Где и до скольки принимают»: LLM выбирает из списка филиалов, какие названы,
         # и что спрошено (график, день, анализы / УЗИ / ЭКГ, выходные, нет в данных); ответ печатает код из данных филиалов, чего нет —
         # честно и оффер оператора (buttons_v1: 87 провалов «общий список вместо ответа»). off — как было.
         # [MESSENGER_ROUTER] address_followup_llm
-        address_followup_llm=_get_enum("MESSENGER_ROUTER", "address_followup_llm", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        address_followup_llm=_get_enum("MESSENGER_ROUTER", "address_followup_llm", default="on", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one

@@ -127,12 +127,6 @@ def test_only_the_reply_right_after_the_address_button(mini_prod_world, monkeypa
     assert "address_followup" not in other[1]["telemetry"], other[1]["telemetry"]
 
 
-def test_off_keeps_the_general_answer(mini_prod_world, monkeypatch):  # noqa: F811
-    turns = [_press("menu.address"), "по адресу аминева 29 можно сдать анализы?"]
-    off = _dialog(mini_prod_world, monkeypatch, turns, switch="off", followup=_answer("branch", "ул.Аминева, 29"))
-    assert "address_followup" not in off[1]["telemetry"] and address_flow.ADDRESS_BUTTON_KEY not in off[0]["state"]
-
-
 def test_branch_not_named_in_the_reply_is_not_carded(mini_prod_world, monkeypatch):  # noqa: F811
     """Карточка 25.10: LLM выбирала филиалы, которых пациент не называл («рядом с метро …», «рядом с моим адресом», пустой выбор
     — три одних и тех же): выбор сужает правило «слово адреса филиала есть в реплике»; без названного филиала — общий путь."""

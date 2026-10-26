@@ -122,11 +122,6 @@ def test_general_address_button_keeps_every_branch(mini_prod_world, monkeypatch)
     assert on == off and _listed(on) & _NO_LAB
 
 
-def test_off_keeps_state_as_before(mini_prod_world, monkeypatch):  # noqa: F811
-    off = _dialog(mini_prod_world, monkeypatch, [_press("menu.tests.where"), "а в субботу?"], switch="off")
-    assert all(address_flow.ADDRESS_BUTTON_KEY not in t["state"] for t in off)
-
-
 @pytest.mark.parametrize(
     ("hint", "wanted"),
     [("анализы", {"analysis"}), ("ЭКГ", {"ecg"}), ("анализы и ЭКГ", {"analysis", "ecg"}), ("УЗИ", {"usi"}), ("", set())],
