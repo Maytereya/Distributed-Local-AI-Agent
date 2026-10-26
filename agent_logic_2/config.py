@@ -560,34 +560,41 @@ settings = Settings(
         # решения владельца 22.10): фамилия — слово реплики, точно совпавшее с фамилией врача в любой падежной форме; опечатка — только
         # в имени, которое назвала LLM, и исход — вопрос «Похоже, вы имели в виду…?». off — как было (_CATALOG_DOCTOR_STOPWORDS).
         # [MESSENGER_ROUTER] names_doctor_catalog
-        names_doctor_catalog=_get_enum("MESSENGER_ROUTER", "names_doctor_catalog", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_doctor_catalog=_get_enum("MESSENGER_ROUTER", "names_doctor_catalog", default="on", allowed={"off", "on"}),
         # doctor_name из ответа LLM из одного служебного слова («хочу», «запись») — не врач по справочнику МИС (resolve_doctor_name), а не по
         # списку (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: справочник ни одно из 14 слов не находит). off — как было (_DOCTOR_NOISE_TOKENS).
         # [MESSENGER_ROUTER] names_doctor_noise
-        names_doctor_noise=_get_enum("MESSENGER_ROUTER", "names_doctor_noise", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_doctor_noise=_get_enum("MESSENGER_ROUTER", "names_doctor_noise", default="on", allowed={"off", "on"}),
         # Короткий ответ в контексте врача («<фамилия>, да») — фамилия только по справочнику МИС (точное совпадение у правила), без списка
         # «да / хорошо / ладно» (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: список ни разу не решал исход). off — как было (_DOCTOR_FOLLOWUP_FILLERS).
         # [MESSENGER_ROUTER] names_doctor_followup
-        names_doctor_followup=_get_enum("MESSENGER_ROUTER", "names_doctor_followup", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_doctor_followup=_get_enum("MESSENGER_ROUTER", "names_doctor_followup", default="on", allowed={"off", "on"}),
         # Результаты анализов: одно слово на вопрос о реквизитах — фамилия, только если её назвала LLM-классификатор этого хода (сущность
         # surname / patient_name — те же слова реплики); без LLM — не фамилия, бот переспросит (решение владельца 22.10 (а);
         # STEP-2026-10-24-NAMES-NO-STOPWORDS). Порядок «фамилия, год, код, номер» — как было. off — как было (_QF_RESULT_SURNAME_STOPWORDS).
         # [MESSENGER_ROUTER] names_result_surname
-        names_result_surname=_get_enum("MESSENGER_ROUTER", "names_result_surname", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_result_surname=_get_enum("MESSENGER_ROUTER", "names_result_surname", default="on", allowed={"off", "on"}),
         # Реплика — ФИО пациента (12 мест: запись, вид недоступной цели, неподтверждённый врач → ФИО): форма 2–3 слова принимает и
         # «Общий анализ крови» — решает LLM-классификатор этого хода (patient_name — те же слова реплики); без LLM — не ФИО (решение
         # владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было (_PATIENT_FIO_STOPWORDS).
         # [MESSENGER_ROUTER] names_patient_fio
-        names_patient_fio=_get_enum("MESSENGER_ROUTER", "names_patient_fio", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_patient_fio=_get_enum("MESSENGER_ROUTER", "names_patient_fio", default="on", allowed={"off", "on"}),
         # Правило шага ФИО записи (rule_appointment_patient_name) не решает по форме и списку: правило зовут до LLM, под on оно молчит, и
         # реплику (ФИО или нет, какая тема) решает LLM-классификатор хода (STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было
         # (_PATIENT_NAME_STOPWORDS). [MESSENGER_ROUTER] names_patient_rule
-        names_patient_rule=_get_enum("MESSENGER_ROUTER", "names_patient_rule", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_patient_rule=_get_enum("MESSENGER_ROUTER", "names_patient_rule", default="on", allowed={"off", "on"}),
         # Быстрое заполнение ФИО пациента (после «ФИО / меня зовут», голая форма, тройка слов) — только если кандидат — те же слова, что
         # patient_name LLM-классификатора этого хода; без LLM ФИО не заполняется (решение владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS;
         # свип 24.10: прежний путь клал «Общий Анализ Крови» в ФИО). off — как было (_QF_PATIENT_NAME_STOPWORDS).
         # [MESSENGER_ROUTER] names_patient_fill
-        names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="on", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —

@@ -116,8 +116,10 @@ def test_switch_of_other_module_is_programmer_error() -> None:
         turn_names.on("pending_reply")
 
 
-def test_switches_are_off_by_default() -> None:
-    assert not any(turn_names.on(name) for name in _GUARDS)
+def test_switches_are_on_by_default() -> None:
+    """Умолчание = прод с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B)."""
+
+    assert all(turn_names.on(name) for name in _GUARDS)
 
 
 # --- names_doctor_catalog: врач реплики — по справочнику МИС --------------------------------------------------------
@@ -732,4 +734,4 @@ def test_every_switch_is_a_config_field() -> None:
 
     from agent_logic_2 import config
 
-    assert all(getattr(config, "MR_" + name.upper()) == "off" for name in _GUARDS)
+    assert all(getattr(config, "MR_" + name.upper()) == "on" for name in _GUARDS)
