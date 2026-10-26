@@ -26,12 +26,15 @@ from messengers_router.services import Services
 from messengers_router.services import core as svc_mod
 from messengers_router.services import prepare as prepare_mod
 from messengers_router.services._prepare_select_llm import SOURCE_KB, SOURCE_MIS, PrepareMemo
+from tests.spans_oracle import SpansOracle
 
 _WITHOUT = PrepareMemo(SOURCE_KB, "ПАМЯТКА ФКС БЕЗ НАРКОЗА ", "ФКС без наркоза: Пикопреп 1-й пакетик в 21:00 накануне.")
 _WITH = PrepareMemo(SOURCE_KB, "ПАМЯТКА ФКС с наркозом", "ФКС с наркозом: за 3 часа не пить, нужен сопровождающий.")
 _COMBINED = PrepareMemo(SOURCE_KB, "ПАМЯТКА  ФКС + ФГДС с наркозом", "ФКС и ФГДС с наркозом: анализы заранее.")
 _GASTRO = PrepareMemo(SOURCE_KB, "ПАМЯТКА Гастроскопия (без наркоза)", "Гастроскопия без наркоза: не есть 8 часов.")
 _KB = (_GASTRO, _WITHOUT, _WITH, _COMBINED)
+# Что разбор хода (LLM разметки, `prepare_by_parse = on` — прод с 24.10) отмечает услугами в репликах тестов — длинные раньше.
+_PHRASES = ("колоноскопии под наркозом", "фкс без наркоза", "соскобу на цитомегаловирус", "колоноскопии", "фкс", "фгдс")
 
 
 @pytest.fixture
@@ -47,7 +50,9 @@ def services(monkeypatch):
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: _KB)
     monkeypatch.setattr(prepare_mod, "select_prepare_memos", select)
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos_by_parse", select)
     monkeypatch.setattr("messengers_router.llm_runtime.generate_text", no_llm)
+    monkeypatch.setattr("messengers_router.llm_runtime._OLLAMA_CLIENT", SpansOracle(_PHRASES))
     svc = Services()
     svc.ensure_background_refresh_started = lambda: None
     svc.picked = picked

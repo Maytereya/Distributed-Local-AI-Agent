@@ -32,6 +32,7 @@ from messengers_router.services import Services, resolve_price_service_name_from
 from messengers_router.services import prepare as prepare_mod
 from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
 from messengers_router.services.addresses import APPOINTMENT_BRANCHES_UNAVAILABLE_TEXT
+from tests.spans_oracle import prepare_turn
 from messengers_router.policies import (
     build_branch_index,
     extract_specialty,
@@ -1371,6 +1372,7 @@ def _prepare_llm_picks(monkeypatch, title_part: str | None, *, kb: tuple = ()) -
         return tuple(m for m in memos if title_part.lower() in m.title.lower())[:1]
 
     monkeypatch.setattr(prepare_mod, "select_prepare_memos", fake_select)
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos_by_parse", fake_select)  # путь прода (`prepare_by_parse = on`)
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: tuple(kb))
     return offered
 
@@ -1386,7 +1388,7 @@ def test_test_prepare_answers_from_kb_patient_memo(monkeypatch):
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
     _prepare_llm_picks(monkeypatch, "гастроскопия", kb=(memo,))
 
-    res = run(svc.test_prepare("Как подготовиться к ФГДС?", {}))
+    res = prepare_turn(svc, "Как подготовиться к ФГДС?", phrases=("ФГДС",), monkeypatch=monkeypatch)
 
     assert res["prepare"] == f"Памятка клиники «{memo.title}»:\n{memo.text}"
     assert res["note"] == "prepare: main_index"
@@ -1403,7 +1405,7 @@ def test_test_prepare_prefers_service_info_preparation(monkeypatch):
         lambda: [
             {
                 "serviceName": "Анализ крови на холестерин",
-                "preparation": "Кровь сдаётся натощак, желательно утром.",
+                "preparation": "<p>Подготовка к исследованию</p><p>Кровь сдаётся натощак, желательно утром.</p>",
             }
         ],
     )
@@ -1425,7 +1427,7 @@ def test_test_prepare_prefers_service_info_for_analysis_name_query(monkeypatch):
         lambda: [
             {
                 "serviceName": "Анализ крови на холестерин",
-                "preparation": "Кровь сдаётся натощак, желательно утром.",
+                "preparation": "<p>Подготовка к исследованию</p><p>Кровь сдаётся натощак, желательно утром.</p>",
             }
         ],
     )
@@ -1527,20 +1529,18 @@ def test_test_prepare_memo_rejected_by_llm_never_reaches_the_patient(monkeypatch
             }
         ],
     )
-    _prepare_llm_picks(monkeypatch, None)
+    from messengers_router.services.prepare import _BLOOD_GENERAL_TITLE
 
-    res = run(
-        svc.test_prepare(
-            "Здравствуйте скажите пожалуйста а кровь на гормоны сдают на голодный желудок?",
-            {},
-        )
-    )
+    _prepare_llm_picks(monkeypatch, _BLOOD_GENERAL_TITLE)  # памятку о формалине LLM отвергла, общую о крови — выбрала
+
+    reply = "Здравствуйте скажите пожалуйста а кровь на гормоны сдают на голодный желудок?"
+    res = prepare_turn(svc, reply, phrases=("кровь на гормоны",), monkeypatch=monkeypatch)
 
     answer = str(res.get("prepare") or "").lower()
     # Про кровь — общая памятка забора крови клиники.
     assert "натощак" in answer
     assert "формалин" not in answer
-    assert res.get("note") == "prepare: blood-collection general guidance fallback"
+    assert res.get("note") == "prepare: blood-collection general memo (LLM)"
 
 
 def test_prepare_roots_match_does_not_match_holesterol_with_sterile_substring():
@@ -1578,7 +1578,7 @@ def test_test_prepare_cholesterol_not_confused_by_urogenital_soskob(monkeypatch)
         lambda name, default: False if name == "MR_PREPARE_LLM_WRAP_ENABLED" else default,
     )
 
-    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {}))
+    res = prepare_turn(svc, "Как подготовиться к анализу на холестерин?", phrases=("анализу на холестерин",), monkeypatch=monkeypatch)
     answer = str(res.get("prepare") or "").lower()
 
     assert "Gardnerella vaginalis [кач.]" not in _offered_titles(offered)
@@ -1595,9 +1595,8 @@ def test_test_prepare_no_memo_offers_operator_without_handoff(monkeypatch):
     _prepare_llm_picks(monkeypatch, None)
 
     # Не-кровяной предмет: общей памятки нет. Оффер оператора — вопросом, без
-    # перевода (для крови с BUG-2026-06-02-05 отдаётся памятка — см.
-    # test_prepare_blood_no_specific_rules_falls_back_to_general_memo).
-    res = run(svc.test_prepare("подготовка к гастроскопии", {}))
+    # перевода (общая памятка о сдаче крови — вариант выбора LLM: test_prepare_general_memo_class).
+    res = prepare_turn(svc, "подготовка к гастроскопии", phrases=("гастроскопии",), monkeypatch=monkeypatch)
 
     assert "Такой памятки по подготовке у меня нет" in str(res.get("prepare") or "")  # «гастроскопии» — слово реплики, не услуга прайса
     assert "оператор" in str(res.get("prepare") or "").lower()
@@ -1655,7 +1654,7 @@ def test_test_prepare_mis_memo_is_sent_as_is_without_llm(monkeypatch):
 
     monkeypatch.setattr(llm_runtime_mod, "generate_text", no_llm)
 
-    res = run(svc.test_prepare("подготовка к ттг", {}))
+    res = prepare_turn(svc, "подготовка к ттг", phrases=("ттг",), monkeypatch=monkeypatch)
     text = str(res.get("prepare") or "")
 
     assert text.startswith("Памятка клиники «ТТГ (TSH) тиреотропный гормон»:")
@@ -4431,34 +4430,6 @@ def test_address_info_derives_samara_city_from_parent_hierarchy(monkeypatch):
     # Спутники исключены по их собственному городу из parent-иерархии.
     assert not any("Пирогова" in a for a in addrs), addrs       # Новокуйбышевск
     assert not any("Революционная" in a for a in addrs), addrs  # Тольятти
-
-
-def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch):
-    # BUG-2026-06-02-05: когда конкретных правил подготовки нет, но вопрос про
-    # сдачу КРОВИ — отдаём общую памятку забора крови (применима к любой сдаче
-    # крови), а не clarify «уточните название». Для мочи/кала общей памятки нет —
-    # оффер оператора. Класс-инвариант: источники памяток (МИС и база знаний)
-    # замоканы пустыми, проверяем именно запасной путь.
-    from messengers_router.services import prepare as prep_mod
-
-    s = Services()
-
-    async def _empty_api(q, ent):
-        return []
-
-    monkeypatch.setattr(s, "_prepare_candidates_from_analysis_api_cache", _empty_api)
-    monkeypatch.setattr(prep_mod, "kb_patient_memos", lambda: ())
-
-    blood = asyncio.run(s.test_prepare("Какая подготовка к сдаче крови на РедкийАнализ123", {}))
-    urine = asyncio.run(s.test_prepare("Какая подготовка к сдаче мочи на РедкийАнализ123", {}))
-
-    assert "blood-collection general guidance" in str(blood.get("note")), blood.get("note")
-    blood_text = str(blood.get("prepare") or "")
-    assert "живой очереди" in blood_text and "натощак" in blood_text and "паспорт" in blood_text
-    # моча/кал — общей памятки нет, оффер оператора
-    assert "blood-collection" not in str(urine.get("note")), urine.get("note")
-    assert "живой очереди" not in str(urine.get("prepare") or "")
-    assert urine.get("operator_offer") is True
 
 
 @pytest.mark.parametrize(

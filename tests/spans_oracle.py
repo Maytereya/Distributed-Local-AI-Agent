@@ -30,7 +30,11 @@ def is_spans(prompt: str) -> bool:
 
 
 def spans_groups(prompt: str, phrases: Iterable[str]) -> list[list[int]]:
-    """Номера [первое, последнее] каждой фразы в словах запроса разметки (по порядку фраз; нет в реплике — пропуск)."""
+    """Номера [первое, последнее] каждой фразы в словах запроса разметки (по порядку фраз; нет в реплике — пропуск).
+
+    Группы не пересекаются (правило 7 промпта): фраза, задевающая уже отмеченную, — пропуск. Поэтому один перечень фраз годится
+    на весь диалог — длинная фраза раньше короткой («колоноскопии под наркозом», затем «колоноскопии»).
+    """
 
     numbered = prompt.split(SPANS_MARK, 1)[1].strip().splitlines()[0].split()
     words = [_normalise_catalog_text(item.partition(":")[2]) for item in numbered]
@@ -39,7 +43,8 @@ def spans_groups(prompt: str, phrases: Iterable[str]) -> list[list[int]]:
         want = _normalise_catalog_text(phrase).split()
         for k in range(len(words) - len(want) + 1):
             if want and words[k : k + len(want)] == want:
-                groups.append([k + 1, k + len(want)])
+                if not any(k + 1 <= last and first <= k + len(want) for first, last in groups):
+                    groups.append([k + 1, k + len(want)])
                 break
     return groups
 
@@ -73,3 +78,26 @@ class SpansOracle:
             raise ConnectionError("тест: LLM недоступна для этого места")
         self.asked.append("inner")
         return await self.inner.generate(prompt=prompt, system=system, **kwargs)
+
+
+def prepare_turn(services: Any, reply: str, entities: dict[str, Any] | None = None, *, phrases: Iterable[str] | None, monkeypatch) -> dict[str, Any]:
+    """Ход подготовки, как на проде (`prepare_by_parse = on`, деплой 17): разбор реплики (`observe_prepare_turn`) — оракул с
+    фразами `phrases` (None — разметка недоступна), затем `services.test_prepare` в том же ходе.
+
+    Разбор хода живёт в переменной контекста хода: модульный тест, который зовёт `test_prepare` напрямую, получал «разбора нет»
+    — на проде так не бывает (роутер строит разбор на ходу подготовки). Прочие места LLM — прежний клиент гейта или теста.
+    """
+
+    import asyncio
+
+    from messengers_router import llm_runtime, turn_understanding
+
+    oracle = SpansOracle(phrases, inner=llm_runtime._OLLAMA_CLIENT)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
+
+    async def go() -> dict[str, Any]:
+        turn_understanding.begin_turn()
+        await turn_understanding.observe_prepare_turn("PREPARE", user_text=reply)
+        return await services.test_prepare(reply, dict(entities or {}))
+
+    return asyncio.run(go())
