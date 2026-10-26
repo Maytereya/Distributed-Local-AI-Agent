@@ -69,7 +69,6 @@ PROD_D17: dict[str, Any] = {
     "MR_PREPARE_GENERAL_MEMO_LLM": "on",
     "MR_BUTTON_PASS_RULES": "on",
     "MR_PRICE_GENERAL_CLARIFY": "on",
-    "MR_SYNONYM_WORDFORMS": "on",
     "MR_PRICE_SELECT_RULES": "general",
     "MR_PREPARE_BY_PARSE": "on",
     "MR_GROUNDER_GENERIC_BY_LLM": "on",

@@ -211,7 +211,6 @@ class MessengerRouterConfig:
     price_budget_clarify: str
     price_general_clarify: str
     price_select_rules: str
-    synonym_wordforms: str
     prepare_general_memo_llm: str
     turn_spans_llm: str
     prepare_by_parse: str
@@ -647,11 +646,6 @@ settings = Settings(
         # general — слишком общее название («анализы», приём врача без специальности) — не группа услуг правила 5, подходящих
         # позиций нет (промпты `*_general`). off — прежние промпты. [MESSENGER_ROUTER] price_select_rules
         price_select_rules=_get_enum("MESSENGER_ROUTER", "price_select_rules", default="off", allowed={"off", "general"}),
-        # Синоним МИС в другой словоформе («коагулограммы» — синоним «коагулограмма» гемостазиограмм; BUG-2026-10-24-FOREIGN-
-        # PRICE-D17, класс 1) — строки его услуг первыми в списке выбора строки цены LLM, как синоним дословный (не сильное
-        # совпадение: общее начало слова склеивает и разные слова — их отсеет выбор). off — как было.
-        # [MESSENGER_ROUTER] synonym_wordforms
-        synonym_wordforms=_get_enum("MESSENGER_ROUTER", "synonym_wordforms", default="off", allowed={"off", "on"}),
         # Общая памятка клиники «как сдавать кровь» — вариант выбора памятки LLM (BUG-2026-10-22-PREPARE-GENERAL-BY-LETTERS,
         # решение владельца 22.10 «по смыслу»): на «подготовка к анализам крови» LLM выбирает её сама, а не наименее плохую из
         # найденных по буквам («Анализ мочи по Нечипоренко»). Без LLM не выбирается. off — как было.
@@ -904,7 +898,6 @@ MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_PRICE_GENERAL_CLARIFY = settings.messenger_router.price_general_clarify
 MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
-MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse

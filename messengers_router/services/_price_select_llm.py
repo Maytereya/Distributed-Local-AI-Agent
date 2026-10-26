@@ -128,13 +128,6 @@ def _select_rules() -> str:
     return mode if mode in _RULES_TASKS else "off"
 
 
-def _synonym_wordforms_on() -> bool:
-    """`[MESSENGER_ROUTER] synonym_wordforms = on` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): синоним МИС в другой словоформе —
-    кандидат выбора строки, как дословный; мусор — off (как было)."""
-
-    return str(getattr(_cfg, "MR_SYNONYM_WORDFORMS", "off") or "").strip().lower() == "on"
-
-
 def general_clarify_on() -> bool:
     """`[MESSENGER_ROUTER] price_general_clarify = on` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» на пути
     цены — уточнение, несколько разных услуг выбора — список; мусор — off (как было)."""
@@ -314,7 +307,7 @@ _WORDFORM_ENDING = 3
 
 
 def _same_word_strict(a: str, b: str) -> bool:
-    """Словоформа под `synonym_wordforms` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): общее начало — длинное из двух слов без
+    """Словоформа синонима МИС (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): общее начало — длинное из двух слов без
     окончания, но не меньше порога `_same_word`. Шести букв мало длинному слову: «коагулограмма» и «коагуляция», «креатинина»
     и «креатинфосфокиназа», «прогестерон» и «прогестин» — разные слова (свип 24.10 по 1 068 вопросам эталона), «коагулограмма»
     и «коагулограммы» — одно; у слов до 9 букв — как `_same_word` («терапевт» = «терапевта»)."""
@@ -493,21 +486,22 @@ def _synonym_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> li
     на 335 размеченных вопросах стенда: без условия 27 чужих первых строк из 112, с ним 0 из 27."""
 
     df = _token_df(retail_rows)
-    wordforms = _synonym_wordforms_on()
-    # Под `synonym_wordforms` словоформа — строгая: «коагулограмма» не словоформа «коагуляции» (14 названий), её строки буквы не
-    # находят (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1); off — как было.
-    same = _same_word_strict if wordforms else _same_word
 
+    # Словоформа — строгая: «коагулограмма» не словоформа «коагуляции» (14 названий), её строки буквы не находят
+    # (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1; выключатель `synonym_wordforms` снят 31.10).
     def letters_miss(key: str) -> bool:
         glued = _normalise_price_token(_normalise_input(key).replace(" ", "").replace("-", ""))
-        return not df.get(glued) and not any(_wordform_family_size(token, retail_rows, same=same) for token in _price_query_tokens(key))
+        return not df.get(glued) and not any(
+            _wordform_family_size(token, retail_rows, same=_same_word_strict) for token in _price_query_tokens(key)
+        )
 
     wanted: list[str] = []
     for text in texts:
-        found = _biomaterial.mis_synonyms_within(str(text or ""))
-        if wordforms:
-            # Синоним в другой словоформе («коагулограммы») — тот же довод клиники (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1).
-            found = (*found, *_biomaterial.mis_synonyms_within_wordforms(str(text or ""), _same_word_strict))
+        # Синоним в другой словоформе («коагулограммы») — тот же довод клиники, что дословный (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1).
+        found = (
+            *_biomaterial.mis_synonyms_within(str(text or "")),
+            *_biomaterial.mis_synonyms_within_wordforms(str(text or ""), _same_word_strict),
+        )
         for key, names in found:
             if not letters_miss(key):
                 continue
