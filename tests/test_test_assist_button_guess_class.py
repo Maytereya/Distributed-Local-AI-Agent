@@ -7,9 +7,9 @@
 подбора строил воронку «Для какой цели хотите подобрать анализы?», хотя анализ назван. До слияния — «Похоже, вы имели в виду
 …? да/нет».
 
-Инвариант: ход TEST_ASSIST с догадкой каталога и пустым слотом названия анализа получает догадку как имя для поиска (что
-показать, решает LLM ответа по данным); своё название, цель подбора, другая тема, нет догадки — как было. Живой путь
-(кнопка → ответ по данным) — карточка `buttons_v1`.
+Инвариант: ход TEST_ASSIST с догадкой каталога и пустым слотом названия анализа получает в слот слова пациента — как без
+кнопки (догадка — первый кандидат ответа, что показать, решает LLM ответа по данным); своё название, цель подбора, другая тема,
+нет догадки — как было. Живой путь (кнопка → ответ по данным) — карточка `buttons_v1`.
 """
 
 from __future__ import annotations
@@ -22,15 +22,16 @@ from messengers_router.policies import missing_slots
 from messengers_router.router import _test_assist_guess_as_name
 
 _GUESS = "Исследование кала на паразиты"
+_REPLY = "Есть ли анализ кала на паразитов методом обогащения?"
 _NAME_SLOT = "_any_of:test_goal,test_name"
 
 
-def _turn(label: str, entities: dict, guess: str) -> tuple[RouteDecision, SessionState]:
+def _turn(label: str, entities: dict, guess: str, reply: str = _REPLY) -> tuple[RouteDecision, SessionState]:
     memory, state = MemoryStore(), SessionState(session_id="ta-guess")
     if entities:
         memory.merge_entities(state, dict(entities), label=label)
     decision = RouteDecision(label=label, confidence=0.9)
-    _test_assist_guess_as_name(decision, state, memory, guess)
+    _test_assist_guess_as_name(decision, state, memory, guess, reply)
     return decision, state
 
 
@@ -46,7 +47,7 @@ def _turn(label: str, entities: dict, guess: str) -> tuple[RouteDecision, Sessio
 def test_guess_fills_the_empty_name_slot(entities):
     decision, state = _turn("TEST_ASSIST", entities, _GUESS)
 
-    assert state.last_entities.get("test_name") == _GUESS
+    assert state.last_entities.get("test_name") == _REPLY  # слова пациента, как без кнопки; догадка — кандидат ответа
     assert _NAME_SLOT not in missing_slots("TEST_ASSIST", state.last_entities)  # воронки цели не будет
     assert "test_assist_guess_as_name" in decision.flags
 
@@ -56,7 +57,7 @@ def test_own_name_or_goal_is_kept(entities):
     decision, state = _turn("TEST_ASSIST", entities, _GUESS)
 
     assert {k: state.last_entities.get(k) for k in entities} == entities
-    assert state.last_entities.get("test_name") != _GUESS
+    assert state.last_entities.get("test_name") != _REPLY
     assert "test_assist_guess_as_name" not in decision.flags
 
 

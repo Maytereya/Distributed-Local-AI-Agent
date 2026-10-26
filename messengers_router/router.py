@@ -2544,18 +2544,20 @@ def _doctors_by_service_not_found(payload: Any) -> bool:
 _TEST_ASSIST_NAME_SLOT = "_any_of:test_goal,test_name"
 
 
-def _test_assist_guess_as_name(decision: RouteDecision, state: SessionState, memory: MemoryStore, guess: str) -> None:
-    """Догадка каталога — имя анализа для поиска, если своего у хода подбора нет (`test_assist_from_data`).
+def _test_assist_guess_as_name(decision: RouteDecision, state: SessionState, memory: MemoryStore, guess: str, user_text: str) -> None:
+    """Анализ назван (каталог нашёл догадку), а слота названия у хода подбора нет — слова пациента в слот (`test_assist_from_data`).
 
-    Суд «да/нет» по догадке на этом ходе пропущен — строку выбирает LLM ответа по данным. Но под висящим вопросом кнопки
-    «Цена анализа» (ждёт `service_name`) заземление выбрасывает `test_name` хода, и пустой слот подбора строил воронку
-    «Для какой цели хотите подобрать анализы?», хотя анализ назван (карточка 26.10, `buttons_v1`: g0812, g0829, g0852;
-    до слияния — «Похоже, вы имели в виду …? да/нет»). Догадка — только слова поиска инструмента: что показать, решает LLM.
+    Суд «да/нет» по догадке на этом ходе пропущен — строку выбирает LLM ответа по данным, догадка — его первый кандидат. Но под
+    висящим вопросом кнопки «Цена анализа» (ждёт `service_name`) заземление выбрасывает `test_name` хода, и пустой слот подбора
+    строил воронку «Для какой цели хотите подобрать анализы?», хотя анализ назван (карточка 26.10, `buttons_v1`: g0812, g0829,
+    g0852; до слияния — «Похоже, вы имели в виду …? да/нет»). В слот — реплика, как её дал бы классификатор без кнопки: поиск по
+    самой догадке тянул соседние строки, и LLM выбирала их (g0812 — «Расширенная копрология» вместо исследования на паразиты).
     """
 
-    if not guess or decision.label != "TEST_ASSIST" or _TEST_ASSIST_NAME_SLOT not in missing_slots("TEST_ASSIST", state.last_entities):
+    text = " ".join(str(user_text or "").split())
+    if not guess or not text or decision.label != "TEST_ASSIST" or _TEST_ASSIST_NAME_SLOT not in missing_slots("TEST_ASSIST", state.last_entities):
         return
-    memory.merge_entities(state, {"test_name": guess}, label="TEST_ASSIST")
+    memory.merge_entities(state, {"test_name": text}, label="TEST_ASSIST")
     decision.flags = set(decision.flags) | {"test_assist_guess_as_name"}
 
 
@@ -3713,7 +3715,7 @@ async def _complete_route_after_doctor_guard(
             memory.merge_entities(state, {slot: value}, label=str(pend_label))
 
     fill_date_from_schedule_windows(state, decision.label)
-    _test_assist_guess_as_name(decision, state, memory, test_assist_guess)
+    _test_assist_guess_as_name(decision, state, memory, test_assist_guess, user_text)
 
     if turn_understanding.prepare_by_parse():
         # Подготовка читает фразы разбора (этап 2 «без стоп-слов»): разбор хода — и на ходу подготовки, по теме, по которой
