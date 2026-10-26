@@ -40,7 +40,6 @@ from typing import Any, Callable
 
 from agent_logic_2.nayka_api import api_service_info, snapshots
 
-from ..runtime_config import config as _cfg
 from ._common import _normalise_input
 
 log = logging.getLogger(__name__)
@@ -50,30 +49,9 @@ _TOKEN_RE = re.compile(r"[a-zа-яё0-9]+")
 # Предлоги, которые сами по себе не являются биоматериалом.
 _PREPOSITIONS = frozenset({"с", "со", "из", "от", "на", "в", "по", "у", "и"})
 
-# Локативная обвязка, которой нет в справочнике МИС, но которой пациент
-# описывает то же место: «с ПОВЕРХНОСТИ задней стенки глотки». Список
-# анатомически-локативный (где брали), НЕ список услуг и не стоп-лист интентов.
-# Путь off выключателя `biomaterial_by_mis` — уходит вместе с ним (`_place_words`).
-_LOCATIVE_FILLER = frozenset(
-    {"поверхности", "поверхность", "области", "область", "участка", "участке", "зоны", "зоне"}
-)
-
-
-def biomaterial_by_mis() -> bool:
-    """`biomaterial_by_mis = on` (STEP-2026-10-24-S2-DOCS-PHRASE): хвост-биоматериал — только слова материалов МИС и
-    предлоги. «с поверхности задней стенки глотки» правило целиком не снимает: тот ли это материал, что «соскоб с задней
-    стенки глотки» у строки, решает выбор строки цены LLM — он видит материалы МИС строки (`service_mis_names`)."""
-
-    return str(getattr(_cfg, "MR_BIOMATERIAL_BY_MIS", "off") or "off").strip().lower() == "on"
-
-
-def _place_words() -> frozenset[str]:
-    """Слова сверх материалов МИС и предлогов, допустимые в хвосте-биоматериале: под `on` — никаких; off — как было,
-    локативная обвязка."""
-
-    if biomaterial_by_mis():
-        return frozenset()
-    return _LOCATIVE_FILLER
+# Хвост-биоматериал — только слова материалов МИС и предлоги (STEP-2026-10-24-S2-DOCS-PHRASE; выключатель `biomaterial_by_mis`
+# и локативная обвязка `_LOCATIVE_FILLER` сняты 31.10): «с поверхности задней стенки глотки» правило целиком не снимает — тот ли
+# это материал, что «соскоб с задней стенки глотки» у строки, решает выбор строки цены LLM (он видит материалы МИС строки).
 
 # Минимальная длина хвоста-биоматериала в токенах. Одно слово («кал», «моча»,
 # «нос») — часто само название услуги или её различающий токен, снимать нельзя.
@@ -569,8 +547,8 @@ def service_mis_names(
 def split_biomaterial_tail(text: str) -> tuple[str, str]:
     """Снимает с конца запроса фразу-биоматериал.
 
-    Ищем самый длинный ХВОСТ, все токены которого — слова биоматериалов МИС,
-    слова места (`_place_words`: под `biomaterial_by_mis = on` их нет) или предлоги. Хвост из одного слова не снимаем: «кал»,
+    Ищем самый длинный ХВОСТ, все токены которого — слова биоматериалов МИС
+    или предлоги. Хвост из одного слова не снимаем: «кал»,
     «моча», «нос» сами бывают названием услуги.
 
     :param text: исходный запрос пациента
@@ -585,16 +563,13 @@ def split_biomaterial_tail(text: str) -> tuple[str, str]:
     if not tokens:
         return text, ""
 
-    place = _place_words()
     idx = len(tokens)
-    while idx > 0 and (
-        tokens[idx - 1] in vocab.biomat_tokens or tokens[idx - 1] in place
-    ):
+    while idx > 0 and tokens[idx - 1] in vocab.biomat_tokens:
         idx -= 1
     tail = tokens[idx:]
     if len(tail) < _MIN_TAIL_TOKENS:
         return text, ""
-    # Хвост обязан нести собственно материал, а не только предлоги/локативы.
+    # Хвост обязан нести собственно материал, а не только предлоги.
     if not any(t in vocab.biomat_tokens and t not in _PREPOSITIONS for t in tail):
         return text, ""
 
@@ -625,9 +600,8 @@ def service_accepts_biomaterial(
     tail_tokens = {t for t in _tokens(biomaterial) if t not in _PREPOSITIONS}
     if not tail_tokens:
         return None
-    allowed_extra = _place_words() | _PREPOSITIONS
     for phrase in phrases:
-        if tail_tokens <= (set(phrase) | allowed_extra):
+        if tail_tokens <= (set(phrase) | _PREPOSITIONS):
             return True
     return False
 

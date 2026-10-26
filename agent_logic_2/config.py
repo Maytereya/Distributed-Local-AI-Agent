@@ -203,16 +203,12 @@ class MessengerRouterConfig:
     mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
-    grounder_generic_by_llm: str
-    biomaterial_by_mis: str
     p1_facet_none_offer: str
     price_budget_clarify: str
-    prepare_general_memo_llm: str
     turn_spans_llm: str
     prepare_by_parse: str
     price_by_parse: str
     topic_by_llm: str
-    button_pass_rules: str
     booking_target_slot_llm: str
     button_answer_topic: str
     button_topic_hint: str
@@ -606,15 +602,6 @@ settings = Settings(
         # LLM-классификатор решает её параллельно ходу, вне его бюджета; строка `topic_shadow` после ответа — матрица
         # «правило × LLM». Ответ не меняется. off — как было. [MESSENGER_ROUTER] topic_shadow_llm
         topic_shadow_llm=_get_enum("MESSENGER_ROUTER", "topic_shadow_llm", default="off", allowed={"off", "on"}),
-        # Значение `service_name` LLM-классификатора на метке без каталога (DOCTOR_INFO, PREPARE) без фразы услуги в реплике
-        # (STEP-2026-10-24-S2-DOCS-PHRASE, решения владельца 22.10): что это услуга, решила LLM — без перепроверки буквами
-        # общих слов (`_GENERIC_SERVICE_FALLBACK_RE`: запись, врач, услуга, хочу…). off — как было.
-        # [MESSENGER_ROUTER] grounder_generic_by_llm
-        grounder_generic_by_llm=_get_enum("MESSENGER_ROUTER", "grounder_generic_by_llm", default="off", allowed={"off", "on"}),
-        # Хвост-биоматериал в правиле цены — только слова материалов МИС (`biomatNames`) и предлоги, без локативной обвязки
-        # в коде («поверхности», «области»…; STEP-2026-10-24-S2-DOCS-PHRASE): тот ли это материал, решает выбор строки LLM —
-        # он видит материалы МИС строки. off — как было. [MESSENGER_ROUTER] biomaterial_by_mis
-        biomaterial_by_mis=_get_enum("MESSENGER_ROUTER", "biomaterial_by_mis", default="off", allowed={"off", "on"}),
         # П1 на ходах `topic_by_llm` (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): LLM решила, что пациент спрашивает об услуге не цену,
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
@@ -623,11 +610,6 @@ settings = Settings(
         # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
         # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
         price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
-        # Общая памятка клиники «как сдавать кровь» — вариант выбора памятки LLM (BUG-2026-10-22-PREPARE-GENERAL-BY-LETTERS,
-        # решение владельца 22.10 «по смыслу»): на «подготовка к анализам крови» LLM выбирает её сама, а не наименее плохую из
-        # найденных по буквам («Анализ мочи по Нечипоренко»). Без LLM не выбирается. off — как было.
-        # [MESSENGER_ROUTER] prepare_general_memo_llm
-        prepare_general_memo_llm=_get_enum("MESSENGER_ROUTER", "prepare_general_memo_llm", default="off", allowed={"off", "on"}),
         # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
@@ -647,11 +629,6 @@ settings = Settings(
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
         # [MESSENGER_ROUTER] topic_by_llm
         topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
-        # Ход-кнопка режима `pass` (подпись кнопки — полноценный запрос, тему пациент выбрал нажатием, `button_menu`) тему у LLM
-        # (`topic_by_llm`) не переспрашивает — решает правило, как без `topic_by_llm` (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM:
-        # «Где и до скольки принимают» с деплоя 15 — классификатор 11–12 с вместо 0,15–0,5 с). Набранный текст — как был.
-        # off — как было. [MESSENGER_ROUTER] button_pass_rules
-        button_pass_rules=_get_enum("MESSENGER_ROUTER", "button_pass_rules", default="off", allowed={"off", "on"}),
         # Вопрос цели записи («К какому врачу или на какую услугу записать?» — кнопка «Записаться на приём» и тот же вопрос
         # текстом) — вопрос-слот одной функции ответа на висящий вопрос (`pending_buttons`): ответ, который LLM признала
         # ответом, идёт в запись, а не в вопрос «Отменить оформление?» правил смены темы
@@ -867,16 +844,12 @@ MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
-MR_GROUNDER_GENERIC_BY_LLM = settings.messenger_router.grounder_generic_by_llm
-MR_BIOMATERIAL_BY_MIS = settings.messenger_router.biomaterial_by_mis
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
-MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
-MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
 MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic
 MR_BUTTON_TOPIC_HINT = settings.messenger_router.button_topic_hint

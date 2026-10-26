@@ -98,16 +98,23 @@ def test_biomaterial_does_not_identify_service():
 @pytest.mark.parametrize(
     "query",
     [
-        "мазок на микрофлору с поверхности задней стенки глотки",
         "сколько стоит мазок на микрофлору с задней стенки глотки",
         "мазок на микрофлору с задней стенки глотки",
     ],
-    ids=["prod_10_08", "with_price_verb", "no_surface_word"],
+    ids=["with_price_verb", "no_surface_word"],
 )
 def test_biomaterial_phrase_no_longer_breaks_match(query):
     resolved = _resolve(query)
     assert resolved is not None, f"{query!r} не резолвится"
     assert "посев на микрофлору" in resolved.lower(), resolved
+
+
+def test_place_word_outside_mis_is_not_stripped_by_rules():
+    """Прод 10.08 («с ПОВЕРХНОСТИ задней стенки глотки»): слова места нет в материалах МИС — правило хвост с ним не снимает
+    и услугу по буквам не угадывает; тот ли это материал, решает выбор строки цены LLM — он видит материалы МИС строки
+    (STEP-2026-10-24-S2-DOCS-PHRASE; список `_LOCATIVE_FILLER` и выключатель `biomaterial_by_mis` сняты 31.10)."""
+    head, tail = bio.split_biomaterial_tail("мазок на микрофлору с поверхности задней стенки глотки")
+    assert (head, tail) == ("мазок на микрофлору с поверхности", "задней стенки глотки")
 
 
 def test_biomaterial_mention_does_not_land_on_foreign_procedure():
@@ -122,11 +129,11 @@ def test_biomaterial_mention_does_not_land_on_foreign_procedure():
 def test_found_service_actually_accepts_the_biomaterial():
     """Шаг 3 механики: найденная услуга подтверждена справочником МИС."""
     head, tail = bio.split_biomaterial_tail(
-        "мазок на микрофлору с поверхности задней стенки глотки"
+        "мазок на микрофлору с задней стенки глотки"
     )
     assert head == "мазок на микрофлору", head
     assert "задней стенки глотки" in tail, tail
-    resolved = _resolve("мазок на микрофлору с поверхности задней стенки глотки")
+    resolved = _resolve("мазок на микрофлору с задней стенки глотки")
     assert bio.service_accepts_biomaterial(resolved or "", tail) is True
 
 

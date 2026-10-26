@@ -134,7 +134,6 @@ def world(monkeypatch):
 
     monkeypatch.setattr(cfg, "MR_PREPARE_BY_PARSE", "on", raising=False)
     monkeypatch.setattr(cfg, "MR_TURN_SPANS_LLM", "on", raising=False)
-    monkeypatch.setattr(cfg, "MR_PREPARE_GENERAL_MEMO_LLM", "on", raising=False)
     monkeypatch.setattr(_turn_spans.llm_runtime, "generate_structured", spans_llm)
     monkeypatch.setattr(select_mod, "generate_text", select_llm)
     monkeypatch.setattr(select_mod, "_same_preparation", same)
@@ -259,11 +258,11 @@ def test_no_service_in_parse_offers_only_general_memo(world) -> None:
     assert all([title for _num, title in _options(prompt)] == [prepare_mod._BLOOD_GENERAL_TITLE] for prompt in world["prompts"])
 
 
-def test_no_service_and_no_general_option_asks_for_the_name(world, monkeypatch) -> None:
-    monkeypatch.setattr(cfg, "MR_PREPARE_GENERAL_MEMO_LLM", "off", raising=False)
+def test_no_service_and_general_memo_declined_asks_for_the_name(world) -> None:
     answers = _answers(world, _BLOOD_GENERAL, set())
     assert len(set(answers)) == 1 and "Уточните полное название анализа или процедуры" in answers[0]
-    assert world["select_calls"] == 0  # вариантов нет — выбирать нечего
+    # среди вариантов — только общая памятка (поиска по словам нет); LLM её отклонила
+    assert all([title for _num, title in _options(prompt)] == [prepare_mod._BLOOD_GENERAL_TITLE] for prompt in world["prompts"])
 
 
 @pytest.mark.parametrize("group", [_FERRITIN, _TSH, _BLOOD_GENERAL])

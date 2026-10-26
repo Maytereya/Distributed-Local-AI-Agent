@@ -64,11 +64,7 @@ PROD_D17: dict[str, Any] = {
     "MR_P1_FACET_NONE_OFFER": "on",
     "MR_PRICE_BUDGET_CLARIFY": "on",
     "MR_DOCTORS_BY_SERVICE_DATA": "shadow",
-    "MR_PREPARE_GENERAL_MEMO_LLM": "on",
-    "MR_BUTTON_PASS_RULES": "on",
     "MR_PREPARE_BY_PARSE": "on",
-    "MR_GROUNDER_GENERIC_BY_LLM": "on",
-    "MR_BIOMATERIAL_BY_MIS": "on",
     "MR_TEST_ASSIST_FROM_DATA": "on",
     # Оракул отвечает только разметке и выбору строки; сбои прочих мест не должны размыкать предохранитель для них.
     "MR_LLM_DECISION_BREAKER_FAILURES": 0,
