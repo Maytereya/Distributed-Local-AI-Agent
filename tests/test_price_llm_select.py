@@ -264,7 +264,13 @@ def _sel(*rows):
 
 def test_reconcile_keeps_rules_answer_the_llm_confirmed():
     assert PS.reconcile_with_proposal([_ENDO], _sel(_ENDO)) is None
-    assert PS.reconcile_with_proposal([_HCG], _sel(_HCG, _FERRITIN)) is None
+    assert PS.reconcile_with_proposal([_HCG], _sel(_HCG, {**_HCG, "serviceHomecode": "2003", "cost": 450})) is None  # варианты одной
+
+
+def test_reconcile_one_rules_row_and_other_services_picked_is_the_whole_choice():
+    # Правила показали бы одну строку, LLM выбрала с ней другую услугу — весь её выбор (BUG-2026-10-24-FOREIGN-PRICE-D17,
+    # класс 3; выключатель `price_general_clarify` снят 31.10): одна строка правил — «консультация врача» → приём хирурга.
+    assert PS.reconcile_with_proposal([_HCG], _sel(_HCG, _FERRITIN)) == [_HCG, _FERRITIN]
 
 
 def test_reconcile_replaces_a_wrong_pick():
@@ -280,8 +286,10 @@ def test_reconcile_adds_variants_the_rules_missed_to_a_list():
 
 
 def test_reconcile_does_not_turn_a_confirmed_single_answer_into_a_list():
-    # Подтверждённый приём остаётся одной строкой с врачами, как было.
-    assert PS.reconcile_with_proposal([_THERAPIST], _sel(_THERAPIST, _ENDO_THERAPIST)) is None
+    # Подтверждённый приём с вариантом той же услуги (то же название) остаётся одной строкой с врачами, как было; приём другой
+    # специальности рядом — уже разные услуги, список (тест выше).
+    assert PS.reconcile_with_proposal([_THERAPIST], _sel(_THERAPIST, {**_THERAPIST, "serviceHomecode": "13.1.2", "cost": 3500})) is None
+    assert PS.reconcile_with_proposal([_THERAPIST], _sel(_THERAPIST, _ENDO_THERAPIST)) == [_THERAPIST, _ENDO_THERAPIST]
 
 
 def test_reconcile_llm_found_nothing_keeps_rules_answer():

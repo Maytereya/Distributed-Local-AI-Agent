@@ -111,6 +111,7 @@ def test_choice_is_written_to_turn_telemetry(mini_prod_world, monkeypatch):
         row = world.take_telemetry()
 
     choices = row["choose"]
-    assert [(c["task"], c["status"]) for c in choices] == [("price_service", "none_fit"), ("price_service", "picked")]
+    # Путь ответа о цене — промпт `*_general` (выключатель `price_select_rules` снят 31.10, режим `general` на проде с деплоя 17).
+    assert [(c["task"], c["status"]) for c in choices] == [("price_service_general", "none_fit"), ("price_service_general", "picked")]
     assert choices[0]["reason"] == "other_service" and all(c["options"] >= 1 for c in choices)
-    assert [c["site"] for c in row["llm"] if c["site"].startswith("choose_")] == ["choose_price_service"] * 2
+    assert [c["site"] for c in row["llm"] if c["site"].startswith("choose_")] == ["choose_price_service_general"] * 2

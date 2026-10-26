@@ -11,6 +11,68 @@
 
 ---
 
+## STEP-2026-10-31-SWITCH-REMOVAL-PARSE — снятие выключателей деплоя 17, часть «разбор реплики и цена» (неделя `on` — 31.10) — 3 из 4 ПОДГОТОВЛЕНО, `turn_spans_llm` НЕ СНЯТ; НЕ СЛИВАТЬ ДО 31.10
+
+- **Правило (решение владельца 21.10, см. STEP-2026-10-22-SWITCH-REMOVAL):** неделя `on` без регресса — снять путь `off`, его
+  регулярки и списки, сам выключатель и тесты пути `off`; потолок храповика — в том же коммите. Это этап 1 плана «без стоп-слов»
+  (решение 22.10: 28 списков удалить полностью, без LLM услугу не угадывать). Строки ключей в `config.ini` не трогаем: неизвестный
+  ключ раздела не читается.
+- **Ветка** `claude/2026-10-31-switch-removal-parse` от `05847f3` (деплой 18 + снятие `booking_specialty_llm`), по коммиту на
+  выключатель. Выкатка — словом владельца. Параллельно другая ветка снимает выключатели подготовки, заземления, биоматериала,
+  подбора анализов и кнопок — пересечение только в `tests/test_price_stage2_turns.py::PROD_D17` (по строке на ключ).
+- **Метод:** до правок — гейт базы с умолчаниями выключателей, равными проду (все четыре `on` / `general`): какие тесты молча
+  проверяли путь `off`. Гейт каждого коммита — на снимке рабочей копии во временном чекауте (тот же гейт: `ruff check
+  messengers_router tests` + полный `pytest -n auto`), коммит — только на зелёном.
+
+| Выключатель | На проде с | Коммит | Снято | Тесты |
+|---|---|---|---|---|
+| `synonym_wordforms` | деплой 17 (24.10) | 1 | ветка `off` в `_price_select_llm._synonym_rows` (синоним МИС в другой словоформе — всегда кандидат выбора строки, словоформа всегда строгая `_same_word_strict`), `_synonym_wordforms_on`; ключ, атрибут | `test_synonym_wordforms_class.py`: тест пути `off` удалён, сравнения с `off` сняты. Других тестов путь `off` не держал |
+| `price_general_clarify` | деплой 17 (24.10) | 2 | `general_clarify_on`: оба выбора строки `prices.py` — `general_as_none_fit=True` («слишком общее» / «не услуга» — уточнение); разные услуги выбора LLM — список (`reconcile_with_proposal`, путь врачей `service_bundle_info`); ключ, атрибут | `test_price_general_clarify_class.py`: сравнения с `off` сняты, AST — каждый выбор строки пути цены передаёт `general_as_none_fit=True`; `test_price_llm_select.py` — 2 теста молча держали путь `off` (одна строка правил + другая услуга LLM → ответ правил): переведены на путь прода (разные услуги — весь выбор LLM; варианты одной услуги — строка правил, как было) |
+| `price_select_rules` | деплой 17 (24.10), `general` | 3 | перечень режимов `_RULES_TASKS` и `_select_rules`: путь ответа о цене — всегда `PRICE_GENERAL_TASK` / `PRICE_QUALIFIER_GENERAL_TASK` (имена задач и промпты `*_general` — прежние, кэш стенда в силе); суд записи (`price_answer=False`) — прежние `choose_price_service*`; ключ, атрибут | `test_price_select_rules_class.py` — задача без режима; имена задач пути цены `*_general` в `test_price_candidates_by_meaning_class` (2), `test_qualifier_round_two_class` (`_SITES`), `test_choose_price::test_choice_is_written_to_turn_telemetry` — тесты молча держали прежний промпт |
+| `turn_spans_llm` | деплой 17 (24.10) | — | **не снят** (ниже) | — |
+
+- **Списки и регулярки.** У трёх снятых выключателей пути `off` своих списков и регулярок не было — **храповик 259 / 160 / 102 без
+  изменений**. Одиннадцать списков цены (`_PRICE_QUERY_STOPWORDS`, `_MULTI_PRICE_NOISE_WORDS`, `_PRICE_GENERIC_SERVICE_TOKENS` и др.,
+  дизайн 23.10 §1) читает потребитель «цена» (`price_by_parse`, на проде с 27.10, путь `off` — до ~03.11) — не тронуты.
+- **`turn_spans_llm` — почему не снят.** Гейт `05847f3` с `turn_spans_llm = on` по умолчанию: **335 failed / 6353 passed** в 27
+  файлах (в гейте выключатель по умолчанию `off`, и эти тесты держат старый генератор окон `_turn_phrases.parse_turn_phrases`).
+  Перевод — отдельная работа на несколько часов и с решениями владельца, не механическое снятие:
+  1. **Политика сбоя старого генератора, снятая дизайном** (`fallback_split`, `MERGED`, `strong_all`, окна `parse_fragment_windows` /
+     `parse_complete_windows`): `test_turn_parse_fallback_class` (84), `test_t7_k1_k3_switches` (62), `test_turn_parse_slot` (6),
+     `test_turn_parse_concurrent` (3), `test_t7_single_parse_mode` (3), `test_turn_phrases_variants` (2),
+     `test_turn_phrases_complete_class` (2), `test_turn_parse_merged` (1) — удаляются вместе с генератором (и с ними
+     `test_turn_phrases.py`, промпт `choose_turn_phrases` в двух локациях, ключи `parse_fragment_windows` / `parse_complete_windows`).
+  2. **Эталоны «LLM недоступна»** (`test_price_turns_golden` 18, `test_choose_price` 5, `test_pending_reply` 5 — «new_topic не меняет
+     эталон цены»; «name_with_and», «uzi_compound», «list_*_ttg_t4»): путь `off` при сбое режет по разделителям без LLM, путь прода —
+     `unavailable` без разреза → правила понимания хода (буквы). Перезапись эталонов — с разбором диффа: это поведение прода при сбое
+     LLM уже с деплоя 17; «оффер / уточните» вместо букв — этап 2 у читателей.
+  3. **Классы с оракулом выбора фраз** (`choose_turn_phrases`): `test_price_one_or_many_class` (36), `test_turn_parse_readers` (15),
+     `test_turn_parse_lazy_rules` (14), `test_turn_parse_t3` (10), `test_price_list_class` (4), `test_l14_two_turn_consumers` (4),
+     `test_l14_journal_mention` (2), `test_basket_*` (2), `test_turn_understanding` (1), `test_price_round_two_pool_class` (1) — оракул
+     перевести на разметку `turn_spans` (группы номеров слов), инварианты те же.
+  4. **Суд условия у сильной фразы списка (`ParsedPhrase.beside`):** `test_p2_strong_phrase_class` (28),
+     `test_p2_strong_phrase_basket_class` (11), `test_basket_weak_phrase_judge_class` (8), `test_parse_price_guard_class` (5),
+     `test_qualifier_round_two_class` (2). `beside` заполнял только старый генератор (`_with_beside`); `_turn_spans` его не ставит, и
+     суд условия корзины по `beside` (`phrase_price_items`, «ферритин по ОМС, глюкоза», BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS) на
+     пути прода не срабатывает — условие судится, только если LLM разметки оставила его во фразе (фраза слабая). Путь одной услуги
+     закрыт отдельно (RISK-2026-10-25-STRONG-PHRASE-NO-GUARD, `9eb0ac1`); держит ли П2 у списка гард уровня реплики — не проверено.
+     **Вопрос владельцу** (см. ниже).
+- **Что останется после снятия `turn_spans_llm`:** множества `_WRAPPER` / `_FILLER` (из трёх списков цены) и `_MENTION_EDGE` читает и
+  путь прода: `turn_understanding._from_phrases` режет края одной фразы разбора `_bare_phrase` (`_MENTION_EDGE`), корзина
+  (`_basket_select`), `prices.py`, `strong_window` (подготовка, корзина); `bare` — телеметрия согласия (`parse_agree_telemetry`). Дизайн
+  23.10 §2 записывал `_MENTION_EDGE` в уход вместе с генератором — это неверно, он уходит с этапом 2 (`price_by_parse`).
+  Поля разбора `split`, `leftover`, `beside` и статусы `merged`, `strong_all` на пути прода всегда пусты — снимать вместе с читателями.
+- **Гейт:** после каждого коммита зелёный — 6676 / 6677 / 6671 passed, 13 xfailed (ruff чистый).
+- **Контроль (26.10, код `d55105e`):** повтор из кэша набора деплоя 18 «плюс» (мир 20261008, `cfg` `d18p2_*`) против `base28_*`
+  (код `05847f3`) — **кнопки 0 / 1008, test 0 / 201, dev 0 / 867** различий ответов; переводы, класс 4, INVALID — без изменений; оба
+  прогона `valid`, живых вызовов 0, все запросы к LLM — из кэша (`cache_hit` 1938 / 391 / 1588, промахов нет): снятие поведения
+  прода не меняет.
+- **Решения на проверку владельцем:** (1) снимать ли `turn_spans_llm` отдельной веткой (объём выше) и до или после снятия
+  `price_by_parse` (пересечение — `_turn_phrases`, `turn_understanding`, `prices.py`); (2) суд условия у сильной фразы списка на пути прода
+  (п. 4): вернуть механикой (слова фрагмента вокруг фразы разбора по разделителям, без списков) или признать, что условие решает разметка.
+
+---
+
 ## STEP-2026-10-29-SWITCH-REMOVAL — снятие выключателей деплоев 13–15 (решение владельца 21.10) — 2 из 5 ПОДГОТОВЛЕНО, ВЫКАТКА 29.10 СЛОВОМ ВЛАДЕЛЬЦА
 
 - **Решение владельца 21.10** (как STEP-2026-10-22-SWITCH-REMOVAL): неделя `on` на проде без регресса → снять путь `off`, его
@@ -795,6 +857,8 @@
 
 ## BUG-2026-10-24-FOREIGN-PRICE-D17 — семь чужих цен набора деплоя 17: при каком варианте вопроса — ИСПРАВЛЕНО под выключателями (`price_general_clarify`, `synonym_wordforms`, `price_select_rules`; off; в деплой 17 — on / on / general)
 
+- **31.10:** все три выключателя сняты, путь прода — без настройки (STEP-2026-10-31-SWITCH-REMOVAL-PARSE, ветка
+  `claude/2026-10-31-switch-removal-parse`).
 - **Запрос владельца 24.10:** «проверь, при каком варианте запроса выдаёт чужую цену». Чужая цена в общей карточке деплоя 17
   (`d17_test` 1, `d17_dev` 6) — те же 7 вопросов, что у `d16_fix_*`: набор деплоя 17 их не добавил и не убрал.
 - **Как искали.** (1) Варианты строк, которые видела LLM: повтор 7 ходов только из кэша (`--mode replay`, прогон `probe_fp17`) с

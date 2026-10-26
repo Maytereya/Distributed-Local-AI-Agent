@@ -5,12 +5,11 @@
 Сухареву» (чужая цена): синоним сравнивался с фразой буква в букву, строк синонима в списке LLM не было, и она выбрала
 похожее. Тот же класс, что «анализ / анализы».
 
-Инварианты под `synonym_wordforms = on`:
+Инварианты (выключатель `synonym_wordforms` снят 31.10 — неделя `on` на проде с деплоя 17):
 - любая словоформа синонима ставит строки его услуг первыми в список LLM, как дословный синоним; сильным совпадением она не
   становится — выбирает LLM (общее начало склеивает и разные слова);
 - словоформа — строгая (`_same_word_strict`): общее начало длинного слова без окончания; «коагулограмма» ≠ «коагуляция»;
-- синоним, который буквы и так находят в названиях прайса («терапевт» — «врача-терапевта»), строк не добавляет — как было;
-- off — как было.
+- синоним, который буквы и так находят в названиях прайса («терапевт» — «врача-терапевта»), строк не добавляет — как было.
 """
 
 from __future__ import annotations
@@ -48,31 +47,19 @@ _FORMS = [
 ]
 
 
-def _switch(monkeypatch, mode: str) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_SYNONYM_WORDFORMS", mode, raising=False)
-
-
-def _synonym_names(monkeypatch, mode: str, text: str) -> set[str]:
-    _switch(monkeypatch, mode)
+def _synonym_names(monkeypatch, text: str) -> set[str]:
     _mis_synonyms(monkeypatch, _SYNONYMS)
     return {row["serviceName"] for row in sel._synonym_rows([text], ROWS)}
 
 
 @pytest.mark.parametrize("text", _FORMS)
 def test_every_wordform_of_a_synonym_offers_its_services(text, monkeypatch) -> None:
-    assert _synonym_names(monkeypatch, "on", text) == _GEMOSTAZ
-
-
-@pytest.mark.parametrize("text", [t for t in _FORMS if "коагулограмма" not in t.lower().split()])
-def test_off_is_as_before(text, monkeypatch) -> None:
-    assert _synonym_names(monkeypatch, "off", text) == set()  # тот самый дефект g0398: словоформа синонима не находится
+    assert _synonym_names(monkeypatch, text) == _GEMOSTAZ
 
 
 @pytest.mark.parametrize("text", ["приём терапевта", "консультация терапевту", "терапевт"])
 def test_synonym_the_letters_already_find_adds_nothing(text, monkeypatch) -> None:
-    assert _synonym_names(monkeypatch, "on", text) == _synonym_names(monkeypatch, "off", text) == set()
+    assert _synonym_names(monkeypatch, text) == set()
 
 
 @pytest.mark.parametrize(
@@ -96,7 +83,6 @@ def test_strict_wordform(a, b, same) -> None:
 
 
 def test_wordform_synonym_is_not_a_strong_match(monkeypatch) -> None:
-    _switch(monkeypatch, "on")
     _mis_synonyms(monkeypatch, _SYNONYMS)
     assert bio.mis_synonym_candidates("коагулограммы") == ()  # сильное совпадение — только дословное (решение 13.10)
     assert sel.strong_rows("коагулограммы", ROWS) == []
@@ -108,13 +94,11 @@ def test_llm_sees_the_synonym_rows_first_and_decides(question, monkeypatch) -> N
 
     monkeypatch.setattr(cfg, "MR_PRICE_CANDIDATES_BY_MEANING", "on", raising=False)
     monkeypatch.setattr(sel, "_record_synonym_suggestion", lambda *a, **k: None)
-    for mode, expected in (("on", True), ("off", False)):
-        _switch(monkeypatch, mode)
-        _mis_synonyms(monkeypatch, _SYNONYMS)
-        oracle = _Oracle(Choice(Status.NONE_FIT, reason="other_service"))
-        monkeypatch.setattr(sel, "choose", oracle)
-        import asyncio
+    _mis_synonyms(monkeypatch, _SYNONYMS)
+    oracle = _Oracle(Choice(Status.NONE_FIT, reason="other_service"))
+    monkeypatch.setattr(sel, "choose", oracle)
+    import asyncio
 
-        asyncio.run(sel.select_price_rows(question, ROWS))
-        first = oracle.calls[0][:2] if oracle.calls else []
-        assert (bool(first) and all("гемостазиограмма" in text.lower() for text in first)) is expected, (mode, oracle.calls)
+    asyncio.run(sel.select_price_rows(question, ROWS))
+    first = oracle.calls[0][:2] if oracle.calls else []
+    assert first and all("гемостазиограмма" in text.lower() for text in first), oracle.calls

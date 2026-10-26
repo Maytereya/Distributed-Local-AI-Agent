@@ -50,7 +50,6 @@ from ._turn_phrases import _tokens as _phrase_tokens
 from ._price_select_llm import (
     PriceSelection,
     distinct_services,
-    general_clarify_on,
     reconcile_with_proposal,
     rows_overlap,
     select_price_rows,
@@ -780,7 +779,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             judge_qualifier=bool(judged),
             budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
-            general_as_none_fit=general_clarify_on(),  # «слишком общее» — уточнение, не цены правил (`price_general_clarify`)
+            general_as_none_fit=True,  # «слишком общее» — уточнение, не цены правил (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3)
         )
 
     def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -981,7 +980,7 @@ async def service_bundle_info(
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
-            general_as_none_fit=general_clarify_on(),  # «слишком общее» — уточнение, не цены правил (`price_general_clarify`)
+            general_as_none_fit=True,  # «слишком общее» — уточнение, не цены правил (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3)
         )
 
     def _llm_variants(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1121,7 +1120,7 @@ async def service_bundle_info(
             # Правила промахнулись целиком, а LLM нашла несколько вариантов — их и
             # показываем на выбор, без врачей чужой услуги.
             return _llm_variants(llm_rows)
-        if llm_rows is not None and general_clarify_on() and distinct_services(llm_rows):
+        if llm_rows is not None and distinct_services(llm_rows):
             # LLM выбрала несколько разных услуг (не варианты одной): дальше путь показал бы первую строку с её врачами —
             # «консультация врача» → приём хирурга (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3). Список на выбор.
             return _llm_variants(llm_rows)

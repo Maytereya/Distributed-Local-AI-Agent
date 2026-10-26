@@ -112,49 +112,26 @@ PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
 # наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» → обычная цена. Уточнение `price_judge_conditions`
 # («как сдать, подготовиться…» — не условие) входит в тот же текст: строгое правило без него отсекало бы вопросы о сдаче.
 PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
-# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 на пути ответа о цене (`price_select_rules`): `general` — слишком
-# общее название («анализы», приём врача без специальности) — не группа услуг правила 5. Свои промпты.
-_RULES_TASKS = {
-    mode: (replace(PRICE_TASK, name=f"price_service_{mode}"), replace(PRICE_TASK, name=f"price_service_qualifier_{mode}"))
-    for mode in ("general",)
-}
+# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 на пути ответа о цене: слишком общее название («анализы»,
+# приём врача без специальности) — не группа услуг правила 5. Свои промпты `*_general` (выключатель `price_select_rules`
+# снят 31.10 — режим `general` на проде с деплоя 17); суд записи — прежние промпты.
+PRICE_GENERAL_TASK = replace(PRICE_TASK, name="price_service_general")
+PRICE_QUALIFIER_GENERAL_TASK = replace(PRICE_TASK, name="price_service_qualifier_general")
 _VARIANT_B_LIMIT = 5
-
-
-def _select_rules() -> str:
-    """`[MESSENGER_ROUTER] price_select_rules = off | general`; мусор — off (как было)."""
-
-    mode = str(getattr(_cfg, "MR_PRICE_SELECT_RULES", "off") or "").strip().lower()
-    return mode if mode in _RULES_TASKS else "off"
-
-
-def _synonym_wordforms_on() -> bool:
-    """`[MESSENGER_ROUTER] synonym_wordforms = on` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): синоним МИС в другой словоформе —
-    кандидат выбора строки, как дословный; мусор — off (как было)."""
-
-    return str(getattr(_cfg, "MR_SYNONYM_WORDFORMS", "off") or "").strip().lower() == "on"
-
-
-def general_clarify_on() -> bool:
-    """`[MESSENGER_ROUTER] price_general_clarify = on` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» на пути
-    цены — уточнение, несколько разных услуг выбора — список; мусор — off (как было)."""
-
-    return str(getattr(_cfg, "MR_PRICE_GENERAL_CLARIFY", "off") or "").strip().lower() == "on"
 
 
 def price_task(*, judge_qualifier: bool = False, price_answer: bool = True) -> Task:
     """Задача выбора строки прайса: суд условия — свой промпт; под `[MESSENGER_ROUTER] price_judge_conditions = on` — с
-    уточнённым правилом 3; на пути ответа о цене (`price_answer`) под `price_select_rules` — промпты с правилами (уточнённое
-    правило 3 `price_judge_conditions` в них не входит: на проде он off). Суд записи (`price_answer=False`) — прежний промпт:
-    «запись к неврологу» правилом приёма без специальности не судится."""
+    уточнённым правилом 3; на пути ответа о цене (`price_answer`) — промпты с правилом «слишком общее — не группа»
+    (уточнённое правило 3 `price_judge_conditions` в них не входит: на проде он off). Суд записи (`price_answer=False`) —
+    прежний промпт: «запись к неврологу» правилом приёма без специальности не судится."""
 
-    rules = _RULES_TASKS.get(_select_rules()) if price_answer else None
     if judge_qualifier:
-        return rules[1] if rules else PRICE_QUALIFIER_TASK
+        return PRICE_QUALIFIER_GENERAL_TASK if price_answer else PRICE_QUALIFIER_TASK
     on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
     if on:
         return PRICE_CONDITIONS_TASK
-    return rules[0] if rules else PRICE_TASK
+    return PRICE_GENERAL_TASK if price_answer else PRICE_TASK
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
@@ -314,7 +291,7 @@ _WORDFORM_ENDING = 3
 
 
 def _same_word_strict(a: str, b: str) -> bool:
-    """Словоформа под `synonym_wordforms` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): общее начало — длинное из двух слов без
+    """Словоформа синонима МИС (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): общее начало — длинное из двух слов без
     окончания, но не меньше порога `_same_word`. Шести букв мало длинному слову: «коагулограмма» и «коагуляция», «креатинина»
     и «креатинфосфокиназа», «прогестерон» и «прогестин» — разные слова (свип 24.10 по 1 068 вопросам эталона), «коагулограмма»
     и «коагулограммы» — одно; у слов до 9 букв — как `_same_word` («терапевт» = «терапевта»)."""
@@ -493,21 +470,22 @@ def _synonym_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> li
     на 335 размеченных вопросах стенда: без условия 27 чужих первых строк из 112, с ним 0 из 27."""
 
     df = _token_df(retail_rows)
-    wordforms = _synonym_wordforms_on()
-    # Под `synonym_wordforms` словоформа — строгая: «коагулограмма» не словоформа «коагуляции» (14 названий), её строки буквы не
-    # находят (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1); off — как было.
-    same = _same_word_strict if wordforms else _same_word
 
+    # Словоформа — строгая: «коагулограмма» не словоформа «коагуляции» (14 названий), её строки буквы не находят
+    # (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1; выключатель `synonym_wordforms` снят 31.10).
     def letters_miss(key: str) -> bool:
         glued = _normalise_price_token(_normalise_input(key).replace(" ", "").replace("-", ""))
-        return not df.get(glued) and not any(_wordform_family_size(token, retail_rows, same=same) for token in _price_query_tokens(key))
+        return not df.get(glued) and not any(
+            _wordform_family_size(token, retail_rows, same=_same_word_strict) for token in _price_query_tokens(key)
+        )
 
     wanted: list[str] = []
     for text in texts:
-        found = _biomaterial.mis_synonyms_within(str(text or ""))
-        if wordforms:
-            # Синоним в другой словоформе («коагулограммы») — тот же довод клиники (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1).
-            found = (*found, *_biomaterial.mis_synonyms_within_wordforms(str(text or ""), _same_word_strict))
+        # Синоним в другой словоформе («коагулограммы») — тот же довод клиники, что дословный (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1).
+        found = (
+            *_biomaterial.mis_synonyms_within(str(text or "")),
+            *_biomaterial.mis_synonyms_within_wordforms(str(text or ""), _same_word_strict),
+        )
         for key, names in found:
             if not letters_miss(key):
                 continue
@@ -744,7 +722,7 @@ async def select_price_rows(
     :param general_as_none_fit: «слишком общее» и «не услуга» — тоже `none_fit` с кодом причины и названиями варианта B
         (`names`), а не None. Для записи (`_booking_service_select`): там «ответ правил» — молчаливая запись на догадку
         («массаж» → «Массаж век»), а не уточнение, как у цены (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
-    :param price_answer: выбор отвечает на вопрос о цене — промпты с правилами `price_select_rules`; суд записи — False
+    :param price_answer: выбор отвечает на вопрос о цене — промпты с правилами `*_general`; суд записи — False
         (прежний промпт: правила пути цены записи не касаются, карточка 24.10 — g0792)
     :return: выбор LLM; None — оставить ответ правил
     """
@@ -942,9 +920,8 @@ def reconcile_with_proposal(
       ею варианты вне списка; чужие строки уходят;
     - LLM не признала ни одной строки правил — показываем её выбор;
     - выбора нет — ответ правил: «не нашла» от LLM слабее, чем найденное правилами;
-    - под `price_general_clarify = on`: правила показали бы одну строку, а LLM выбрала с ней и другие услуги (не варианты
-      одной) — весь её выбор; иначе он сводился к строке правил («консультация врача» → приём хирурга,
-      BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3).
+    - правила показали бы одну строку, а LLM выбрала с ней и другие услуги (не варианты одной) — весь её выбор; иначе он
+      сводился к строке правил («консультация врача» → приём хирурга, BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3).
 
     :param proposal: строки, которые показали бы правила
     :param selection: выбор LLM
@@ -956,7 +933,7 @@ def reconcile_with_proposal(
     proposed = [row for row in (proposal or []) if isinstance(row, dict)]
     if not proposed:
         return list(selection.rows)
-    if len(proposed) == 1 and len(selection.rows) > 1 and general_clarify_on() and distinct_services(selection.rows):
+    if len(proposed) == 1 and len(selection.rows) > 1 and distinct_services(selection.rows):
         return list(selection.rows)
     selected_keys = {_row_key(row) for row in selection.rows}
     matched = [row for row in proposed if _row_key(row) in selected_keys]

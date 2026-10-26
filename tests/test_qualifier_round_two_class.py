@@ -37,9 +37,10 @@ _PROD_1016 = {
     "MR_STRONG_MATCH": "data",
     "MR_STRONG_PHRASE_GUARD": "llm",
 }
-# Выбор строки: обычный промпт и промпт суда условия (`choose_price_service_qualifier`; на проде — единственный путь
-# суда с 22.10, выключатель `price_candidates_by_meaning` снят).
-_SITES = ("choose_price_service", "choose_price_service_qualifier")
+# Выбор строки на пути ответа о цене: обычный промпт и промпт суда условия (`choose_price_service_qualifier_general`; на проде —
+# единственный путь суда с 22.10, выключатель `price_candidates_by_meaning` снят; промпты `*_general` — с 31.10 единственные на
+# пути цены, выключатель `price_select_rules` снят).
+_SITES = ("choose_price_service_general", "choose_price_service_qualifier_general")
 
 # Класс A: разбор (LLM) выбирает одну СЛАБУЮ фразу вместе с условием (правило 3 промпта разбора) — её судит выбор строки.
 _CLASS_A = {

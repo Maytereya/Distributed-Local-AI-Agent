@@ -1,4 +1,5 @@
-"""Класс: правила промпта выбора строки — только на пути ответа о цене (BUG-2026-10-24-FOREIGN-PRICE-D17, `price_select_rules`).
+"""Класс: правила промпта выбора строки — только на пути ответа о цене (BUG-2026-10-24-FOREIGN-PRICE-D17; выключатель
+`price_select_rules` снят 31.10 — режим `general` на проде с деплоя 17, единственный).
 
 Карточка 24.10: «консультация врача» (4 варианта из 4) — LLM выбирала приёмы всех специальностей (правило 5 «группа услуг —
 все позиции»), и пациент видел одну случайную цену или список чужих приёмов (против решения 25.09); «эхо сердца», «УЗИ
@@ -6,11 +7,11 @@
 давал новую чужую цену (ЛОР → фониатр), был строже нужного и менял запись («запись к неврологу» → уточнение) — снят.
 
 Инварианты:
-- `general` — слишком общее название («анализы», приём врача без специальности) — не группа правила 5; прочие строки промпта —
+- путь ответа о цене — промпты `*_general`: слишком общее название («анализы», приём врача без специальности) — не группа правила 5; прочие строки промпта —
   прежние (режим `groups` — «плод, беременность, до года» — снят: карточка 24.10, test — две новые чужие цены; первая
   формулировка `general` делала «анализы» группой — «стоимость анализов» → список из 8 анализов);
-- суд записи (`price_answer=False`) — прежний промпт при любом режиме;
-- промпты — в двух локациях, одинаковые; off — прежние задачи.
+- суд записи (`price_answer=False`) — прежний промпт;
+- промпты — в двух локациях, одинаковые.
 """
 
 from __future__ import annotations
@@ -25,34 +26,14 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _BASES = ["choose_price_service", "choose_price_service_qualifier"]
 
 
-def _mode(monkeypatch, mode: str) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_PRICE_SELECT_RULES", mode, raising=False)
-    monkeypatch.setattr(cfg, "MR_PRICE_CANDIDATES_BY_MEANING", "on", raising=False)
-
-
-@pytest.mark.parametrize(
-    ("mode", "judge", "task"),
-    [
-        ("off", False, "price_service"),
-        ("off", True, "price_service_qualifier"),
-        ("general", False, "price_service_general"),
-        ("general", True, "price_service_qualifier_general"),
-        ("groups", False, "price_service"),  # снятый режим (карточка 24.10: test — две новые чужие цены) — как off
-        ("мусор", False, "price_service"),
-    ],
-)
-def test_price_answer_reads_the_rules_prompt_of_its_mode(mode, judge, task, monkeypatch) -> None:
-    _mode(monkeypatch, mode)
+@pytest.mark.parametrize(("judge", "task"), [(False, "price_service_general"), (True, "price_service_qualifier_general")])
+def test_price_answer_reads_the_rules_prompt(judge, task) -> None:
     assert sel.price_task(judge_qualifier=judge).name == task
 
 
-@pytest.mark.parametrize("mode", ["off", "general"])
-@pytest.mark.parametrize("judge", [False, True])
-def test_booking_judge_keeps_the_old_prompt(mode, judge, monkeypatch) -> None:
-    _mode(monkeypatch, mode)
-    assert sel.price_task(judge_qualifier=judge, price_answer=False).name in {"price_service", "price_service_qualifier"}
+@pytest.mark.parametrize(("judge", "task"), [(False, "price_service"), (True, "price_service_qualifier")])
+def test_booking_judge_keeps_the_old_prompt(judge, task) -> None:
+    assert sel.price_task(judge_qualifier=judge, price_answer=False).name == task
 
 
 def test_booking_judge_passes_price_answer_false() -> None:
@@ -88,6 +69,5 @@ def test_options_carry_no_price_section(monkeypatch) -> None:
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_PRICE_OPTION_MIS_NOTES", "off", raising=False)
-    _mode(monkeypatch, "general")
     rows = [{"serviceName": "Эхокардиография", "cost": 3500, "priceUnitId": 175}]
     assert [o.text for o in sel._options("эхо сердца", rows)] == ["Эхокардиография — 3500 руб."]
