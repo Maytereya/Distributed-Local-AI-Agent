@@ -118,8 +118,8 @@ PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
 PRICE_GENERAL_TASK = replace(PRICE_TASK, name="price_service_general")
 PRICE_QUALIFIER_GENERAL_TASK = replace(PRICE_TASK, name="price_service_qualifier_general")
 # Под `price_select_named = on` (топ-5 разбора 95 цен, п. 3): те же задачи пути ответа о цене с правилами 6 и 7 — строка, которая
-# и есть названная услуга, записанная иначе («Cito» = срочно, «D2 и D3, общий» к «D3»), — та (P1: верная строка была в списке,
-# LLM отвечала «ни одна»); строка о другом предмете, пациенте или более узкой специальности, которых пациент не называл (ЭхоКГ
+# и есть названная услуга, записанная иначе («Cito» = срочно, термин, сокращение, латиница), — та (P1: верная строка была в списке,
+# LLM отвечала «ни одна»); строка о другом предмете или пациенте, которого пациент не называл (ЭхоКГ
 # плода к «эхо сердца»), — не та, и тогда второй круг по терминам (F: ближайшая чужая строка вместо «ни одна»).
 PRICE_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_general_named")
 PRICE_QUALIFIER_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_qualifier_general_named")
