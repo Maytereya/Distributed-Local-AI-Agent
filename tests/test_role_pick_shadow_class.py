@@ -1,10 +1,10 @@
-"""«Слово → роль» по каталогу МИС в тени (ход (г), L-17, этап 2; STEP-2026-10-21-G-ROLE-PICK-SHADOW).
+"""«Слово → роль» по каталогу МИС: решение `role_pick.decide` (ход (г), L-17, этап 2; STEP-2026-10-21-G-ROLE-PICK-SHADOW).
 
 Инвариант класса (решения владельца 20.10 (г) 1, 2, 6): роль решает LLM по каталогу ролей из среза; точный слой и
 специальность правил — только кандидаты (первыми в списке вариантов), «похожий, но другой врач» не подставляется
-кодом; где точный слой нашёл одну роль, тень пишет согласие LLM с ним (`role_llm_agree`); уточнение пациента
-(«детский») — исход `qualifier`, процедура — `not_role`; сбой LLM — вид сбоя, без согласия. Под `off` ход не зовёт тень;
-под `shadow` ответ хода побайтно тот же, что под `off`. LLM — подделка настоящего типа.
+кодом; где точный слой нашёл одну роль, поля хода пишут согласие LLM с ним (`role_llm_agree`); уточнение пациента
+(«детский») — исход `qualifier`, процедура — `not_role`; сбой LLM — вид сбоя, без согласия. LLM — подделка настоящего типа.
+Тень (`roles_catalog_llm = shadow`) и путь `off` сняты 29.10 (STEP-2026-10-29-SWITCH-REMOVAL); тесты тени удалены.
 """
 
 from __future__ import annotations
@@ -15,11 +15,9 @@ import re
 
 import pytest
 
-from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime, role_pick
 from messengers_router.services._role_catalog import build_role_catalog
 from tests.test_booking_slots_by_meaning import _LLM
-from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 from tests.test_role_catalog_class import _doctor, _here
 
 _MARK = "о каком враче (специальности приёма) пишет пациент"
@@ -120,36 +118,3 @@ def test_not_a_doctor_turn_is_not_decided(monkeypatch):
 
 def test_empty_catalog_is_not_decided(monkeypatch):
     assert _decide(monkeypatch, "к неврологу", _down, catalog=build_role_catalog([], in_region=_here)) == {"role_layer": "no_catalog"}
-
-
-def _turn(world_dir, monkeypatch, reply: str, *, mode: str) -> dict:
-    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
-    from messengers_router.memory import MemoryStore
-    from messengers_router.runtime_config import config as cfg
-    from messengers_router.services import Services
-
-    async def run() -> str:
-        req = MessengerGenerateRequest(session_id=f"role-{mode}-{reply}", text=reply, debug=True)
-        body = json.loads((await messenger_generate_once(req, memory=MemoryStore(), services=Services())).body)
-        await role_pick.settle(5.0)
-        return str(body.get("text") or "")
-
-    with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_NLU_ENGINE", "legacy_v2", raising=False)
-        patch.setattr(cfg, "MR_ROLES_CATALOG_LLM", mode, raising=False)
-        patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
-        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM({_MARK: json.dumps({"picks": [1]})}))
-        choice._CACHE.clear()
-        text = asyncio.run(run())
-        tel = world.take_telemetry() or {}
-    return {"text": text, "telemetry": tel}
-
-
-@pytest.mark.parametrize("reply", ["хочу записаться к кардиологу", "есть ли у вас окулист", "сколько стоит ферритин"])
-def test_shadow_never_changes_the_answer(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    off = _turn(mini_prod_world, monkeypatch, reply, mode="off")
-    shadow = _turn(mini_prod_world, monkeypatch, reply, mode="shadow")
-    assert shadow["text"] == off["text"]
-    assert not any(k.startswith("role_") for k in off["telemetry"]), off["telemetry"]
-    if shadow["telemetry"].get("tu_label_final") in {"APPOINTMENT", "DOCTOR_INFO", "DOCTOR_SCHEDULE"}:
-        assert "role_layer" in shadow["telemetry"], shadow["telemetry"]

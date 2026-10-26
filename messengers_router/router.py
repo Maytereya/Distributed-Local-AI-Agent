@@ -3374,9 +3374,7 @@ async def _complete_route_after_doctor_guard(
     # Понимание хода (ход (б), шаг 1): услуги и свойство ценовой реплики — один раз, до
     # подстановки каталога, которая иначе сводит список к одной услуге. В тени только пишется.
     await turn_understanding.observe_price_turn(decision.label, user_text=user_text, pending=memory.get_pending(state))
-    # Ход (г), этап 2: «слово → роль» по каталогу МИС — в тени рядом с правилами (`roles_catalog_llm = shadow`).
-    role_pick.launch(decision.label, user_text, str(decision.entities.get("specialty") or ""), services)
-    decision = await role_pick.apply(decision, user_text, services)  # режим `on`: роль решает LLM по каталогу
+    decision = await role_pick.apply(decision, user_text, services)  # ход (г): роль решает LLM по каталогу МИС
     decision = await _inject_catalog_candidates(
         decision,
         user_text=user_text,

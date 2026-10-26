@@ -354,7 +354,9 @@ async def settle_shadows(timeout_s: float = SHADOW_SETTLE_S) -> None:
             module = __import__(f"messengers_router.{name}", fromlist=["settle"])
         except ImportError:  # версия бота до этих теней
             continue
-        await module.settle(timeout_s)
+        settle = getattr(module, "settle", None)
+        if settle is not None:  # тень снята вместе с выключателем (`roles_catalog_llm`, 29.10)
+            await settle(timeout_s)
 
 
 def session_rows(rows: list[dict[str, Any]], session_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

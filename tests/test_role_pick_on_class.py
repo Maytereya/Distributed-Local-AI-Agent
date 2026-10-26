@@ -5,7 +5,7 @@
 офтальмолог, «лор» → оториноларинголог, «сердечно-сосудистый хирург» — не хирург, «мануальный терапевт» — не терапевт; роли
 нет у врачей региона — честное «такого специалиста нет» + оффер оператора (`role_absent`), а не общий «нет данных»; отказ
 стоп-листа на роль, которая в каталоге есть, снимается; «детский X» — оператору (`role_qualifier`); цена приёма, сбой LLM и
-пустой каталог — как было. Под `off` и `shadow` решение хода не меняется. LLM — подделка настоящего типа.
+пустой каталог — как было. LLM — подделка настоящего типа. Путь `off` / `shadow` снят 29.10 (STEP-2026-10-29-SWITCH-REMOVAL).
 """
 
 from __future__ import annotations
@@ -26,10 +26,8 @@ _SERVICES = object()  # каталог подменяется — сервисн
 
 
 def _apply(
-    monkeypatch, text: str, answer, *, label: str = "APPOINTMENT", rules: str = "", flags=(), mode: str = "on", catalog=_CATALOG, entities=None
+    monkeypatch, text: str, answer, *, label: str = "APPOINTMENT", rules: str = "", flags=(), catalog=_CATALOG, entities=None
 ):
-    from messengers_router.runtime_config import config as cfg
-
     fake = _LLM({_MARK: answer})
     decision = RouteDecision(label=label, entities={**({"specialty": rules} if rules else {}), **(entities or {})}, flags=set(flags))
 
@@ -37,19 +35,12 @@ def _apply(
         return catalog
 
     with monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_ROLES_CATALOG_LLM", mode, raising=False)
         patch.setattr(role_pick, "catalog", cat)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
         choice._CACHE.clear()
         out = asyncio.run(role_pick.apply(decision, text, _SERVICES))
     return decision, out, fake.calls
-
-
-@pytest.mark.parametrize("mode", ["off", "shadow"])
-def test_off_and_shadow_do_not_touch_the_decision(monkeypatch, mode):
-    before, after, calls = _apply(monkeypatch, "нужен окулист", _picks("офтальмолог"), mode=mode)
-    assert after is before and not calls
 
 
 @pytest.mark.parametrize(

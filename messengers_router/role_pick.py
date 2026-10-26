@@ -1,36 +1,29 @@
-"""«Слово пациента → роль приёма» по каталогу МИС: точный слой + выбор LLM — в тени (ход (г), L-17, этап 2;
-STEP-2026-10-21-G-ROLE-PICK-SHADOW).
+"""«Слово пациента → роль приёма» по каталогу МИС: точный слой + выбор LLM (ход (г), L-17, этапы 2–3;
+STEP-2026-10-21-G-ROLE-PICK-SHADOW, STEP-2026-10-21-G-ROLE-PICK-ON).
 
 Решения владельца 20.10 (г) 1, 2, 6: роль решает LLM по каталогу ролей из среза врачей МИС, наработки кода (точный слой
-каталога, `extract_specialty`) — кандидаты; даже где точный слой нашёл роль, сначала проверить, насколько точно он
-находит: LLM в тени рядом с ним, счёт расхождений. Детские и промахи резолвера — через LLM, а не правилами.
+каталога, `extract_specialty`) — кандидаты. Детские и промахи резолвера — через LLM, а не правилами.
 
-Под `[MESSENGER_ROUTER] roles_catalog_llm = shadow` на ходе о враче (метка врача или записи, специальность правил или
-роль, названная словами МИС, — при любой несрочной метке: «сколько стоит приём X», «есть ли у вас X» под OTHER) — параллельно ходу, вне его бюджета (`choose(..., shadow=True)`), ход не ждёт:
+На метках врача и записи (`apply`, в бюджете хода):
 
 1. точный слой каталога (`RoleCatalog.find`): `exact` / `partial` — кандидаты, первыми в списке вариантов;
 2. `choose(role_pick)` по ролям приёма каталога: номер роли, исход `qualifier` (пациент уточнил то, чего нет в названии
-   роли: «детский», «по ДМС»), `not_role` (это процедура или услуга, не приём врача) или «ни одна»;
-3. строка `role_shadow` после ответа (как тень `pending_reply`): `role_layer` (exact | exact_many | partial | miss |
-   no_catalog), `role_exact` — роль точного слоя, `role_rules` — роль, в которую ложится специальность правил,
-   `role_llm` — роль LLM или исход, `role_llm_agree` — LLM согласна с точным слоем (там, где он нашёл одну роль),
-   `role_rules_agree` — правила согласны с LLM (если имя правил легло в роль каталога; иначе `role_rules_unmapped`).
+   роли: «детский», «по ДМС»), `not_role` (это процедура или услуга, не приём врача), `absent` или «ни одна»;
+3. решение действует: роль из каталога, честное «нет» по данным + оффер, уточнение — оператору; поля `role_*` — в строку хода.
    Названия ролей — данные МИС, реплики пациента в строке нет.
 
-`off` (по умолчанию) — ход не меняется ни на такт; ответов тень не меняет никогда. `on` — решение действует (`apply`):
-роль из каталога, честное «нет» по данным + оффер, уточнение — оператору (только метки врача и записи).
+Выключатель `roles_catalog_llm` (off / shadow / on) снят 29.10 после недели `on` на проде (деплой 13, 21.10;
+STEP-2026-10-29-SWITCH-REMOVAL): путь `off` и тень удалены, поведение — как на проде с `on`.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from . import llm_runtime, turn_telemetry
 from .choice import Option, Status, Task, choose
-from .runtime_config import config as _cfg
 from .services._role_catalog import RoleCatalog, _hit, _stem, _tokens, build_role_catalog
 from .services._symptom_specialists import in_region, region_doctors
 
@@ -44,15 +37,7 @@ ROLE_TASK = Task(
 )
 _DOCTOR_LABELS = frozenset({"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"})
 _SAFETY_LABELS = frozenset({"URGENT", "COMPLAINT", "MEDICAL_ADVICE"})
-_SIDE_KIND = "role_shadow"
-_CAP_S = 20.0
-_PENDING: set[asyncio.Future[None]] = set()
 _CATALOG: dict[str, Any] = {"key": None, "value": None}
-
-
-def mode() -> str:
-    raw = str(getattr(_cfg, "MR_ROLES_CATALOG_LLM", "off") or "").strip().lower()
-    return raw if raw in {"off", "shadow", "on"} else "off"
 
 
 async def catalog(services: "Services") -> RoleCatalog:
@@ -66,19 +51,7 @@ async def catalog(services: "Services") -> RoleCatalog:
     return _CATALOG["value"]
 
 
-def launch(label: str, user_text: str, rules_specialty: str, services: "Services | None") -> None:
-    """Ход о враче: запустить тень (под `shadow`). Ход её не ждёт."""
-
-    if mode() != "shadow" or services is None or not str(user_text or "").strip():
-        return
-    if label in _SAFETY_LABELS:
-        return
-    task = asyncio.ensure_future(_decide(label, user_text, str(rules_specialty or ""), services, turn_telemetry.current_ref()))
-    _PENDING.add(task)
-    task.add_done_callback(_PENDING.discard)
-
-
-async def decide(label: str, user_text: str, rules_specialty: str, cat: RoleCatalog, *, shadow: bool = True) -> dict[str, Any] | None:
+async def decide(label: str, user_text: str, rules_specialty: str, cat: RoleCatalog) -> dict[str, Any] | None:
     """Решение «слово → роль» по каталогу: поля телеметрии; не ход о враче — None."""
 
     if not cat.roles:
@@ -105,7 +78,7 @@ async def decide(label: str, user_text: str, rules_specialty: str, cat: RoleCata
         "role_exact": match.exact[0].name if layer == "exact" else None,
         "role_rules": rules_role or (rules_specialty or None),
     }
-    choice = await choose(ROLE_TASK, user_text, options, shadow=shadow)
+    choice = await choose(ROLE_TASK, user_text, options)
     if choice.failed:
         llm = choice.status.value
     elif choice.status is Status.OUTCOME:
@@ -125,37 +98,13 @@ async def decide(label: str, user_text: str, rules_specialty: str, cat: RoleCata
     return fields
 
 
-async def _decide(label: str, user_text: str, rules_specialty: str, services: "Services", ref: tuple[str, str] | None) -> None:
-    token = turn_telemetry.side_begin(ref) if ref is not None else None
-    cancelled = False
-    fields: dict[str, Any] | None
-    try:
-        cat = await catalog(services)
-        fields = await asyncio.wait_for(decide(label, user_text, rules_specialty, cat), _CAP_S)
-    except asyncio.TimeoutError:
-        fields = {"role_llm": "late"}
-    except asyncio.CancelledError:  # остановка сервиса: строку всё равно пишем
-        fields, cancelled = {"role_llm": "late"}, True
-    except Exception:  # тень — новый слой: её сбой не ломает ход
-        logger.warning("role_pick_shadow_failed", exc_info=True)
-        fields = {"role_llm": "error"}
-    if token is not None and fields is None:
-        turn_telemetry.side_cancel(token)  # ход не о враче — строки нет
-    elif token is not None:
-        turn_telemetry.side_finish(token, _SIDE_KIND, **fields)
-    elif fields:
-        turn_telemetry.note(**fields)
-    if cancelled:
-        raise asyncio.CancelledError
-
-
-# Режим `on` действует только на метках врача и записи: цену приёма («сколько стоит приём X») решает путь цены по строкам
-# прайса — там роль только в тени.
+# Решение действует только на метках врача и записи: цену приёма («сколько стоит приём X») решает путь цены по строкам
+# прайса.
 _ACTING_LABELS = frozenset({"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"})
 
 
 async def apply(decision: Any, user_text: str, services: "Services | None") -> Any:
-    """Режим `on` (ход (г), этап 3; STEP-2026-10-21-G-ROLE-PICK-ON): роль хода решает LLM по каталогу МИС, правила — кандидаты.
+    """Ход (г), этап 3 (STEP-2026-10-21-G-ROLE-PICK-ON): роль хода решает LLM по каталогу МИС, правила — кандидаты.
 
     - роль выбрана и правила назвали другую (или никакую) — специальность хода = роль каталога («окулист» → офтальмолог,
       «сердечно-сосудистый хирург» — не «хирург»); отказ стоп-листа снимается — роль в клинике есть;
@@ -166,13 +115,13 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
     Решение — вызов хода (в его бюджете), поля `role_*` — в строку хода, `role_acted` — что поменялось.
     """
 
-    if mode() != "on" or services is None or decision.label not in _ACTING_LABELS or not str(user_text or "").strip():
+    if services is None or decision.label not in _ACTING_LABELS or not str(user_text or "").strip():
         return decision
     if "doctor_name_verified" in (decision.flags or ()) or any((decision.entities or {}).get(k) for k in _DOCTOR_KEYS):
         return decision  # назван врач (фамилия): роль решает его карточка, а не слово о специальности (dev g0124)
     try:
         cat = await catalog(services)
-        fields = await decide(decision.label, user_text, str(decision.entities.get("specialty") or ""), cat, shadow=False)
+        fields = await decide(decision.label, user_text, str(decision.entities.get("specialty") or ""), cat)
     except Exception:  # новый слой: его сбой не ломает ход
         logger.warning("role_pick_on_failed", exc_info=True)
         return decision
@@ -242,11 +191,3 @@ def _atom_named(role: Any, text: str) -> str:
         if stems and all(_hit(stem, words) for stem in stems):
             return atom
     return role.atoms[0] if role.atoms else role.name
-
-
-async def settle(timeout_s: float) -> None:
-    """Дождаться теней не дольше `timeout_s` — для стенда и тестов. На проде не зовётся."""
-
-    pending = [task for task in _PENDING if not task.done()]
-    if pending:
-        await asyncio.wait(pending, timeout=timeout_s)
