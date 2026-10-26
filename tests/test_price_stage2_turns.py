@@ -67,7 +67,6 @@ PROD_D17: dict[str, Any] = {
     "MR_PRICE_BUDGET_CLARIFY": "on",
     "MR_DOCTORS_BY_SERVICE_DATA": "shadow",
     "MR_PREPARE_GENERAL_MEMO_LLM": "on",
-    "MR_BUTTON_PASS_RULES": "on",
     "MR_PRICE_GENERAL_CLARIFY": "on",
     "MR_SYNONYM_WORDFORMS": "on",
     "MR_PRICE_SELECT_RULES": "general",

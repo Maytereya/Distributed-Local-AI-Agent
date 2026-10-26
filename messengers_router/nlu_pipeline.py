@@ -192,12 +192,6 @@ def rule_defers_topic(rule: RouteDecision, text: str) -> bool:
     return bool(_topic_by_llm_rules() & set(_rule_branch(rule, text).split("+")))
 
 
-def _button_pass_rules() -> bool:
-    """`[MESSENGER_ROUTER] button_pass_rules = on` (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM): ход-кнопка `pass` — тему решает правило."""
-
-    return str(getattr(c, "MR_BUTTON_PASS_RULES", "off") or "").strip().lower() == "on"
-
-
 def _topic_by_llm(
     rule: RouteDecision | None,
     topic_source: dict[str, str],
@@ -214,9 +208,10 @@ def _topic_by_llm(
     wanted = _topic_by_llm_rules()
     if not (wanted and wanted & set(str(topic_source.get("rule") or "").split("+"))):
         return False
-    if button_topic and _button_pass_rules():
+    if button_topic:
         # Тему выбрал пациент нажатием (`button_menu`, режим `pass`), подпись — запрос этой темы: переспрашивать её у LLM —
-        # только ждать классификатор (прод 23.10: 11–12 с на «Где и до скольки принимают»). Решает правило, как без списка.
+        # только ждать классификатор (прод 23.10: 11–12 с на «Где и до скольки принимают»). Решает правило, как без списка
+        # (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM; выключатель `button_pass_rules` снят 31.10).
         turn_telemetry.note(nlu_topic_by_llm="button")
         return False
     return True

@@ -215,7 +215,6 @@ class MessengerRouterConfig:
     prepare_by_parse: str
     price_by_parse: str
     topic_by_llm: str
-    button_pass_rules: str
     booking_target_slot_llm: str
     button_answer_topic: str
     button_topic_hint: str
@@ -665,11 +664,6 @@ settings = Settings(
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
         # [MESSENGER_ROUTER] topic_by_llm
         topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
-        # Ход-кнопка режима `pass` (подпись кнопки — полноценный запрос, тему пациент выбрал нажатием, `button_menu`) тему у LLM
-        # (`topic_by_llm`) не переспрашивает — решает правило, как без `topic_by_llm` (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM:
-        # «Где и до скольки принимают» с деплоя 15 — классификатор 11–12 с вместо 0,15–0,5 с). Набранный текст — как был.
-        # off — как было. [MESSENGER_ROUTER] button_pass_rules
-        button_pass_rules=_get_enum("MESSENGER_ROUTER", "button_pass_rules", default="off", allowed={"off", "on"}),
         # Вопрос цели записи («К какому врачу или на какую услугу записать?» — кнопка «Записаться на приём» и тот же вопрос
         # текстом) — вопрос-слот одной функции ответа на висящий вопрос (`pending_buttons`): ответ, который LLM признала
         # ответом, идёт в запись, а не в вопрос «Отменить оформление?» правил смены темы
@@ -897,7 +891,6 @@ MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
-MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
 MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic
 MR_BUTTON_TOPIC_HINT = settings.messenger_router.button_topic_hint
