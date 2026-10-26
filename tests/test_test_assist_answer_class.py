@@ -320,8 +320,18 @@ def test_priced_partly_prints_found_prices_and_offers_the_rest(ta_world, monkeyp
     )
 
     assert "— Кальпротектин в кале — 2 730 руб., срок готовности 1–9 дней" in out["text"], out["text"]
+    # Решение владельца 26.10 (вариант 3): «точно в таком виде нет» — до строк и цен, чтобы цена не читалась ответом «да».
+    assert out["text"].startswith(test_assist_answer.PRICED_PARTLY_HEADING), out["text"]
+    assert test_assist_answer.PICKED_HEADING not in out["text"]
     assert test_assist_answer.PRICED_PARTLY_TAIL in out["text"]
     assert out["text"].endswith(OFFER) and out["pending_offer"]  # вопрос-оффер — последним, после приписки о ценах
+
+
+def test_priced_full_answer_keeps_the_plain_heading(ta_world, monkeypatch):
+    out = turn(ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=_answers(_pick("Вирус кори Ig G")), cfg_extra=_PRICE)
+
+    assert out["text"].startswith(test_assist_answer.PICKED_HEADING), out["text"]
+    assert test_assist_answer.PRICED_PARTLY_HEADING not in out["text"]
 
 
 @pytest.mark.parametrize("ta_answer", [verdict("no_data"), verdict("need_name"), ConnectionError("тест: LLM недоступна")])

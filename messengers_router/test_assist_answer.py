@@ -66,6 +66,10 @@ NEED_NAME_TEXT = "Ответ зависит от конкретного анал
 # Под `test_assist_price = on`: цена уже напечатана — хвост о ней не обещает; частичный ответ — формулировка владельца 26.10.
 PRICED_TAIL = "Подготовку подскажу по названию."
 PRICED_PARTLY_TAIL = "Остального из вашего вопроса в прайсе нет — уточнит оператор."
+# Частичный ответ с ценой (решение владельца 26.10, вариант 3): «нет» — до строк и цен, иначе «В прайсе клиники есть: … —
+# 2 300 руб.» читалось как «да, стоит 2 300» на «отдельно, не в комплексе» (g0811) и «суммарные» при строке IgG (g0388).
+# «Ближайшее» не пишем: `partly` — и «из перечня нашлась только часть», там строки — те самые анализы.
+PRICED_PARTLY_HEADING = "Точно в таком виде в прайсе нет. Есть:"
 
 
 def enabled() -> bool:
@@ -244,8 +248,8 @@ def _price_as_of(rows: Sequence[dict[str, Any]]) -> str | None:
     return str(checked.get("data_as_of") or "")
 
 
-def _priced_text(rows: Sequence[dict[str, Any]], tail: str) -> str | None:
-    """Строки с ценами и хвост; приписка о ценах региона — до оффера. None — цен печатать нельзя (ответ как под off)."""
+def _priced_text(rows: Sequence[dict[str, Any]], tail: str, heading: str = PICKED_HEADING) -> str | None:
+    """Заголовок, строки с ценами и хвост; приписка о ценах региона — до оффера. None — цен печатать нельзя (ответ как под off)."""
 
     from .renderer import _bundle_text, _extract_price_amount
 
@@ -256,7 +260,7 @@ def _priced_text(rows: Sequence[dict[str, Any]], tail: str) -> str | None:
     turn_telemetry.note(ta_priced=priced)
     if tail == PRICED_TAIL and priced < len(rows):
         tail = PICKED_TAIL  # строка без суммы (в прайсе бывает пустая) — о её цене ответ ничего не сказал
-    return _bundle_text([PICKED_HEADING, *(f"— {_priced_line(row)}" for row in rows), "", tail], as_of, priced=True)
+    return _bundle_text([heading, *(f"— {_priced_line(row)}" for row in rows), "", tail], as_of, priced=True)
 
 
 def envelope(answer: Answer, state: Any, memory: Any | None, *, attachments: Sequence[Any] = ()) -> tuple[Any, bool]:
@@ -279,7 +283,7 @@ def envelope(answer: Answer, state: Any, memory: Any | None, *, attachments: Seq
     elif answer.kind == PARTLY and answer.rows:
         text, offer = f"{_rows_block(answer.rows)}\n\n{PARTLY_TAIL}", True
         if priced:
-            text = _priced_text(answer.rows, PRICED_PARTLY_TAIL) or text
+            text = _priced_text(answer.rows, PRICED_PARTLY_TAIL, PRICED_PARTLY_HEADING) or text
     else:
         text, offer = NO_DATA_TEXT, True
     if offer and memory is not None:
