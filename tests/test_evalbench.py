@@ -891,3 +891,16 @@ def test_run_with_unreachable_live_llm_is_not_valid():
 
     assert llm_unreachable(Counter({"ok": 5, "error:ConnectTimeout": 15, "error:ConnectionError": 24})) == 39
     assert llm_unreachable(Counter({"ok": 5, "timeout": 2, "cancelled": 1, "cache_hit": 9})) == 0
+
+
+def test_price_pairs_see_the_overview_card_format():
+    """Обзор голого названия печатает «Название»: и под ним «— цена: N руб.» — сумма связывается с заголовком блока
+    (разбор 95 цен 26.10: в `d13_svc` 5 таких ответов детектор считал «без цены»); вне блока — как было."""
+
+    catalog = PriceCatalog(_ROWS)
+    pairs = catalog.pairs(
+        "«Глюкоза»:\n— цена: 300 руб.\n— срок готовности: 1 день\n— где: в лабораторных филиалах\n\n"
+        "Стоимость этой услуги — 300 руб.\n"
+        "«Общий анализ крови»:\nСправка: 500 руб."
+    )
+    assert [(p.status, p.service_id) for p in pairs] == [("matched", 3), ("unattributed", None), ("unattributed", None)]

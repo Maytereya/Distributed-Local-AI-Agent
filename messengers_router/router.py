@@ -2333,6 +2333,38 @@ def _maybe_start_catalog_confirm(
     )
 
 
+def _booking_option_lines(names: list[str]) -> tuple[str, bool]:
+    """Строки вариантов записи: под `booking_options_price = on` — «— Название — N руб.» из строки прайса процедуры с тем же
+    названием (принцип 1; давность прайса — как у пути цены); строка приёма врача и название без строки — без цены (25.09).
+
+    :return: (строки, напечатана ли хоть одна цена)
+    """
+
+    if str(getattr(c, "MR_BOOKING_OPTIONS_PRICE", "off") or "").strip().lower() != "on":
+        return "\n".join(f"— {name}" for name in names), False
+    from .renderer import _extract_price_amount, _format_rub
+    from .services._doctors_helpers import _is_consultation_service_query
+    from .services._prices_helpers import _catalog_rows
+    from .services.core import prices_checked
+
+    try:
+        rows = {" ".join(str(r.get("serviceName") or "").split()).casefold(): r for r in _catalog_rows(None) if isinstance(r, dict)}
+    except Exception:  # каталог недоступен — названия без цен, как было
+        rows = {}
+    amounts: dict[str, int] = {}
+    for name in names:
+        row = rows.get(" ".join(name.split()).casefold())
+        amount = _extract_price_amount(row) if row is not None and not _is_consultation_service_query(name) else None
+        if amount is not None:
+            amounts[name] = amount
+    checked = prices_checked({"prices": list(amounts)}) if amounts else {}
+    if not isinstance(checked, dict) or checked.get("handoff_required") or not checked.get("prices"):
+        amounts = {}
+    turn_telemetry.note(booking_options_priced=len(amounts))
+    lines = "\n".join(f"— {name} — {_format_rub(amounts[name])}" if name in amounts else f"— {name}" for name in names)
+    return lines, bool(amounts)
+
+
 def _maybe_ask_booking_service_choice(
     *,
     decision: RouteDecision,
@@ -2360,13 +2392,17 @@ def _maybe_ask_booking_service_choice(
     expects.ask(expects.Question.BOOKING_SERVICE, kind=expects.PICK, options=tuple(names))
     # Без номеров: ответ «1» правила не разбирают (ответ на висящий вопрос силами LLM — подбаг A
     # BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH, решение владельца о `_expects`); название из списка — сильное совпадение.
-    lines = "\n".join(f"— {name}" for name in names)
+    lines, priced = _booking_option_lines(names)
     if general:
         # Названа группа услуг («массаж»): названия — примеры, пациент может назвать и свою.
         text = "Уточните, пожалуйста, какую именно услугу записать — как в направлении врача"
         text += f", например:\n{lines}" if names else "."
     else:
         text = f"Уточните, пожалуйста, на какую услугу вас записать:\n{lines}\nНапишите название из списка."
+    if priced:
+        from .renderer import _bundle_text
+
+        text = _bundle_text([text], "", priced=True)
     clean = {k: v for k, v in entities.items() if k not in {BOOKING_SERVICE_OPTIONS_KEY, BOOKING_SERVICE_CLARIFY_KEY}}
     return (
         _copy_decision(decision, entities=clean, flags=set(decision.flags) | {"booking_service_choice_requested"}),
@@ -2465,7 +2501,11 @@ _WALKIN_FLAGS = frozenset({"rule_nonbookable_walkin", "policy_nonbookable_walkin
 
 
 # Темы, где реплика — не голое название услуги по смыслу хода: безопасность, запись и результаты решают свои пути.
-_OVERVIEW_SKIP_LABELS = role_pick._SAFETY_LABELS | {"APPOINTMENT", "TEST_RESULT"}
+# Обзор голого названия — и на темах записи, адресов и врачей (решение владельца 26.10, п. 4 топ-5): «УЗИ щитовидки» правило ставит
+# в запись, «Фгдс» — во врачей, и вместо цены пациент получал «на какую услугу вас записать» или список врачей.
+_OVERVIEW_SKIP_LABELS = role_pick._SAFETY_LABELS | {"TEST_RESULT"}
+# На этих темах строки приёма врача — не кандидаты обзора: цену приёма к специальности не называем, пока врач не выбран (25.09).
+_OVERVIEW_NO_RECEPTION_LABELS = frozenset({"APPOINTMENT", "DOCTOR_INFO", "DOCTOR_SCHEDULE"})
 
 
 async def _maybe_service_overview(
@@ -2486,7 +2526,7 @@ async def _maybe_service_overview(
         or turn_understanding.price_turn_facet(user_text)[0] in {"price", "readiness", "prepare"}
     ):
         return None
-    overview = await service_overview.decide(user_text)
+    overview = await service_overview.decide(user_text, without_reception=decision.label in _OVERVIEW_NO_RECEPTION_LABELS)
     if overview is None:
         return None
     return decision, Plan(label=decision.label), Evidence(items={ek.SERVICE_OVERVIEW: overview.payload()})

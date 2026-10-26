@@ -13,6 +13,8 @@
   текста акции МИС — `promo`;
 - сумма есть в данных, но строка ничем не объяснена — «без привязки»: так выглядит выдуманная
   LLM цена, совпавшая с чьей-то ценой прайса (adversary «1 990 руб.»);
+- карточка услуги обзора голого названия (`service_overview`): заголовок «Название»: и под ним «— цена: N руб.» — сумма
+  без названия в своей строке ищет его в заголовке своего блока (строки «— …» под заголовком);
 - корзина-калькулятор (`basket_calc`, ТЗ 17.08): строка «Итого: …» — `total`, только если её суммы сходятся с
   напечатанными позициями («По услуге «…»:» и строки под ней: одна цена у каждой — сумма; иначе «от суммы меньших до
   суммы больших»); не сходится — проверяется как любая сумма (выдуманный итог — «без источника»). Строки перечня под
@@ -36,6 +38,8 @@ _AMOUNT_RE = re.compile(r"(?<![\d.,])(\d{1,3}(?:[\s  ]\d{3})+|\d+)(?:[.,]\d{1
 _GROUP_RE = re.compile(r"^по услуге «.*»:$")
 _ROW_RE = re.compile(r"^\d+\.\s")
 _TOTAL_PREFIX = "итого"
+# Рендер обзора голого названия (`service_overview._one`): «Название»: — заголовок блока, под ним строки «— …».
+_HEADER_RE = re.compile(r"^«(.+)»:$")
 _TAKE_HEADER = "взятие биоматериала оплачивается отдельно:"
 
 
@@ -103,8 +107,14 @@ class PriceCatalog:
         lines = str(text or "").splitlines()
         totals = _basket_totals(lines)
         in_takes = False
+        header = ""
         for line in lines:
             norm_line = _norm(line)
+            head = _HEADER_RE.match(norm_line)
+            if head:
+                header = head.group(1)
+                continue
+            header = header if norm_line.startswith("—") else ""
             if norm_line == _TAKE_HEADER:
                 in_takes = True
                 continue
@@ -115,6 +125,8 @@ class PriceCatalog:
                 continue
             for amount in amounts:
                 found = next(((name, sid) for name, sid in self.by_cost.get(amount, ()) if name in norm_line), None)
+                if found is None and header:
+                    found = next(((name, sid) for name, sid in self.by_cost.get(amount, ()) if name in header), None)
                 if found is not None:
                     out.append(PricePair(amount, found[1], self.names.get(found[1]), "take" if in_takes else "matched"))
                 elif amount in self.doctor_costs and _DOCTOR_LINE_RE.search(line):

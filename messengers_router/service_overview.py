@@ -5,12 +5,15 @@
 список врачей. Решение владельца: голое название — максимум пациенту (что это, цена, подготовка, где) или уточнить, что
 интересует; «всё» — максимум.
 
-Под `service_answer_from_data = on` (`choose`, задача `service_overview`, промпт в двух локациях): правила дают кандидатов —
+Под `bare_name_overview = on` (до 26.10 — под `service_answer_from_data`; связку владелец развязал: топ-5 разбора 95 цен, п. 4;
+`choose`, задача `service_overview`, промпт в двух локациях): правила дают кандидатов —
 строки прайса по реплике (как у ответа о клинике, `service_answer`); LLM решает, голое ли это название, и выбирает строки,
 которые пациент назвал. Одна строка — максимум из данных (принцип 1, печатает код): цена и срок готовности — из прайса, что это
 и подготовка — из справочника услуг МИС (`description`, `preparation`), где — правило клиники (анализы — в лабораторных
-филиалах без записи, остальное — по записи). Несколько строк — варианты с ценами и вопрос, какой интересует. Вопрос или
-просьба в реплике, «не услуга», «нет среди строк», сбой — как было.
+филиалах без записи; без срока готовности — где и как записаться, подскажу по запросу: «по записи» для ЭКГ неверно, а знание
+«ЭКГ без записи» — решение LLM пути walk-in, не этого ответа). Несколько строк — варианты с ценами и вопрос, какой интересует.
+Вопрос или просьба в реплике, «не услуга», «нет среди строк», сбой — как было. На темах записи и врачей строки приёма врача в
+кандидаты не идут: цену приёма к специальности не называем, пока врач не выбран (решение 25.09).
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from typing import Any
 
 from . import llm_runtime, turn_telemetry
 from .choice import Option, Status, Task, choose
-from .service_answer import enabled  # noqa: F401 — тот же выключатель, что у ответа по данным
+from .runtime_config import config as _cfg
 
 TASK = Task(
     name="service_overview",
@@ -55,6 +58,22 @@ class Overview:
         return Overview(rows) if rows else None
 
 
+def enabled() -> bool:
+    """`[MESSENGER_ROUTER] bare_name_overview = on`; мусор и отсутствие — off (как было). Ответ по данным
+    (`service_answer_from_data`) этот путь не включает: у каждого свой выключатель и своя карточка (решение владельца 26.10)."""
+
+    return str(getattr(_cfg, "MR_BARE_NAME_OVERVIEW", "off") or "").strip().lower() == "on"
+
+
+def _is_reception(row: dict[str, Any]) -> bool:
+    """Строка приёма или консультации врача (то же определение, что у вида услуги пути цены)."""
+
+    from .service_answer import _row_name
+    from .services._doctors_helpers import _is_consultation_service_query
+
+    return _is_consultation_service_query(_row_name(row))
+
+
 def candidate(user_text: str) -> bool:
     """Похоже на голое название (кандидат, не решение): коротко и непусто."""
 
@@ -62,14 +81,19 @@ def candidate(user_text: str) -> bool:
     return 0 < len(words) <= MAX_WORDS
 
 
-async def decide(user_text: str) -> Overview | None:
-    """Голое ли название и какие строки прайса пациент назвал — решение LLM; иначе или при сбое — None (как было)."""
+async def decide(user_text: str, *, without_reception: bool = False) -> Overview | None:
+    """Голое ли название и какие строки прайса пациент назвал — решение LLM; иначе или при сбое — None (как было).
+
+    :param without_reception: тема записи или врачей — строки приёма врача не кандидаты (решение 25.09)
+    """
 
     from .service_answer import _price_rows, _row_name
     from .services._prices_helpers import _catalog_rows
 
     rows = await asyncio.to_thread(_catalog_rows, None)
     pool = _price_rows([user_text], user_text, rows, ())
+    if without_reception:
+        pool = [row for row in pool if not _is_reception(row)]
     if not pool:
         turn_telemetry.note(svc_overview="no_candidates")
         return None
@@ -150,7 +174,8 @@ def _one(row: dict[str, Any]) -> str:
     if _deadline(row):
         lines.append("— где: в лабораторных филиалах клиники, без записи, в порядке живой очереди; адреса — по запросу «где сдать».")
     else:
-        lines.append("— где: по записи; записаться — по запросу «записаться».")
+        # «По записи» — не для всего без срока готовности: ЭКГ по правилу клиники без записи (решает путь walk-in, не этот ответ).
+        lines.append("— где и как записаться — подскажу по запросу «где сделать» или «записаться».")
     return _bundle_text(lines, "", priced=bool(amount))
 
 
