@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, cast
 
 from .llm_mode_policy import RuntimeOptions
@@ -258,6 +259,7 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
     deadline_s = _classify_deadline_s()
     # Выключатель off — вызов прежний, без нового параметра.
     guard: dict[str, Any] = {"deadline_s": deadline_s} if deadline_s else {}
+    started = time.monotonic()
     try:
         raw = await generate_text(
             prompt,
@@ -268,7 +270,9 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
         )
     except Exception as exc:
         log.warning("ollama_classify_failed", exc_info=True)
-        if guard and isinstance(exc, (asyncio.TimeoutError, LLMQueueTimeoutError)):
+        # Оборвал потолок, а не сбой раньше него (клиент LLM сам бросил тайм-аут сразу): прошло не меньше потолка; 0,05 с —
+        # округление часов цикла событий.
+        if guard and isinstance(exc, (asyncio.TimeoutError, LLMQueueTimeoutError)) and time.monotonic() - started >= deadline_s - 0.05:
             turn_telemetry.note(nlu_timeout_s=deadline_s)
         return "", sanitize_classifier_json(
             {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_timeout"]}

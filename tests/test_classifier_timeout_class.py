@@ -157,6 +157,19 @@ def test_queue_wait_counts_toward_the_guard(mini_prod_world, monkeypatch):  # no
     assert got == want
 
 
+def test_instant_llm_timeout_under_the_guard_is_not_counted_as_cut(mini_prod_world, monkeypatch):  # noqa: F811
+    """Встречный: клиент LLM сам бросил тайм-аут сразу — потолок ничего не обрывал, `nlu_timeout_s` в журнале нет (иначе
+    стенд `down_timeout` без зависания показал бы «сработал предохранитель» на каждом ходе)."""
+
+    text = _REPLIES["no_rule"][0]
+    instant = _turn(mini_prod_world, monkeypatch, text, guard=_SLOW_S, delay=None)
+    failed = _turn(mini_prod_world, monkeypatch, text, guard=0, delay=None)
+
+    assert instant["classifier"] == ["timeout"] and "nlu_timeout_s" not in instant["telemetry"], instant["telemetry"]
+    got, want = _same(instant, failed)
+    assert got == want
+
+
 def test_urgent_stays_urgent_under_the_guard(mini_prod_world, monkeypatch):  # noqa: F811
     turn = _turn(mini_prod_world, monkeypatch, _URGENT, guard=_GUARD_S, delay=_SLOW_S)
 
