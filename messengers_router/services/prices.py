@@ -818,7 +818,8 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         visible_limit=10,
     )
     if family_payload and not doctor_id:
-        variants = list(family_payload.get("family_variants") or [])
+        # Кандидаты для выбора LLM — полный список правил; показ («все») — только строки той же услуги (`family_variants`).
+        variants = list(family_payload.get("family_candidates") or family_payload.get("family_variants") or [])
         shown = variants[: int(family_payload.get("visible_limit") or 10)]
         selection = await _llm_select(variants, shown)
         stop = _match_policy_payload(selection, str(query or ""), entities)
@@ -1001,7 +1002,8 @@ async def service_bundle_info(
         visible_limit=10,
     )
     if family_payload:
-        variants = list(family_payload.get("family_variants") or [])
+        # Кандидаты для выбора LLM — полный список правил; показ («все») — только строки той же услуги (`family_variants`).
+        variants = list(family_payload.get("family_candidates") or family_payload.get("family_variants") or [])
         shown = variants[: int(family_payload.get("visible_limit") or 10)]
         selection = await _llm_select(variants, shown)
         stop = _match_policy_payload(selection, str(query or ""), entities)

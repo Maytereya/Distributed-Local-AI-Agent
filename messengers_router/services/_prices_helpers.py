@@ -2757,10 +2757,6 @@ def _build_oak_canonical_payload(
     for row in extra_source:
         if not isinstance(row, dict):
             continue
-        # Хвост списка (его раскрывает «все») — только строки самого ОАК: ранжирование по словам «общий анализ крови»
-        # тянуло «Общий анализ мочи» и «ЗППП: анализ крови» (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD).
-        if not _OAK_PHRASE_RE.search(_normalise_input(str(row.get("serviceName") or row.get("name") or ""))):
-            continue
         key = (
             _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
             _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
@@ -2769,7 +2765,12 @@ def _build_oak_canonical_payload(
             continue
         extras.append(row)
 
-    variants = _annotate_price_rows_with_care_context(canonical + extras)
+    candidates = _annotate_price_rows_with_care_context(canonical + extras)
+    # Хвост списка (его раскрывает «все») — только строки самого ОАК: ранжирование по словам «общий анализ крови» тянуло
+    # «Общий анализ мочи» и «ЗППП: анализ крови» (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD). Кандидаты для выбора LLM — как были.
+    variants = candidates[: len(canonical)] + [
+        row for row in candidates[len(canonical) :] if _OAK_PHRASE_RE.search(_normalise_input(str(row.get("serviceName") or row.get("name") or "")))
+    ]
     visible_count = len(variants) if show_all else min(len(variants), visible_limit)
     remaining_count = max(0, len(variants) - visible_count)
     show_all_hint = ""
@@ -2783,6 +2784,7 @@ def _build_oak_canonical_payload(
         "service_name": "общий анализ крови",
         "service_kind": "family_query",
         "family_variants": variants,
+        "family_candidates": candidates,
         "showing_all": show_all,
         "visible_limit": visible_limit,
         "remaining_count": remaining_count,
@@ -2797,7 +2799,7 @@ def _same_service_tail(query_text: str, ranked: list[dict[str, Any]], visible_li
     информативное слово запроса (`_family_query_root_tokens`; «одно слово» — как у расширения семейства, `tokens_share_stem`,
     4 буквы). Расширение по одному корню тянуло в хвост чужие строки: «вирус гепатита» → «Вирус герпеса», «Вирус Эпштейна-Барр»
     (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD, решение владельца 26.10: полный список — только строки той же услуги). Видимые строки
-    — как были; информативных слов нет — как было.
+    — как были; информативных слов нет — как было. Только показ: кандидаты для выбора LLM (`family_candidates`) — полный список.
 
     :param query_text: исходный запрос пользователя
     :param ranked: кандидаты семейства по порядку показа
@@ -2868,7 +2870,8 @@ def _build_price_family_payload(
     if _match_drops_unsatisfiable_qualifier(query_text, offered_names, rows):
         return None
 
-    ranked = _annotate_price_rows_with_care_context(_same_service_tail(query_text, ranked, visible_limit))
+    candidates = _annotate_price_rows_with_care_context(ranked)
+    ranked = _same_service_tail(query_text, candidates, visible_limit)  # показ; кандидаты для выбора LLM — как были
 
     service_name = family_query
     visible_count = len(ranked) if show_all else min(len(ranked), visible_limit)
@@ -2884,6 +2887,7 @@ def _build_price_family_payload(
         "service_name": service_name,
         "service_kind": "family_query",
         "family_variants": ranked,
+        "family_candidates": candidates,
         "showing_all": show_all,
         "visible_limit": visible_limit,
         "remaining_count": remaining_count,
