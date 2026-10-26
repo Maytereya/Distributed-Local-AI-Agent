@@ -128,13 +128,6 @@ def _select_rules() -> str:
     return mode if mode in _RULES_TASKS else "off"
 
 
-def general_clarify_on() -> bool:
-    """`[MESSENGER_ROUTER] price_general_clarify = on` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» на пути
-    цены — уточнение, несколько разных услуг выбора — список; мусор — off (как было)."""
-
-    return str(getattr(_cfg, "MR_PRICE_GENERAL_CLARIFY", "off") or "").strip().lower() == "on"
-
-
 def price_task(*, judge_qualifier: bool = False, price_answer: bool = True) -> Task:
     """Задача выбора строки прайса: суд условия — свой промпт; под `[MESSENGER_ROUTER] price_judge_conditions = on` — с
     уточнённым правилом 3; на пути ответа о цене (`price_answer`) под `price_select_rules` — промпты с правилами (уточнённое
@@ -936,9 +929,8 @@ def reconcile_with_proposal(
       ею варианты вне списка; чужие строки уходят;
     - LLM не признала ни одной строки правил — показываем её выбор;
     - выбора нет — ответ правил: «не нашла» от LLM слабее, чем найденное правилами;
-    - под `price_general_clarify = on`: правила показали бы одну строку, а LLM выбрала с ней и другие услуги (не варианты
-      одной) — весь её выбор; иначе он сводился к строке правил («консультация врача» → приём хирурга,
-      BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3).
+    - правила показали бы одну строку, а LLM выбрала с ней и другие услуги (не варианты одной) — весь её выбор; иначе он
+      сводился к строке правил («консультация врача» → приём хирурга, BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3).
 
     :param proposal: строки, которые показали бы правила
     :param selection: выбор LLM
@@ -950,7 +942,7 @@ def reconcile_with_proposal(
     proposed = [row for row in (proposal or []) if isinstance(row, dict)]
     if not proposed:
         return list(selection.rows)
-    if len(proposed) == 1 and len(selection.rows) > 1 and general_clarify_on() and distinct_services(selection.rows):
+    if len(proposed) == 1 and len(selection.rows) > 1 and distinct_services(selection.rows):
         return list(selection.rows)
     selected_keys = {_row_key(row) for row in selection.rows}
     matched = [row for row in proposed if _row_key(row) in selected_keys]

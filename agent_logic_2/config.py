@@ -209,7 +209,6 @@ class MessengerRouterConfig:
     biomaterial_by_mis: str
     p1_facet_none_offer: str
     price_budget_clarify: str
-    price_general_clarify: str
     price_select_rules: str
     prepare_general_memo_llm: str
     turn_spans_llm: str
@@ -637,11 +636,6 @@ settings = Settings(
         # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
         # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
         price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
-        # Код после выбора строки цены LLM (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» / «не услуга» — уточнение,
-        # а не ответ правил со списком цен («гастропанель» → «Гастрин»); несколько разных услуг, выбранных LLM, — список на
-        # выбор, а не первая строка с её врачами («консультация врача» → приём хирурга). off — как было.
-        # [MESSENGER_ROUTER] price_general_clarify
-        price_general_clarify=_get_enum("MESSENGER_ROUTER", "price_general_clarify", default="off", allowed={"off", "on"}),
         # Правила промпта выбора строки на пути ответа о цене (BUG-2026-10-24-FOREIGN-PRICE-D17; суд записи — прежний промпт):
         # general — слишком общее название («анализы», приём врача без специальности) — не группа услуг правила 5, подходящих
         # позиций нет (промпты `*_general`). off — прежние промпты. [MESSENGER_ROUTER] price_select_rules
@@ -896,7 +890,6 @@ MR_GROUNDER_GENERIC_BY_LLM = settings.messenger_router.grounder_generic_by_llm
 MR_BIOMATERIAL_BY_MIS = settings.messenger_router.biomaterial_by_mis
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
-MR_PRICE_GENERAL_CLARIFY = settings.messenger_router.price_general_clarify
 MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
