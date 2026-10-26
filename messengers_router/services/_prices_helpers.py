@@ -3513,7 +3513,7 @@ def _resolve_fragment_service(fragment: str, retail_rows: list[dict[str, Any]]) 
 def list_condition_beside_on() -> bool:
     """`[MESSENGER_ROUTER] list_condition_beside = on`: фразы списка из разметки слов несут слова своего отрезка вне фраз
     (`_turn_spans._with_beside`), и слабая позиция с условием вне прайса идёт на суд LLM корзины со своим условием
-    (RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS); off — как было."""
+    (BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS); off — как было."""
 
     from ..runtime_config import config as cfg
 
@@ -3658,7 +3658,7 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
             beside, " ".join([fragment, service_name or ""]), retail_rows
         ):
             # Слабая фраза списка, от которой LLM разметки оторвала слово вне прайса («ТТГ» + «по омс»,
-            # RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS): условие — в вариант LLM корзины (правило 5 её промпта), как у
+            # BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS): условие — в вариант LLM корзины (правило 5 её промпта), как у
             # сильной фразы на суде; сбой LLM — «Не распознал», не варианты с ценой (`basket_from_phrases`).
             item["condition"] = beside
         items.append(item)

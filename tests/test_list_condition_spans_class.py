@@ -1,5 +1,5 @@
 """Условие у позиции списка на пути прода: разметка слов (`turn_spans_llm = on`) оторвала «по ОМС» от названия — позиция
-получала розничную цену (RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS, класс П2; выключатель `list_condition_beside`).
+получала розничную цену (BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS, класс П2; выключатель `list_condition_beside`).
 
 Суд условия у позиции корзины (`phrase_price_items`, BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS) читает `ParsedPhrase.beside` —
 слова фрагмента вне выбранной фразы. Поле заполнял только прежний генератор окон (`_turn_phrases.result` → `_with_beside`);
@@ -41,7 +41,7 @@ from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F
 
 SWITCH = ("off", "on")  # `price_by_parse`: off — прод деплоя 17, on — набор деплоя 18
 BESIDE = ("off", "on")  # `list_condition_beside`
-_DEFECT = "RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS: под `list_condition_beside = off` разметка слов не заполняет `beside`"
+_DEFECT = "BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS: под `list_condition_beside = off` разметка слов не заполняет `beside`"
 BESIDE_FIX = (pytest.param("off", marks=pytest.mark.xfail(strict=True, reason=_DEFECT)), "on")
 _SPANS_MARK = "Слова сообщения с номерами:"
 _BASKET_MARK = "ответить на вопрос о ценах нескольких услуг"

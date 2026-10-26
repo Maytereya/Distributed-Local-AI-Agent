@@ -715,7 +715,7 @@ settings = Settings(
         address_followup_llm=_get_enum("MESSENGER_ROUTER", "address_followup_llm", default="off", allowed={"off", "on"}),
         # Условие у позиции списка («ферритин по ОМС, глюкоза»), которое LLM разметки слов оторвала от названия: разметка
         # (`turn_spans_llm`) отдаёт фразам списка слова их отрезка вне фраз (`beside`), и позицию с условием, которого нет в
-        # прайсе, судит LLM корзины — не розничная цена без оговорки (RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS). off — как было.
+        # прайсе, судит LLM корзины — не розничная цена без оговорки (BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS). off — как было.
         # [MESSENGER_ROUTER] list_condition_beside
         list_condition_beside=_get_enum("MESSENGER_ROUTER", "list_condition_beside", default="off", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
