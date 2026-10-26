@@ -644,11 +644,9 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
 def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
     allowed = ", ".join(PATIENT_LABEL_PRIORITY)
     tmpl = load_prompt_text("classifier_patient")
-    hints = _collect_rule_intent_hints(text, seeded)
     return (
         tmpl.replace("<<ALLOWED_LABELS>>", allowed)
         .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))
-        .replace("<<RULE_HINTS>>", json.dumps(hints, ensure_ascii=False))
         .replace("<<TEXT>>", text)
     ).strip()
 
