@@ -224,6 +224,7 @@ class MessengerRouterConfig:
     button_price_scope: str
     address_branch_flags: str
     address_followup_llm: str
+    list_condition_beside: str
     turn_understanding_one: str
     service_answer_from_data: str
     test_assist_from_data: str
@@ -712,6 +713,11 @@ settings = Settings(
         # честно и оффер оператора (buttons_v1: 87 провалов «общий список вместо ответа»). off — как было.
         # [MESSENGER_ROUTER] address_followup_llm
         address_followup_llm=_get_enum("MESSENGER_ROUTER", "address_followup_llm", default="off", allowed={"off", "on"}),
+        # Условие у позиции списка («ферритин по ОМС, глюкоза»), которое LLM разметки слов оторвала от названия: разметка
+        # (`turn_spans_llm`) отдаёт фразам списка слова их отрезка вне фраз (`beside`), и позицию с условием, которого нет в
+        # прайсе, судит LLM корзины — не розничная цена без оговорки (RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS). off — как было.
+        # [MESSENGER_ROUTER] list_condition_beside
+        list_condition_beside=_get_enum("MESSENGER_ROUTER", "list_condition_beside", default="off", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
@@ -917,6 +923,7 @@ MR_BUTTON_TOPIC_HINT = settings.messenger_router.button_topic_hint
 MR_BUTTON_PRICE_SCOPE = settings.messenger_router.button_price_scope
 MR_ADDRESS_BRANCH_FLAGS = settings.messenger_router.address_branch_flags
 MR_ADDRESS_FOLLOWUP_LLM = settings.messenger_router.address_followup_llm
+MR_LIST_CONDITION_BESIDE = settings.messenger_router.list_condition_beside
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data

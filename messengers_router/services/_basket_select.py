@@ -433,8 +433,9 @@ async def basket_from_phrases(
     items = phrase_price_items(phrases, retail_rows)
     chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed, fair_share=True)
     # Сильная фраза на суде условия (`judge`) — не слабая позиция: синонима клинике она не даёт, а при сбое LLM —
-    # «Не распознал», не варианты с ценой (П2: дезинформация ценой хуже уточнения).
-    judged = {index for index, item in enumerate(items) if item.get("judge")}
+    # «Не распознал», не варианты с ценой (П2: дезинформация ценой хуже уточнения). Так же слабая позиция с условием рядом
+    # (`condition` без `judge` — только под `list_condition_beside = on`; под off `condition` бывает лишь у `judge`).
+    judged = {index for index, item in enumerate(items) if item.get("judge") or item.get("condition")}
     if judged:
         turn_telemetry.note(strong_phrase_guard="basket_fallback" if failed else ("basket_rows" if any(chosen.get(i) for i in judged) else "basket_not_found"))
     if journal and not failed:

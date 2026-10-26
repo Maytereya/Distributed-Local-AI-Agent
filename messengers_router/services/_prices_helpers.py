@@ -3510,6 +3510,16 @@ def _resolve_fragment_service(fragment: str, retail_rows: list[dict[str, Any]]) 
     return service_name
 
 
+def list_condition_beside_on() -> bool:
+    """`[MESSENGER_ROUTER] list_condition_beside = on`: фразы списка из разметки слов несут слова своего отрезка вне фраз
+    (`_turn_spans._with_beside`), и слабая позиция с условием вне прайса идёт на суд LLM корзины со своим условием
+    (RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS); off — как было."""
+
+    from ..runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_LIST_CONDITION_BESIDE", "off") or "").strip().lower() == "on"
+
+
 def _strong_phrase_guard_on() -> bool:
     """`[MESSENGER_ROUTER] strong_phrase_guard`: llm — условие рядом с сильной фразой разбора судит LLM (путь одной
     услуги — `prices._parse_strong_answer`, корзина — `phrase_price_items`); off — как было с 15.10."""
@@ -3592,6 +3602,8 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
     Сильная фраза, рядом с которой в её фрагменте стоит слово, которого в прайсе нет (`ParsedPhrase.beside`:
     «ферритин» + «по омс»), под `strong_phrase_guard = llm` идёт на суд LLM корзины (`judge` — её строки,
     `condition` — эти слова): разговорное слово («делается») LLM пропустит, условие («по ОМС») — нет.
+    Под `list_condition_beside = on` так же слабая фраза: её кандидаты прежние, а слова вне прайса рядом с ней — `condition`
+    в варианте LLM корзины (разметка слов оторвала условие от слабой фразы, «ТТГ» из «ТТГ по омс»).
 
     :param phrases: фразы разбора (`text`, `rows`, `beside`)
     :param retail_rows: строки прайса региона
@@ -3636,14 +3648,20 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
             items.append({"service_name": fragment, "prices": [], "fragment": fragment, "strong": [], "unsatisfiable": True})
             continue
         top_rows = _select_patient_price_rows(retail_rows, service_name, limit=2) if service_name else []
-        items.append(
-            {
-                "service_name": service_name or fragment,
-                "prices": _annotate_price_rows_with_care_context(top_rows),
-                "fragment": fragment,
-                "strong": [],
-            }
-        )
+        item: dict[str, Any] = {
+            "service_name": service_name or fragment,
+            "prices": _annotate_price_rows_with_care_context(top_rows),
+            "fragment": fragment,
+            "strong": [],
+        }
+        if beside and list_condition_beside_on() and _match_drops_unsatisfiable_qualifier(
+            beside, " ".join([fragment, service_name or ""]), retail_rows
+        ):
+            # Слабая фраза списка, от которой LLM разметки оторвала слово вне прайса («ТТГ» + «по омс»,
+            # RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS): условие — в вариант LLM корзины (правило 5 её промпта), как у
+            # сильной фразы на суде; сбой LLM — «Не распознал», не варианты с ценой (`basket_from_phrases`).
+            item["condition"] = beside
+        items.append(item)
     return items
 
 

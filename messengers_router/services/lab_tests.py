@@ -198,6 +198,8 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
         merged: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in multi_items:
+            if item.get("condition"):
+                continue  # позиция на суде условия П2 (у сильной `prices` и так пусты; слабая — `list_condition_beside = on`)
             for row in item.get("prices") or []:
                 if not isinstance(row, dict):
                     continue

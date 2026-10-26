@@ -13,6 +13,7 @@
 (`single`); сбой — `unavailable` без разреза: читатели — оффер или «уточните название», а не разрез по буквам.
 
 Выключатель `[MESSENGER_ROUTER] turn_spans_llm = off | on` (off — прежний генератор).
+Выключатель `list_condition_beside = off | on` (off — как было): фразы списка несут слова своего отрезка вне фраз (`_with_beside`).
 """
 
 from __future__ import annotations
@@ -31,9 +32,9 @@ from ..runtime_config import config as _cfg
 from ..turn_parse import ParsedPhrase, ParseStatus, PhraseParse
 from . import _price_by_parse
 from ._common import _normalise_catalog_text
-from ._prices_helpers import _PRICE_TOKEN_RE
+from ._prices_helpers import _PRICE_TOKEN_RE, list_condition_beside_on
 from ._strong_match import _catalog_index
-from ._turn_phrases import phrase_rows
+from ._turn_phrases import _clause_break, phrase_rows
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,42 @@ def _verbatim_rows(reply: str, catalog: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def _result(reply: str, status: ParseStatus, source: str, n_words: int, items: Sequence[ParsedPhrase] = ()) -> PhraseParse:
-    return PhraseParse(reply=reply, status=status.value, source=source, items=tuple(items), candidates=n_words)
+    phrases = _with_beside(reply, items) if list_condition_beside_on() else tuple(items)
+    return PhraseParse(reply=reply, status=status.value, source=source, items=phrases, candidates=n_words)
+
+
+def _with_beside(reply: str, items: Sequence[ParsedPhrase]) -> tuple[ParsedPhrase, ...]:
+    """Фразы списка со словами реплики вне фраз (`ParsedPhrase.beside`; `list_condition_beside = on`).
+
+    Правило 3 промпта разметки держит условие внутри фразы («ферритин по ОМС»), но живая LLM его нарушает (у одной услуги
+    оторвала «по ОМС» от дословного названия в 59 из 82 свипа П2, карточка Ш7) — и в списке позиция печатала цену без суда
+    условия: суд читает `beside`, а его заполнял только прежний генератор окон (RISK-2026-10-26-LIST-CONDITION-CUT-BY-SPANS).
+
+    Механика, без списков слов: отрезки реплики — по знаку препинания между словами (`_turn_phrases._clause_break`). Слово вне
+    фраз в отрезке с фразами — у соседних фраз этого отрезка слева и справа (между двумя — у обеих: суд LLM дешевле чужой
+    цены); отрезок без фраз («ферритин (по ОМС), глюкоза») — у ближайшей фразы слева, до первой фразы — у первой. Условие это
+    или разговор («сколько стоит», «первый раз»), решают гард П2 и LLM корзины (`phrase_price_items`), не этот код. Одна
+    фраза — без поля: путь одной услуги смотрит всю реплику сам."""
+
+    if len(items) < 2:
+        return tuple(items)
+    toks = words(reply)
+    clause = [0] * len(toks)  # номер отрезка каждого слова
+    for k in range(1, len(toks)):
+        clause[k] = clause[k - 1] + int(_clause_break(reply, toks[k - 1], toks[k]))
+    order = sorted(range(len(items)), key=lambda i: (items[i].start, items[i].end))
+    inside = [{clause[k] for k, tok in enumerate(toks) if items[i].start <= tok.start and tok.end <= items[i].end} for i in order]
+    beside: dict[int, list[str]] = {}
+    for k, tok in enumerate(toks):
+        if any(item.start <= tok.start and tok.end <= item.end for item in items):
+            continue
+        here = [pos for pos, clauses in enumerate(inside) if clause[k] in clauses]
+        left = [pos for pos in (here or range(len(order))) if items[order[pos]].end <= tok.start]
+        right = [pos for pos in here if items[order[pos]].start >= tok.end]
+        owners = [*left[-1:], *right[:1]] if here else [left[-1] if left else 0]
+        for pos in owners:
+            beside.setdefault(order[pos], []).append(tok.text)
+    return tuple(replace(item, beside=" ".join(beside[i])) if i in beside else item for i, item in enumerate(items))
 
 
 def _item(reply: str, first: _Word, last: _Word, catalog: list[dict[str, Any]]) -> ParsedPhrase:
