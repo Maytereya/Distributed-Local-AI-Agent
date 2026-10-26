@@ -643,7 +643,8 @@ settings = Settings(
         # текстом) — вопрос-слот одной функции ответа на висящий вопрос (`pending_buttons`): ответ, который LLM признала
         # ответом, идёт в запись, а не в вопрос «Отменить оформление?» правил смены темы
         # (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH). off — как было. [MESSENGER_ROUTER] booking_target_slot_llm
-        booking_target_slot_llm=_get_enum("MESSENGER_ROUTER", "booking_target_slot_llm", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        booking_target_slot_llm=_get_enum("MESSENGER_ROUTER", "booking_target_slot_llm", default="on", allowed={"off", "on"}),
         # Ответ на вопрос кнопки-темы (`button_menu`, режим `slot`: «Какой анализ интересует?», «К какой процедуре нужна
         # подготовка?»): тему знает кнопка, LLM-классификатор её не переспрашивает (журнал прода 14–24.10: 59 % таких ответов
         # ждали его 3,7 с, до 12 с). Одна функция ответа на висящий вопрос решила «это ответ» — тема кнопки. `slot` — вопросы-
