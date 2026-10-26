@@ -319,7 +319,9 @@ def _rest_is_only_wrapper_and_accepted_biomaterial(
     return True
 
 
-def _match_synonym_key(query_text: str, vocab: _MisVocabularies) -> str | None:
+def _match_synonym_key(
+    query_text: str, vocab: _MisVocabularies, accept: Callable[[str], bool] | None = None
+) -> str | None:
     """Самый длинный синоним, входящий в реплику непрерывной цепочкой токенов.
 
     Сверка реплики ЦЕЛИКОМ обесценивает словарь: живая формулировка почти всегда
@@ -330,6 +332,9 @@ def _match_synonym_key(query_text: str, vocab: _MisVocabularies) -> str | None:
 
     :param query_text: реплика пациента
     :param vocab: разобранные словари МИС
+    :param accept: годится ли ключ сверх цепочки токенов; не годится — ищем следующий. Нужен сильному
+        совпадению (`_strong_match`, буква семейства): предлоги выпадают из цепочки и у реплики, и у ключа,
+        и синонимы клиники «гепатит в» и «гепатит с» — одна цепочка «гепатит»
     :return: ключ словаря либо None
     """
 
@@ -373,12 +378,14 @@ def _match_synonym_key(query_text: str, vocab: _MisVocabularies) -> str | None:
             rest = q[:pos] + q[pos + n :]
             if not _rest_is_only_wrapper_and_accepted_biomaterial(rest, key, vocab):
                 continue
+            if accept is not None and not accept(key):
+                continue
             best, best_len = key, n
     return best
 
 
 def mis_synonym_candidates(
-    query_text: str, *, vocab: _MisVocabularies | None = None
+    query_text: str, *, vocab: _MisVocabularies | None = None, accept: Callable[[str], bool] | None = None
 ) -> tuple[str, ...]:
     """Все услуги, на которые указывает синоним из реплики.
 
@@ -388,11 +395,12 @@ def mis_synonym_candidates(
 
     :param query_text: реплика пациента
     :param vocab: словари МИС (по умолчанию — дневной срез)
+    :param accept: годится ли ключ словаря (см. `_match_synonym_key`); None — любой
     :return: кортеж канонических названий услуг (пустой, если синонима нет)
     """
 
     vocab = vocab if vocab is not None else _vocabularies()
-    key = _match_synonym_key(query_text, vocab)
+    key = _match_synonym_key(query_text, vocab, accept)
     if key is None:
         return ()
     if vocab.synonym_candidates:
