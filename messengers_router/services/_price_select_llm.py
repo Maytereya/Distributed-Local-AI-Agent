@@ -117,10 +117,10 @@ PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
 # снят 31.10 — режим `general` на проде с деплоя 17); суд записи — прежние промпты.
 PRICE_GENERAL_TASK = replace(PRICE_TASK, name="price_service_general")
 PRICE_QUALIFIER_GENERAL_TASK = replace(PRICE_TASK, name="price_service_qualifier_general")
-# Под `price_select_named = on` (топ-5 разбора 95 цен, п. 3): те же задачи пути ответа о цене с правилами 6 и 7 — строка, которая
-# и есть названная услуга, записанная иначе («Cito» = срочно, термин, сокращение, латиница), — та (P1: верная строка была в списке,
-# LLM отвечала «ни одна»); строка о другом предмете или пациенте, которого пациент не называл (ЭхоКГ
-# плода к «эхо сердца»), — не та, и тогда второй круг по терминам (F: ближайшая чужая строка вместо «ни одна»).
+# Под `price_select_named = on` (топ-5 разбора 95 цен, п. 3): те же задачи пути ответа о цене с правилами 6 и 7 — «Cito» — это
+# «срочно» (P1: строка Cito была в списке, LLM отвечала «условия нет»); строка для другого пациента, которого пациент не называл
+# (ЭхоКГ плода к «эхо сердца»), — не та, и тогда второй круг по терминам (F: ближайшая чужая строка вместо «ни одна»). Шире
+# правила (термин / латиница, «другой предмет») карточки 26.10 отвергли: подменяли марку и делали выбор строже нужного.
 PRICE_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_general_named")
 PRICE_QUALIFIER_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_qualifier_general_named")
 _VARIANT_B_LIMIT = 5
