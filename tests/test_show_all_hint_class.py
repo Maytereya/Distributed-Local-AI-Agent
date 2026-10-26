@@ -140,12 +140,27 @@ def test_row_by_number_follows_the_rendered_numbering():
     assert H._price_family_row_from_context("1", _context(grouped, 3)) is None
 
 
+def _fixture_rows() -> list[dict]:
+    path = FIXTURE / "price_by_region" / "price_region_3_20261008.jsonl"
+    return [json.loads(line) for line in path.open(encoding="utf-8") if line.strip()]
+
+
 def test_oak_tail_holds_only_oak_rows():
     """Хвост списка ОАК (его раскрывает «все») — только строки ОАК: на прайсе мини-прода ранжирование по словам «общий анализ
     крови» тянуло ОАМ и «ЗППП: анализ крови»."""
 
-    path = FIXTURE / "price_by_region" / "price_region_3_20261008.jsonl"
-    rows = [json.loads(line) for line in path.open(encoding="utf-8") if line.strip()]
-    payload = H._build_oak_canonical_payload(_OAK, rows, show_all=True)
+    payload = H._build_oak_canonical_payload(_OAK, _fixture_rows(), show_all=True)
     names = [str(row["serviceName"]) for row in payload["family_variants"]]
     assert len(names) >= 3 and all(_OAK_WORDS in name.casefold() for name in names), names
+
+
+@pytest.mark.parametrize("query", [_OAK, "сколько стоит глюкозотолерантный тест", "сколько стоит исследование кала"])
+def test_filter_is_display_only_llm_candidates_stay_whole(query):
+    """Фильтр хвоста — только показ: кандидаты для выбора строки LLM (`family_candidates`) — полный список правил, как до 26.10
+    (сужать пул LLM по буквам нельзя); видимая голова в обоих одна, хвост показа — часть хвоста кандидатов."""
+
+    payload = H._build_price_family_payload(query, _fixture_rows(), show_all=False, visible_limit=10)
+    shown, candidates = payload["family_variants"], payload["family_candidates"]
+    head = min(len(shown), int(payload["visible_limit"]))
+    assert shown[:head] == candidates[:head]
+    assert len(candidates) > len(shown) and all(row in candidates for row in shown), (len(candidates), len(shown))
