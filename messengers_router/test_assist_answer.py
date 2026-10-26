@@ -14,6 +14,11 @@
 (BUG-2026-10-21-SVC-SIMILAR-NOISE). Текст печатает код (принцип 1): название и срок готовности — из строки прайса, без
 цены (свободный текст цен не печатал — карточка цены не меняется). Нет данных и сбой LLM — честный оффер оператора
 (принцип 3), не свободный текст.
+
+Под `test_assist_price = on` (решение владельца 26.10, топ-5 разбора 95 цен, п. 1) у выбранных строк — цена из той же
+строки прайса: «Антитела на корь» → «Вирус кори Ig G — 800 руб.» вместо «цену подскажу по названию» рядом с уже
+напечатанным названием. Частичный ответ — цены найденных строк и «остального в прайсе нет — уточнит оператор». Давность
+прайса — по правилам пути цены (`services/_freshness`): срез старше недели — строки без цен, как под off.
 """
 
 from __future__ import annotations
@@ -58,12 +63,21 @@ PICKED_HEADING = "В прайсе клиники есть:"
 PICKED_TAIL = "Цену и подготовку подскажу по названию."
 PARTLY_TAIL = "Остального из вашего вопроса в данных клиники нет — точно ответит оператор."
 NEED_NAME_TEXT = "Ответ зависит от конкретного анализа. Напишите, пожалуйста, названия анализов — подскажу по данным клиники."
+# Под `test_assist_price = on`: цена уже напечатана — хвост о ней не обещает; частичный ответ — формулировка владельца 26.10.
+PRICED_TAIL = "Подготовку подскажу по названию."
+PRICED_PARTLY_TAIL = "Остального из вашего вопроса в прайсе нет — уточнит оператор."
 
 
 def enabled() -> bool:
     """`[MESSENGER_ROUTER] test_assist_from_data = on`; мусор и отсутствие — off (как было)."""
 
     return str(getattr(_cfg, "MR_TEST_ASSIST_FROM_DATA", "off") or "").strip().lower() == "on"
+
+
+def price_enabled() -> bool:
+    """`[MESSENGER_ROUTER] test_assist_price = on`; мусор и отсутствие — off (строки без цены, как было)."""
+
+    return str(getattr(_cfg, "MR_TEST_ASSIST_PRICE", "off") or "").strip().lower() == "on"
 
 
 def applies(decision: Any, evidence: Any) -> bool:
@@ -203,6 +217,48 @@ def _rows_block(rows: Sequence[dict[str, Any]]) -> str:
     return "\n".join([PICKED_HEADING, *(f"— {_option_text(row)}" for row in rows)])
 
 
+def _priced_line(row: dict[str, Any]) -> str:
+    """«Название — 800 руб., срок готовности 2–3 дня»: сумма — из этой же строки прайса (принцип 1)."""
+
+    from .renderer import _extract_price_amount, _format_rub
+
+    amount = _extract_price_amount(row)
+    if amount is None:
+        return _option_text(row)
+    deadline = _deadline(row)
+    price = f"{_row_name(row)} — {_format_rub(amount)}"
+    return f"{price}, срок готовности {deadline}" if deadline else price
+
+
+def _price_as_of(rows: Sequence[dict[str, Any]]) -> str | None:
+    """Можно ли печатать цены и с какой датой: правила давности пути цены (`services/_freshness`, ход (д)).
+
+    :return: None — цены не печатать (срез старше недели или его нет); "" — молча; «ДД.ММ» — приписка давности
+    """
+
+    from .services.core import prices_checked
+
+    checked = prices_checked({"prices": list(rows)})
+    if not isinstance(checked, dict) or checked.get("handoff_required") or not checked.get("prices"):
+        return None
+    return str(checked.get("data_as_of") or "")
+
+
+def _priced_text(rows: Sequence[dict[str, Any]], tail: str) -> str | None:
+    """Строки с ценами и хвост; приписка о ценах региона — до оффера. None — цен печатать нельзя (ответ как под off)."""
+
+    from .renderer import _bundle_text, _extract_price_amount
+
+    as_of = _price_as_of(rows)
+    priced = sum(1 for row in rows if _extract_price_amount(row) is not None)
+    if as_of is None or not priced:
+        return None
+    turn_telemetry.note(ta_priced=priced)
+    if tail == PRICED_TAIL and priced < len(rows):
+        tail = PICKED_TAIL  # строка без суммы (в прайсе бывает пустая) — о её цене ответ ничего не сказал
+    return _bundle_text([PICKED_HEADING, *(f"— {_priced_line(row)}" for row in rows), "", tail], as_of, priced=True)
+
+
 def envelope(answer: Answer, state: Any, memory: Any | None, *, attachments: Sequence[Any] = ()) -> tuple[Any, bool]:
     """Ответ пациенту по решению. Строки — название и срок из прайса; «нет данных» и сбой — честный оффер оператора.
 
@@ -213,12 +269,17 @@ def envelope(answer: Answer, state: Any, memory: Any | None, *, attachments: Seq
     from .response_builder import UNSUPPORTED_CATALOG_OPERATOR_OFFER, mark_operator_offer_pending
     from .service_answer import NO_DATA_TEXT
 
+    priced = price_enabled() and answer.kind in (PICKED, PARTLY) and bool(answer.rows)
     if answer.kind == PICKED and answer.rows:
         text, offer = f"{_rows_block(answer.rows)}\n\n{PICKED_TAIL}", False
+        if priced:
+            text = _priced_text(answer.rows, PRICED_TAIL) or text
     elif answer.kind == NEED_NAME:
         text, offer = NEED_NAME_TEXT, False
     elif answer.kind == PARTLY and answer.rows:
         text, offer = f"{_rows_block(answer.rows)}\n\n{PARTLY_TAIL}", True
+        if priced:
+            text = _priced_text(answer.rows, PRICED_PARTLY_TAIL) or text
     else:
         text, offer = NO_DATA_TEXT, True
     if offer and memory is not None:

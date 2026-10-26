@@ -9,6 +9,9 @@
 сроки выбранных LLM строк прайса (печатает код, без цены); нет данных, сбой LLM, мусор — честный оффер оператора.
 Под off — как было (рендер-подделка здесь «выдумывает», и на базе инвариант не держится).
 
+Под `test_assist_price = on` (решение владельца 26.10) у выбранных строк — цена: каждая сумма ответа — сумма той строки
+прайса, чьё название напечатано рядом (проверка — независимым детектором стенда `evalbench.prices`), выбор LLM тот же.
+
 Через обработчик эндпоинта; LLM — подделка настоящего типа (`GenerateResponse`).
 """
 
@@ -252,3 +255,105 @@ def test_previous_bot_message_is_the_context_of_a_short_reply(ta_world, monkeypa
 
     assert "Предыдущее сообщение бота: «(диалог только начался)»" in first["prompts"][_TA_MARK]
     assert "Предыдущее сообщение бота: «В прайсе клиники есть: — Вирус кори" in second["prompts"][_TA_MARK], second["prompts"]
+
+
+# --------------------------------------------------------------------------- цена у выбранных строк (`test_assist_price`)
+#
+# Решение владельца 26.10 (топ-5 разбора 95 цен, п. 1): у выбранных строк — цена, кодом, из той же строки прайса;
+# частичный ответ — цены найденных строк + «остального в прайсе нет — уточнит оператор». Инвариант класса (принцип 1):
+# каждая сумма ответа — сумма той строки прайса, название которой напечатано рядом, и строки — только выбранные LLM;
+# выбор LLM от выключателя не зависит (промпт тот же — цены модель не видит); давность прайса — как у пути цены.
+
+_PRICE = {"MR_TEST_ASSIST_PRICE": "on", "MR_MIS_HONEST_DEGRADATION": "on"}
+
+
+def _catalog():
+    from evalbench.prices import PriceCatalog, _read_jsonl
+
+    return PriceCatalog(_read_jsonl(next((_FIXTURE / "price_by_region").glob("price_region_3_*.jsonl"))))
+
+
+def _listed(prompt: str) -> list[tuple[int, str]]:
+    out = []
+    for line in prompt.splitlines():
+        head, _, rest = line.partition(". ")
+        if head.isdigit():
+            out.append((int(head), rest.split(" — срок готовности")[0]))
+    return out
+
+
+def _first_two(outcome: str = "none"):
+    return lambda prompt: verdict(outcome, picks=tuple(number for number, _name in _listed(prompt)[:2]))
+
+
+@pytest.mark.parametrize("reply", CLASS_REPLIES)
+@pytest.mark.parametrize("outcome", ["none", "partly"])
+def test_every_printed_price_is_the_price_of_its_own_picked_row(reply, outcome, ta_world, monkeypatch):
+    out = turn(ta_world, monkeypatch, reply, switch="on", answers=_answers(_first_two(outcome)), cfg_extra=_PRICE)
+
+    picked = {name for _number, name in _listed(out["prompts"].get(_TA_MARK, ""))[:2]}
+    pairs = _catalog().pairs(out["text"])
+    assert all(pair.status == "matched" for pair in pairs), (pairs, out["text"])  # ни одной суммы без своей строки
+    assert {pair.name for pair in pairs} <= picked, (pairs, picked)  # строки — только выбранные LLM
+    if picked:
+        assert {pair.name for pair in pairs} == picked, out["text"]  # у каждой выбранной строки — её цена
+        assert test_assist_answer.PICKED_TAIL not in out["text"]  # «цену подскажу по названию» рядом с ценой — нет
+        assert "Цены актуальны для г. Самара" in out["text"]
+    assert FABRICATED not in out["text"] and _RENDER_MARK not in out["calls"]
+
+
+def test_priced_rows_show_name_price_and_deadline_of_the_row(ta_world, monkeypatch):
+    out = turn(
+        ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=_answers(_pick("Вирус кори Ig G", "Вирус кори Ig M")), cfg_extra=_PRICE
+    )
+
+    assert "— Вирус кори Ig G — 800 руб., срок готовности 2–3 дня" in out["text"], out["text"]
+    assert "— Вирус кори Ig M — 930 руб., срок готовности до 10 дней" in out["text"], out["text"]
+    assert test_assist_answer.PRICED_TAIL in out["text"]
+    assert out["telemetry"].get("ta_priced") == 2, out["telemetry"]
+    assert not out["pending_offer"]
+
+
+def test_priced_partly_prints_found_prices_and_offers_the_rest(ta_world, monkeypatch):
+    out = turn(
+        ta_world, monkeypatch, CLASS_REPLIES[5], switch="on", answers=_answers(_pick("Кальпротектин в кале", outcome="partly")), cfg_extra=_PRICE
+    )
+
+    assert "— Кальпротектин в кале — 2 730 руб., срок готовности 1–9 дней" in out["text"], out["text"]
+    assert test_assist_answer.PRICED_PARTLY_TAIL in out["text"]
+    assert out["text"].endswith(OFFER) and out["pending_offer"]  # вопрос-оффер — последним, после приписки о ценах
+
+
+@pytest.mark.parametrize("ta_answer", [verdict("no_data"), verdict("need_name"), ConnectionError("тест: LLM недоступна")])
+def test_no_rows_no_price(ta_answer, ta_world, monkeypatch):
+    out = turn(ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=_answers(ta_answer), cfg_extra=_PRICE)
+
+    assert "руб" not in out["text"], out["text"]
+    assert "ta_priced" not in out["telemetry"]
+
+
+def test_llm_sees_the_same_options_with_and_without_price(ta_world, monkeypatch):
+    # Цена — оформление ответа, не довод выбора: промпт тот же, повтор из кэша под on берёт те же ответы модели.
+    answers = _answers(_pick("Вирус кори Ig G"))
+    off = turn(ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=answers)
+    on = turn(ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=answers, cfg_extra=_PRICE)
+
+    assert off["prompts"][_TA_MARK] == on["prompts"][_TA_MARK]
+    assert "руб" not in on["prompts"][_TA_MARK]
+
+
+@pytest.mark.parametrize(("age", "expect"), [(18, None), (5, "по данным на")])
+def test_price_age_follows_the_price_path(age, expect, ta_world, monkeypatch):
+    # Срез прайса старше недели — путь цены переводит на оператора; здесь — строки без цен, как под off. 3–7 дней — дата.
+    import datetime
+
+    from agent_logic_2.nayka_api import snapshots
+
+    stale = snapshots.Snapshot(name="price_region_3", rows=[], date=datetime.date(2026, 10, 8) - datetime.timedelta(days=age), status="stale", age_days=age)
+    monkeypatch.setattr(snapshots, "last", lambda prefix: stale if prefix.startswith("price_region") else None)
+    out = turn(ta_world, monkeypatch, CLASS_REPLIES[0], switch="on", answers=_answers(_pick("Вирус кори Ig G")), cfg_extra=_PRICE)
+
+    if expect is None:
+        assert "руб" not in out["text"] and test_assist_answer.PICKED_TAIL in out["text"], out["text"]
+    else:
+        assert "— Вирус кори Ig G — 800 руб." in out["text"] and expect in out["text"], out["text"]
