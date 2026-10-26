@@ -617,7 +617,8 @@ settings = Settings(
         # П1 на ходах `topic_by_llm` (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): LLM решила, что пациент спрашивает об услуге не цену,
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
-        p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
+        p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="on", allowed={"off", "on"}),
         # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
