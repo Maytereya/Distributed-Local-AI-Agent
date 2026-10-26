@@ -319,7 +319,8 @@ async def generate_text_with_usage(
 
 @dataclass
 class _TurnBudget:
-    """Сколько решений и секунд выбора потрачено в этом ходе."""
+    """Сколько решений и секунд выбора потрачено в этом ходе. Решение — ответ модели: сбой вызова (тайм-аут, обрыв,
+    очередь) решения не тратит, а его секунды — тратит (решение владельца 26.10)."""
 
     calls: int = 0
     spent_s: float = 0.0
@@ -345,8 +346,8 @@ def end_turn_budget(token: contextvars.Token) -> None:
 
 
 def turn_decisions_spent() -> int:
-    """Сколько решений хода уже потрачено (вне хода — 0): вызывающий узнаёт, тратил ли лимит его вызов (сбой бюджета и
-    разомкнутый предохранитель лимит не тратят — их возвращать нечего)."""
+    """Сколько решений хода уже потрачено (вне хода — 0): вызывающий узнаёт, тратил ли лимит его вызов (сбой вызова, сбой
+    бюджета и разомкнутый предохранитель лимит не тратят — их возвращать нечего)."""
 
     budget = _TURN_BUDGET.get()
     return budget.calls if budget is not None else 0
@@ -354,7 +355,8 @@ def turn_decisions_spent() -> int:
 
 def turn_budget_exhausted() -> bool:
     """Лимит решений хода исчерпан (следующее решение получит отказ `budget`) — в отличие от недоступной LLM: модель
-    в этом ходе отвечала, решений просто больше нет (ход (е), DESIGN-2026-10-22-TURN-DECISION-BUDGET). Вне хода — False."""
+    в этом ходе отвечала, решений просто больше нет (ход (е), DESIGN-2026-10-22-TURN-DECISION-BUDGET). Сбои вызова решений
+    не тратят; секунды — тратят, поэтому LLM, висящая до тайм-аута, исчерпывает лимит секундами хода. Вне хода — False."""
 
     budget = _TURN_BUDGET.get()
     if budget is None:
@@ -491,6 +493,10 @@ async def generate_structured(
             queue_ms = int((_time.monotonic() - started_at) * 1000)
             res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=timeout)
     except BaseException as exc:
+        if budget is not None and isinstance(exc, Exception):
+            # Модель не ответила — решение не потрачено, секунды тратятся (`finally`): при лежащей LLM лимит хода не
+            # «исчерпан», и путь цены отвечает правилами, а не «не нашёл» (решение владельца 26.10).
+            budget.calls -= 1
         err = error_detail(exc)
         turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=err, shadow=shadow)
         if isinstance(exc, _GENERATION_FAILURES) and not shadow:

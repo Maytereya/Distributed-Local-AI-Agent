@@ -204,7 +204,6 @@ class MessengerRouterConfig:
     topic_override_llm: str
     topic_shadow_llm: str
     p1_facet_none_offer: str
-    price_budget_clarify: str
     turn_spans_llm: str
     prepare_by_parse: str
     price_by_parse: str
@@ -606,10 +605,6 @@ settings = Settings(
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
         p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="off", allowed={"off", "on"}),
-        # Отказ лимита решений хода на выборе строки цены / суде условия (DESIGN-2026-10-22-TURN-DECISION-BUDGET, вариант А,
-        # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
-        # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
-        price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
         # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
@@ -845,7 +840,6 @@ MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
-MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse

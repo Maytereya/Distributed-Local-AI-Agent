@@ -300,15 +300,15 @@
  "condition_cut_judge_down-llm": {
   "turns": [
    {
-    "text": "Не нашёл актуальную стоимость для «ферритин омс». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "text": "Не нашёл актуальную стоимость для «Ферритин». Уточните название услуги или ФИО врача, и я проверю снова.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "price_info"
     ],
-    "service_name_effective": "ферритин омс",
-    "service_name": null,
+    "service_name_effective": null,
+    "service_name": "Ферритин",
     "pending": null,
     "telemetry": {
      "tu_parse_status": "picked",
@@ -319,7 +319,7 @@
       "grounder_from_understanding",
       "planner_price_by_understanding"
      ],
-     "price_policy": "budget_clarify",
+     "price_policy": "rules",
      "price_guard": "llm_bypass"
     },
     "llm": [
@@ -664,22 +664,22 @@
  "one_analyses_on-down": {
   "turns": [
    {
-    "text": "Не нашёл актуальную стоимость для «стоят ферритин». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "service_bundle_info"
     ],
-    "service_name_effective": "стоят ферритин",
-    "service_name": null,
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
     "pending": null,
     "telemetry": {
      "tu_parse_status": "unavailable",
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "budget_clarify",
+     "price_policy": "rules",
      "price_guard": "llm_bypass"
     },
     "llm": [
@@ -1195,22 +1195,22 @@
  "one_strong_parse_select_down-down": {
   "turns": [
    {
-    "text": "Не нашёл актуальную стоимость для «стоят ферритин». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "service_bundle_info"
     ],
-    "service_name_effective": "стоят ферритин",
-    "service_name": null,
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
     "pending": null,
     "telemetry": {
      "tu_parse_status": "unavailable",
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "budget_clarify",
+     "price_policy": "rules",
      "price_guard": "llm_bypass"
     },
     "llm": [
@@ -1235,15 +1235,15 @@
  "one_strong_parse_select_down-llm": {
   "turns": [
    {
-    "text": "Не нашёл актуальную стоимость для «стоят ферритин». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "service_bundle_info"
     ],
-    "service_name_effective": "стоят ферритин",
-    "service_name": null,
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
     "pending": null,
     "telemetry": {
      "tu_parse_status": "picked",
@@ -1253,13 +1253,17 @@
      "tu_acted": [
       "grounder_from_understanding"
      ],
-     "price_policy": "budget_clarify",
-     "price_guard": "llm"
+     "price_policy": "rules",
+     "price_guard": "llm_bypass"
     },
     "llm": [
      [
       "turn_spans",
       "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "unavailable"
      ],
      [
       "price_service_qualifier_general",

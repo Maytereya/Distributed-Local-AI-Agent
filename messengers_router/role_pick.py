@@ -119,6 +119,7 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
         return decision
     if "doctor_name_verified" in (decision.flags or ()) or any((decision.entities or {}).get(k) for k in _DOCTOR_KEYS):
         return decision  # назван врач (фамилия): роль решает его карточка, а не слово о специальности (dev g0124)
+    spent_before = llm_runtime.turn_decisions_spent()
     try:
         cat = await catalog(services)
         fields = await decide(decision.label, user_text, str(decision.entities.get("specialty") or ""), cat)
@@ -154,7 +155,8 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
     if not acted:
         # Решение роли ход не изменило — лимит решений хода оно не тратит (как висящий вопрос, решение владельца Q5 18.10):
         # иначе следующему выбору хода не хватало бюджета (test g0792: запись к неврологу → «не нашёл в онлайн-записи»).
-        if "role_llm" in fields and llm_runtime.refund_turn_decision():
+        # Возвращаем только потраченное этим решением: сбой, кэш и отказ бюджета лимит не тратят — иначе вернулось бы чужое.
+        if llm_runtime.turn_decisions_spent() > spent_before and llm_runtime.refund_turn_decision():
             turn_telemetry.note(role_refund=1)
         return decision
     return replace(decision, entities=entities, flags=flags)

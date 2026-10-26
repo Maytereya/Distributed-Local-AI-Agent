@@ -350,12 +350,6 @@ def _wordform_names(wanted: set[str], key: str, pool: list[dict[str, Any]], reta
     return tuple(ranked[:_VARIANT_B_LIMIT])
 
 
-def _budget_clarify_on() -> bool:
-    """`[MESSENGER_ROUTER] price_budget_clarify = on`: отказ лимита решений хода на выборе строки — уточнение, не ответ правил."""
-
-    return str(getattr(_cfg, "MR_PRICE_BUDGET_CLARIFY", "off") or "").strip().lower() == "on"
-
-
 def _policy_label(selection: PriceSelection | None) -> str:
     if selection is None:
         return "rules"
@@ -804,7 +798,7 @@ async def select_price_rows(
         return decided
 
     def unavailable() -> tuple[PriceSelection | None, str]:
-        if budget_clarify and _budget_clarify_on() and llm_runtime.turn_budget_exhausted():
+        if budget_clarify and llm_runtime.turn_budget_exhausted():
             # Только путь ответа о цене (`budget_clarify=True` из `prices.py`); суд записи и переспроса каталога
             # (`judge_booking_service`) держит свою политику отказа. Отказ лимита решений хода — не сбой модели: LLM в этом ходе уже ответила «не то», и ответ правил по буквам
             # давал цену чужой строки (g0577 → «Анализ крови на аминокислоты»). Уточнение вместо букв (решение владельца

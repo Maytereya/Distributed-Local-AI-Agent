@@ -10,7 +10,8 @@
   выбора доказывается на записанных ответах прод-LLM;
 - сбой LLM — исключение из `LLM_UNAVAILABLE_ERRORS` и строка телеметрии с явным местом вызова;
 - бюджет хода (L-11): решений сверх бюджета в LLM не уходит, тайм-аут вызова — не больше остатка
-  бюджета; у каждого хода бюджет свой, вне хода бюджета нет;
+  бюджета; у каждого хода бюджет свой, вне хода бюджета нет; решение — ответ модели: сбой вызова
+  решения не тратит (секунды — тратит), лежащая LLM лимит хода не «исчерпывает» (решение владельца 26.10);
 - предохранитель (L-11): N сбоев генерации подряд — пауза без вызовов, после неё одна проба;
   таймаут очереди (занятость соседями) не размыкает; текст и прежние слои он не трогает.
 """
@@ -171,6 +172,26 @@ def test_decision_over_the_turn_budget_is_not_sent_to_llm(client, limits):
     # Лимит хода по умолчанию — 3 решения (с 19.10; прежде 2): четвёртое не уходит в LLM.
     assert _in_turn(lambda: _decisions(4)) == ["ok", "ok", "ok", "budget"]
     assert len(client.calls) == 3
+
+
+@pytest.mark.parametrize("exc", [ConnectionError("ollama down"), asyncio.TimeoutError()], ids=["down", "timeout"])
+def test_failed_call_spends_no_decision(monkeypatch, limits, exc):
+    # Решение владельца 26.10: при лежащей LLM путь цены отвечает правилами («сбой самой модели — как было»), а не
+    # «не нашёл стоимость» по исчерпанному лимиту. Секунды сбой тратит — test_turn_time_budget_caps_the_call_timeout.
+    limits(failures=0)  # предохранитель не мешает видеть сам счёт
+    fake = _Capture(exc=exc)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
+
+    async def turn():
+        for _ in range(4):
+            with pytest.raises(type(exc)):
+                await llm_runtime.generate_structured(**_params())
+        down = (llm_runtime.turn_decisions_spent(), llm_runtime.turn_budget_exhausted())
+        fake.exc = None
+        return down, await _decisions(4)
+
+    assert _in_turn(turn) == ((0, False), ["ok", "ok", "ok", "budget"])
+    assert len(fake.calls) == 7
 
 
 def test_budget_is_per_turn_and_absent_outside_a_turn(client, limits):

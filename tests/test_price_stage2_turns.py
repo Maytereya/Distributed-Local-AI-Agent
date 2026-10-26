@@ -62,7 +62,6 @@ PROD_D17: dict[str, Any] = {
     "MR_TOPIC_BY_LLM": "rule_test_assist,rule_doctor_info_specialty,rule_schedule,rule_analysis_lookup_ambiguous,"
     "rule_website_help,rule_address_work_hours,rule_test_result,rule_prepare",
     "MR_P1_FACET_NONE_OFFER": "on",
-    "MR_PRICE_BUDGET_CLARIFY": "on",
     "MR_DOCTORS_BY_SERVICE_DATA": "shadow",
     "MR_PREPARE_BY_PARSE": "on",
     "MR_TEST_ASSIST_FROM_DATA": "on",

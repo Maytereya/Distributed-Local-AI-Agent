@@ -253,13 +253,14 @@ def test_other_service_keeps_the_mis_rows(reply, mini_prod_world, monkeypatch): 
 
 @pytest.mark.parametrize("reason", ["too_general", "not_a_service"])
 def test_not_a_service_name_has_no_price(reason, mini_prod_world, monkeypatch):  # noqa: F811
-    """«Слишком общее» / «не услуга» — сильная фраза ход не решает: путь правил с гардом, цены нет, тот же ответ, что
-    при сбое выбора строки."""
+    """«Слишком общее» / «не услуга» — сильная фраза ход не решает: путь правил с гардом, цены нет — как при сбое выбора
+    строки. Тексты разные с 26.10: сбой вызова лимит хода не тратит, и при сбое выбора отвечает гард правил («Уточните…»),
+    а не отказ лимита («Не нашёл…»), набранный тремя сбоями (решение владельца 26.10)."""
 
     reply = _STRONG_P2[0]
     [down], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm="rows_down", session=_sid("ng-down", reason))
     [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_Reason(reason), session=_sid("ng", reason))
-    assert on["text"] == down["text"] and not _priced(on["text"]), on["text"]
+    assert not _priced(on["text"]) and not _priced(down["text"]), (on["text"], down["text"])
     assert row["strong_phrase_guard"] == "fallback"
 
 

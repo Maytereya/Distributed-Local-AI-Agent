@@ -164,8 +164,10 @@ def test_patient_reads_only_reply_slices_or_catalog_names_under_on(mode):
 
 
 def test_extractor_glued_reply_words_under_off():
+    # Контраст: склейка вырезателя на пути off. «стоят ферритин» (выбор строки лежит) ушло 26.10 — сбой вызова лимит хода
+    # не тратит, и ответ правил называет «Ферритин»; склейка названия с условием при работающей LLM — осталась.
     foreign = _foreign_quotes("price_stage2_turns.json")
-    assert "стоят ферритин" in foreign.get("one_strong_parse_select_down-llm", [])  # контраст: склейка вырезателя на проде
+    assert "ферритин омс" in foreign.get("condition_cut-llm", [])
 
 
 # --------------------------------------------------------------------------- Ш3: «названа ли услуга» — решение понимания хода
