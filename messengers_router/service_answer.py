@@ -14,6 +14,10 @@
 круг поиска. Текст печатает код (принцип 1): название и цена — из прайса, строка памятки — как есть, без цены. Нет
 данных — честный оффер оператора (принцип 3).
 
+Под `service_answer_no_similar = on` (BUG-2026-10-21-SVC-SIMILAR-NOISE; топ-5 разбора 95 цен, п. 5) исхода `similar` нет — как у
+подбора анализов по данным (`test_assist_answer`): близкое, но другое (другой метод, материал, предмет) — `no_data` и честный
+оффер; «похожее» показывало несвязанные строки и чужую цену. Задача `service_answer_exact`, свой промпт.
+
 Где спрашивается (там, где бот иначе написал бы свободный текст или сдался бы, не заглянув в данные):
 - `free_text` — перед свободным текстом LLM (оркестратор): ответ, близкое или оффер; «не о клинике» и сбой — как было;
 - `other_offer` — OTHER от LLM под `topic_by_llm`; `empty_evidence` — вопрос без данных (L-05); `doctors_by_service` —
@@ -38,6 +42,17 @@ TASK = Task(
     name="service_answer",
     max_picks=4,
     outcomes=("similar", "no_data", "not_about_clinic"),
+    max_terms=3,
+    num_predict=96,
+    timeout_s=8.0,
+    queue_timeout_ms=2000,
+)
+
+# Без исхода «похожее» (`service_answer_no_similar`): своё имя — свой промпт, своё место в телеметрии и на стенде.
+EXACT_TASK = Task(
+    name="service_answer_exact",
+    max_picks=4,
+    outcomes=("no_data", "not_about_clinic"),
     max_terms=3,
     num_predict=96,
     timeout_s=8.0,
@@ -69,6 +84,12 @@ def enabled() -> bool:
     """`[MESSENGER_ROUTER] service_answer_from_data = on`; мусор и отсутствие — off (как было)."""
 
     return str(getattr(_cfg, "MR_SERVICE_ANSWER_FROM_DATA", "off") or "").strip().lower() == "on"
+
+
+def no_similar() -> bool:
+    """`[MESSENGER_ROUTER] service_answer_no_similar = on`; мусор и отсутствие — off (исход «похожее» есть, как было)."""
+
+    return str(getattr(_cfg, "MR_SERVICE_ANSWER_NO_SIMILAR", "off") or "").strip().lower() == "on"
 
 
 @dataclass(frozen=True)
@@ -255,12 +276,12 @@ def _merge(old: Sequence[Fact], new: Sequence[Fact]) -> list[Fact]:
 
 async def _ask(question: str, facts: Sequence[Fact]) -> tuple[Verdict, tuple[str, ...]]:
     options = [Option(id=str(i), text=fact.option_text()) for i, fact in enumerate(facts)]
-    picked = await choose(TASK, question, options)
+    picked = await choose(EXACT_TASK if no_similar() else TASK, question, options)
     if picked.failed:
         return Verdict(FAILED), ()
     chosen = tuple(facts[int(i)] for i in picked.ids)
     if picked.status is Status.OUTCOME:
-        if picked.outcome == SIMILAR:
+        if picked.outcome == SIMILAR and not no_similar():
             return (Verdict(SIMILAR, chosen) if chosen else Verdict(NO_DATA)), picked.terms
         return Verdict(picked.outcome), picked.terms
     if picked.status is Status.PICKED:
