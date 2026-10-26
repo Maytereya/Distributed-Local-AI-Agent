@@ -14,9 +14,10 @@
 круг поиска. Текст печатает код (принцип 1): название и цена — из прайса, строка памятки — как есть, без цены. Нет
 данных — честный оффер оператора (принцип 3).
 
-Под `service_answer_no_similar = on` (BUG-2026-10-21-SVC-SIMILAR-NOISE; топ-5 разбора 95 цен, п. 5) исхода `similar` нет — как у
-подбора анализов по данным (`test_assist_answer`): близкое, но другое (другой метод, материал, предмет) — `no_data` и честный
-оффер; «похожее» показывало несвязанные строки и чужую цену. Задача `service_answer_exact`, свой промпт.
+Под `service_answer_no_similar = on` (BUG-2026-10-21-SVC-SIMILAR-NOISE; топ-5 разбора 95 цен, п. 5) «похожее» пациенту не
+показывается — как у подбора анализов по данным (`test_assist_answer`): близкое, но другое — честный оффер, второй круг по
+терминам модели. Исход у модели остаётся: карточка 26.10 без него показала, что модель называет близкое ответом «да» («3D/4D УЗИ» →
+обычное УЗИ беременных). Задача `service_answer_exact`, промпт — прежний с синтетическими примерами вместо двух вопросов эталона.
 
 Где спрашивается (там, где бот иначе написал бы свободный текст или сдался бы, не заглянув в данные):
 - `free_text` — перед свободным текстом LLM (оркестратор): ответ, близкое или оффер; «не о клинике» и сбой — как было;
@@ -48,11 +49,12 @@ TASK = Task(
     queue_timeout_ms=2000,
 )
 
-# Без исхода «похожее» (`service_answer_no_similar`): своё имя — свой промпт, своё место в телеметрии и на стенде.
+# Под `service_answer_no_similar`: своё имя — свой промпт (синтетические примеры), своё место в телеметрии и на стенде. «Похожее»
+# у модели есть, пациенту — нет (`_ask`).
 EXACT_TASK = Task(
     name="service_answer_exact",
     max_picks=4,
-    outcomes=("no_data", "not_about_clinic"),
+    outcomes=("similar", "no_data", "not_about_clinic"),
     max_terms=3,
     num_predict=96,
     timeout_s=8.0,
@@ -281,7 +283,11 @@ async def _ask(question: str, facts: Sequence[Fact]) -> tuple[Verdict, tuple[str
         return Verdict(FAILED), ()
     chosen = tuple(facts[int(i)] for i in picked.ids)
     if picked.status is Status.OUTCOME:
-        if picked.outcome == SIMILAR and not no_similar():
+        if picked.outcome == SIMILAR and no_similar():
+            # Близкое, но другое — не ответ пациенту: честный оффер (и второй круг по терминам модели, как у «нет данных»).
+            turn_telemetry.note(svc_answer_similar_hidden=len(chosen))
+            return Verdict(NO_DATA), picked.terms
+        if picked.outcome == SIMILAR:
             return (Verdict(SIMILAR, chosen) if chosen else Verdict(NO_DATA)), picked.terms
         return Verdict(picked.outcome), picked.terms
     if picked.status is Status.PICKED:

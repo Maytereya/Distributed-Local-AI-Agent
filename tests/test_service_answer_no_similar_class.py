@@ -1,13 +1,15 @@
-"""Ответ о клинике по данным без исхода «похожее» (BUG-2026-10-21-SVC-SIMILAR-NOISE; п. 5 топ-5 разбора 95 цен; выключатель
-`service_answer_no_similar`, off; включение — после окна (е), решение владельца).
+"""Ответ о клинике по данным: «похожее» пациенту не показывается (BUG-2026-10-21-SVC-SIMILAR-NOISE; п. 5 топ-5 разбора 95 цен;
+выключатель `service_answer_no_similar`, off; включение — после окна (е), решение владельца).
 
 Карточка деплоя 13 (`service_answer_from_data = on`): исход `similar` показывал несвязанные строки и чужую цену — «Уздг бцс
 ребёнку» → справка 079/у с ценой, «ПЦР на аскаридоз отдельно» → «Да, есть: Ascaris IgG». Класс C разбора 95 («есть ли у вас X»
-вне анализов, OTHER → «нет данных → оператор»; 19 вопросов) ответ по данным получает только вместе с ним.
+вне анализов; 19 вопросов) ответ по данным получает только вместе с ним. Карточка 26.10 первой версии (задача без исхода
+«похожее») показала обратное: без него модель называет близкое ответом «да» («3D/4D УЗИ» → обычное УЗИ беременных), а на ходе
+подбора анализов ответ о клинике перехватывал ответ подбора по данным («анализы на мочу» → «Да, есть: Лебеда (W15)»).
 
-Инвариант под on: исходов два — ответ по выбранным строкам (название и цена — из прайса, печатает код) или «нет данных» с честным
-оффером; «похожее», которое модель всё же вернула, — не ответ (мусор: как сбой, место делает как было); промпт без «похожего»
-лежит в двух локациях; off — прежняя задача с «похожим». Через обработчик эндпоинта; LLM — подделка настоящего типа.
+Инвариант под on: у модели «похожее» есть, пациенту — нет: близкое — честный оффер; ответ — только выбранные строки (название и
+цена — из прайса); ход подбора анализов отвечает своим ответом по данным; промпт — в двух локациях, без вопросов эталона; off — как
+было. Через обработчик эндпоинта; LLM — подделка настоящего типа.
 """
 
 from __future__ import annotations
@@ -38,15 +40,22 @@ def _text(path: str) -> str:
     return (_ROOT / path).read_text(encoding="utf-8")
 
 
-def test_exact_prompt_has_no_similar_outcome_and_lives_in_both_places():
+def _similar(prompt: str) -> str:
+    return verdict("similar", picks=(_number_of(prompt, _CHECKUP),))
+
+
+def _picked(prompt: str) -> str:
+    return verdict(picks=(_number_of(prompt, _CHECKUP),))
+
+
+def test_exact_prompt_is_the_old_one_with_synthetic_examples_in_both_places():
     exact = _text("messengers_router/prompts/choose_service_answer_exact.txt")
     assert exact == _text("app_data/prompts/mr_choose_service_answer_exact.txt")
-    assert '"similar"' not in exact and "похожие" not in exact.lower()
-    assert "Близкая, но другая услуга" in exact and '"no_data", даже если других пунктов нет' in exact
     base = _text("messengers_router/prompts/choose_service_answer.txt").splitlines()
-    # Отличия от прежнего промпта: правило 1 без «похожего» и примеры 2–3 — синтетика вместо двух вопросов эталона (Гудхарт).
-    assert [line[:2] for line in exact.splitlines() if line not in base] == ["1.", "2.", "3."]
+    # Отличия — только примеры 2–3: синтетика вместо двух вопросов эталона (g0509, g0277; Гудхарт).
+    assert [line[:2] for line in exact.splitlines() if line not in base] == ["2.", "3."]
     assert "ФКС с биопсией" not in exact and "детей 2 лет" not in exact
+    assert '"similar"' in exact  # исход у модели остаётся
 
 
 @pytest.mark.parametrize(("value", "task"), [("on", "service_answer_exact"), ("off", "service_answer"), ("мусор", "service_answer")])
@@ -55,21 +64,18 @@ def test_task_by_switch(value, task, monkeypatch):
 
     monkeypatch.setattr(cfg, "MR_SERVICE_ANSWER_NO_SIMILAR", value, raising=False)
     assert (service_answer.EXACT_TASK if service_answer.no_similar() else service_answer.TASK).name == task
-    assert ("similar" in service_answer.EXACT_TASK.outcomes) is False
 
 
-def test_similar_from_the_model_is_not_an_answer_under_on(answer_world, monkeypatch):  # noqa: F811
-    # Модель всё же вернула «похожее» с номером строки: на задаче без этого исхода — мусор, ответа «похожие» нет.
-    similar = lambda prompt: verdict("similar", picks=(_number_of(prompt, _CHECKUP),))  # noqa: E731
-    out = turn(answer_world, monkeypatch, "Чекап для собаки делаете?", switch="on", answers=_free_text_answers(similar), cfg_extra=_ON)
+def test_similar_is_an_honest_offer_not_rows_under_on(answer_world, monkeypatch):  # noqa: F811
+    out = turn(answer_world, monkeypatch, "Чекап для собаки делаете?", switch="on", answers=_free_text_answers(_similar), cfg_extra=_ON)
 
-    assert out["telemetry"].get("svc_answer") == "failed", out["telemetry"]
+    assert out["telemetry"].get("svc_answer") == "no_data" and out["telemetry"].get("svc_answer_similar_hidden") == 1, out["telemetry"]
     assert "Есть похожие" not in out["text"] and "2 055 руб." not in out["text"], out["text"]
+    assert "нет данных" in out["text"] and "Перевести?" in out["text"] and out["pending_offer"], out["text"]
 
 
 def test_similar_is_shown_as_before_under_off(answer_world, monkeypatch):  # noqa: F811
-    similar = lambda prompt: verdict("similar", picks=(_number_of(prompt, _CHECKUP),))  # noqa: E731
-    out = turn(answer_world, monkeypatch, "Чекап для собаки делаете?", switch="on", answers=_free_text_answers(similar))
+    out = turn(answer_world, monkeypatch, "Чекап для собаки делаете?", switch="on", answers=_free_text_answers(_similar))
 
     assert out["telemetry"].get("svc_answer") == "similar", out["telemetry"]
     assert "Есть похожие" in out["text"], out["text"]
@@ -85,8 +91,19 @@ def test_no_data_is_an_honest_offer_under_on(reply, answer_world, monkeypatch): 
 
 
 def test_answer_prints_name_and_price_from_the_row_under_on(answer_world, monkeypatch):  # noqa: F811
-    picked = lambda prompt: verdict(picks=(_number_of(prompt, _CHECKUP),))  # noqa: E731
-    out = turn(answer_world, monkeypatch, "Чекап делаете?", switch="on", answers=_free_text_answers(picked), cfg_extra=_ON)
+    out = turn(answer_world, monkeypatch, "Чекап делаете?", switch="on", answers=_free_text_answers(_picked), cfg_extra=_ON)
 
     assert _SERVICE_ANSWER_MARK in out["calls"]
     assert out["text"].startswith(service_answer.ANSWER_HEADING) and "— Ежегодный Чекап — 2 055 руб." in out["text"], out["text"]
+
+
+@pytest.mark.parametrize(("extra", "source"), [(_ON, "test_assist_data"), ({}, "service_answer")])
+def test_test_assist_turn_keeps_its_own_data_answer_under_on(extra, source, answer_world, monkeypatch):  # noqa: F811
+    # Ход подбора анализов (TEST_ASSIST, `test_assist_from_data = on`) под on отвечает своим ответом по данным: ответ о клинике
+    # его не перехватывает (карточка 26.10: «анализы на мочу» → «Да, есть: Лебеда (W15)»). Под off — как было (ответ о клинике).
+    out = turn(
+        answer_world, monkeypatch, CLAIM_QUESTIONS[0], switch="on", answers=_free_text_answers(verdict("no_data")),
+        cfg_extra={"MR_TEST_ASSIST_FROM_DATA": "on", **extra},
+    )
+
+    assert out["telemetry"].get("answer_source") == source, out["telemetry"]
