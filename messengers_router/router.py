@@ -3267,6 +3267,10 @@ async def _resolve_nlu_decision_before_doctor_guard(
             # когда тема есть.
             answer_topic = button_flow.answer_topic(pending_before_nlu)
             firm = {"answer_topic_firm": True} if answer_topic and button_flow.mixed_topic() else {}
+            if not answer_topic and pending_answer.clarify_topic(pending_before_nlu):
+                # Ответ на просьбу назвать услугу (`clarify_reply_topic`), признанный ответом LLM, — тема просьбы, и правило другой темы
+                # по словам реплики её не перебивает (правила сужают, решает LLM; срочное — раньше).
+                answer_topic, firm = pending_answer.clarify_topic(pending_before_nlu), {"answer_topic_firm": True}
             nlu_result = await analyze_with_candidates(
                 user_text,
                 state,
@@ -4176,7 +4180,9 @@ async def patient_routing_stream(
     if not button_id:
         expected = pending_answer.expected_from(state.last_entities)
         if expected is not None:
-            filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
+            # Просьба инструмента назвать услугу (`clarify_reply_topic`) — правила «значение найдено» её не решают: решает LLM.
+            clarify = pending_answer.clarify_question(memory.get_pending(state))
+            filled = expected[0] == expects.Question.SLOT_VALUE.value and not clarify and _slot_filled_by_rules(user_text, state, services, memory)
             spent = llm_runtime.turn_decisions_spent()
             # Вопрос кнопки меню под `button_answer_topic` / `button_topic_hint`: значение, найденное правилами, LLM проверяет на
             # «другую тему» — правила находят его и в реплике о другом («ЭКГ как подготовиться?» на «Цену анализа»).
@@ -4184,6 +4190,7 @@ async def patient_routing_stream(
                 *expected, user_text, filled=filled, confirm_topic=button_flow.judged_by_llm(memory.get_pending(state))
             )
             button_flow.refund_topic_judge(answered, memory.get_pending(state), spent)
+            pending_answer.settle_clarify(answered, state, memory, spent)
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
@@ -4318,6 +4325,9 @@ async def patient_routing_stream(
     # Смешанное сообщение внутри кнопки (`button_topic_hint`): ответ по теме кнопки — и подсказка кнопки на остальное.
     response = button_flow.with_mixed_hint(response)
     address_flow.finish_turn(state)  # метка адресной кнопки — следующей реплике (`address_branch_flags`)
+    if plan is not None and evidence is not None:
+        # «Уточните название…» инструмента темы — висящий вопрос этой темы (`clarify_reply_topic`), после анти-залипа: его оффер первее.
+        pending_answer.ask_name_after_clarify(plan.label, evidence.items.values(), response.handoff, state, memory)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
     expects.finish_turn(state, response)
 

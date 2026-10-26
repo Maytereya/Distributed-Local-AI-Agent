@@ -230,6 +230,7 @@ class MessengerRouterConfig:
     address_service_llm: str
     doctors_by_service_data: str
     slot_suppress_llm: str
+    clarify_reply_topic: str
     t7_drop_k1: str
     t7_drop_k3: str
     price_judge_conditions: str
@@ -740,6 +741,10 @@ settings = Settings(
         # прайса по буквам в состоянии не воскрешает (инвариант 2 BUG-2026-06-02-02); off — как было.
         # [MESSENGER_ROUTER] slot_suppress_llm
         slot_suppress_llm=_get_enum("MESSENGER_ROUTER", "slot_suppress_llm", default="off", allowed={"off", "on"}),
+        # Инструмент темы попросил назвать услугу («Уточните название…», «Введите конкретное название процедуры…», «Не нашёл… Уточните
+        # название») — следующая реплика отвечает в той же теме: вопрос — висящий, как у вопроса планировщика о недостающем названии
+        # (BUG-2026-10-26-CLARIFY-REPLY-NOT-ACCEPTED). off — как было. [MESSENGER_ROUTER] clarify_reply_topic
+        clarify_reply_topic=_get_enum("MESSENGER_ROUTER", "clarify_reply_topic", default="off", allowed={"off", "on"}),
         # T7 K1 (облако 19.10, задача B): защиты `price_list_services` — «одно название прайса покрывает реплику» и
         # «сплошной список — только распознанный целиком». Под разбором хода (`turn_parse`) они решают только на пути
         # правил (`turn_parse.acting_for` = None). on — защит нет: «список или нет» на этом пути решает то же, что
@@ -923,6 +928,7 @@ MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_DOCTORS_BY_SERVICE_DATA = settings.messenger_router.doctors_by_service_data
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
+MR_CLARIFY_REPLY_TOPIC = settings.messenger_router.clarify_reply_topic
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
 MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
 MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions

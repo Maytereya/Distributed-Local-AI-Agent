@@ -15,6 +15,7 @@ from agent_logic_2.nayka_api import api_price
 
 from .. import shown_context, turn_parse, turn_telemetry
 from . import _price_by_parse
+from ..pending_answer import ASKS_NAME_KEY
 from ..policies import handoff_message
 from ..text_templates import PRICE_CLARIFY_NAME_TEXT, price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
@@ -181,7 +182,7 @@ def _parse_failed_clarify(query: str, entities: dict[str, Any]) -> dict[str, Any
         return None
     turn_telemetry.note(price_policy="parse_failed_clarify")
     note = "price_match_policy: parse_failed"
-    return {"service_name": "", "prices": [], "retail_prices": [], "doctors": [], "clarify_text": PRICE_CLARIFY_NAME_TEXT, "note": note, "entities_used": entities}
+    return {"service_name": "", "prices": [], "retail_prices": [], "doctors": [], "clarify_text": PRICE_CLARIFY_NAME_TEXT, "note": note, "entities_used": entities, ASKS_NAME_KEY: True}
 
 
 def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, Any]) -> dict[str, Any] | None:
@@ -209,7 +210,7 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
             extra={"prices": [], "retail_prices": []},
         )
     text = price_not_found_text(phrase) if status == "none_fit" else price_names_without_prices_text(phrase, selection.names)
-    return {"service_name": phrase, "prices": [], "retail_prices": [], "doctors": [], "clarify_text": text, "note": note, "entities_used": used}
+    return {"service_name": phrase, "prices": [], "retail_prices": [], "doctors": [], "clarify_text": text, "note": note, "entities_used": used, ASKS_NAME_KEY: True}
 
 
 async def _multi_price_payload(
@@ -601,6 +602,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             ),
             "note": "price_info: generic_uzi_clarify",
             "entities_used": entities,
+            ASKS_NAME_KEY: True,
         }
     doctor_query_specialty = _extract_specialty_from_text(query_text) if (doctor_id and has_price_request) else ""
     p2_from_entity = False
@@ -841,7 +843,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         llm_rows = reconcile_with_proposal([], selection)
         if llm_rows is not None:
             return _llm_answer(llm_rows)
-        return {"prices": [], "note": "no service query", "entities_used": entities}
+        return {"prices": [], "note": "no service query", "entities_used": entities, ASKS_NAME_KEY: True}  # рендер: «Уточните название»
     retail_query = service_name
     if query_text and not _is_city_only_reply(query_text) and not _names_no_service(query):
         query_candidate = _service_phrase(query, query_text)
@@ -931,6 +933,7 @@ async def service_bundle_info(
             ),
             "note": "service_bundle_info: generic_uzi_clarify",
             "entities_used": entities,
+            ASKS_NAME_KEY: True,
         }
     clarify = None if family_row is not None else _parse_failed_clarify(query, entities)
     if clarify is not None:
@@ -1064,6 +1067,7 @@ async def service_bundle_info(
             llm_rows = reconcile_with_proposal([], selection)
         if not llm_rows:
             out["note"] = "service_bundle_info: no service query"
+            out[ASKS_NAME_KEY] = True  # рендер: «Уточните название» / «Не нашёл… Уточните название»
             return out
         if len(llm_rows) > 1:
             return _llm_variants(llm_rows)

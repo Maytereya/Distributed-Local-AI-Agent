@@ -47,7 +47,7 @@ import contextvars
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from . import turn_telemetry
 from .choice import Choice, Option, Status, Task, choose
@@ -624,6 +624,82 @@ def slot_value(text: str) -> str:
 
     value = " ".join(str(text or "").split()).strip(" .,!?;:")
     return value if 0 < len(value) <= _SLOT_VALUE_MAX else ""
+
+
+# Просьба инструмента темы назвать услугу («Уточните название…», «Введите конкретное название процедуры…») — висящий вопрос со
+# свободным ответом (BUG-2026-10-26-CLARIFY-REPLY-NOT-ACCEPTED, `clarify_reply_topic`): пометка ответа инструмента, слот названия
+# темы (как у вопроса планировщика, `policies.REQUIRED_SLOTS`) и пометка `_pending`, что вопрос поставлен этой просьбой.
+ASKS_NAME_KEY = "asks_service_name"
+CLARIFY_KEY = "clarify"
+_NAME_SLOTS = {"PRICE": "service_name"}
+
+
+def clarify_reply_topic_on() -> bool:
+    """`[MESSENGER_ROUTER] clarify_reply_topic = on`: просьба инструмента назвать услугу — висящий вопрос темы."""
+
+    from .runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_CLARIFY_REPLY_TOPIC", "off") or "").strip().lower() == "on"
+
+
+def ask_name_after_clarify(label: str, payloads: Iterable[Any], handoff: bool, state: Any, memory: Any) -> bool:
+    """Инструмент темы попросил назвать услугу — висящий вопрос со свободным ответом (`slot_value`, под `pending_buttons`):
+    `_pending` темы с пометкой `CLARIFY_KEY`. Ответ разбирает эта функция (LLM, `FREE_TASK`), а не правило «похоже на название»
+    (`flow_policy._looks_like_price_service_reply` ловит и «спасибо», и «хочу записаться к кардиологу»). Другой висящий вопрос
+    хода (оффер оператора, анти-залип) не перебивается.
+
+    :return: вопрос поставлен
+    """
+
+    slot = _NAME_SLOTS.get(label)
+    if not clarify_reply_topic_on() or not buttons_on() or slot is None or handoff or memory.get_pending(state):
+        return False
+    if not any(isinstance(payload, dict) and payload.get(ASKS_NAME_KEY) for payload in payloads):
+        return False
+    memory.set_pending(state, label=label, missing_slots=[slot])
+    memory.get_pending(state)[CLARIFY_KEY] = True
+    if state.last_entities.get("_secondary_offer_pending"):
+        # Оффер второй темы реплики текста в ответе не имеет (`orchestrator._mark_secondary_offer_pending`): пациент видит просьбу —
+        # ответ на неё, а не «да» на скрытый оффер; вторая тема остаётся в очереди и будет предложена после ответа по услуге.
+        state.last_entities["_secondary_offer_pending"] = False
+    from . import expects
+
+    expects.ask(Question.SLOT_VALUE, kind=expects.FREE)
+    turn_telemetry.note(tu_clarify_topic=label)
+    return True
+
+
+def clarify_question(pending: Any) -> bool:
+    """Висящий вопрос поставлен просьбой инструмента назвать услугу (`ask_name_after_clarify`)."""
+
+    return isinstance(pending, dict) and bool(pending.get(CLARIFY_KEY))
+
+
+def settle_clarify(answered: Answer | None, state: Any, memory: Any, spent_before: int) -> None:
+    """После решения функции об ответе на просьбу назвать услугу: «ответ» (решила LLM) — вопрос остаётся до NLU (тема —
+    `clarify_topic`), решение заменяет классификатор темы и лимит решений хода не тратит (как судья кнопок цены,
+    `button_flow.refund_topic_judge`); иначе (другая тема, «нет», пауза, ничего, сбой LLM) — вопрос снят, реплика идёт обычным
+    путём, как без выключателя."""
+
+    if not clarify_question(memory.get_pending(state)):
+        return
+    if answered is None or answered.source is not Source.LLM or answered.outcome is not Outcome.ANSWER:
+        memory.clear_pending(state)
+        return
+    from . import llm_runtime
+
+    if llm_runtime.turn_decisions_spent() > spent_before and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(tu_clarify_refund=1)
+
+
+def clarify_topic(pending: Any) -> str:
+    """Тема ответа на просьбу назвать услугу, который эта функция признала ответом: тема вопроса (NLU её не угадывает по словам
+    реплики — «узи щитовидной железы» в ответ на вопрос о цене не уходит к врачам); иначе пусто."""
+
+    found = slot_answer()
+    if not clarify_question(pending) or found is None or found.outcome is not Outcome.ANSWER:
+        return ""
+    return str(pending.get("label") or "")
 
 
 def slot_answer() -> Answer | None:
