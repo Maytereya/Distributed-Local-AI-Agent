@@ -39,22 +39,24 @@ _REGIONS_CITY = "Энск"  # город подделки — у настоящ�
 _ADDRESS_LEAVES = sorted(b for b, a in button_menu.BUTTONS.items() if a.mode == "pass" and a.label == "ADDRESS")
 
 
-def _answer(outcome: str, *picks: str) -> str:
-    return json.dumps({"picks": [[r["addressForSite"] for r in _REGIONS].index(p) + 1 for p in picks], "outcome": outcome})
+def _answer(outcome: str, *picks: str, regions: list[dict[str, Any]] = _REGIONS) -> str:
+    return json.dumps({"picks": [[r["addressForSite"] for r in regions].index(p) + 1 for p in picks], "outcome": outcome})
 
 
-def _dialog(world_dir, monkeypatch, turns, *, switch: str, followup: str | None) -> list[dict[str, Any]]:
+def _dialog(
+    world_dir, monkeypatch, turns, *, switch: str, followup: str | None, regions: list[dict[str, Any]] = _REGIONS, named_street: str = "off"
+) -> list[dict[str, Any]]:
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
     from messengers_router.runtime_config import config as cfg
 
-    async def regions(self):
-        return [{"id": i, "name": f"Самара {r['addressForSite']}", "city": "Самара", "phone": f"+7 846 000 00 0{i}", **r} for i, r in enumerate(_REGIONS, 1)]
+    async def fake_regions(self):
+        return [{"id": i, "name": f"Самара {r['addressForSite']}", "city": "Самара", "phone": f"+7 846 000 00 0{i}", **r} for i, r in enumerate(regions, 1)]
 
     answers: dict[str, Any] = {}
     if followup is not None:
         answers[_MARK] = followup
-    session = f"addr-followup-{switch}-{followup}-{json.dumps(turns, ensure_ascii=False)}"
+    session = f"addr-followup-{switch}-{named_street}-{len(regions)}-{followup}-{json.dumps(turns, ensure_ascii=False)}"
 
     async def run(world) -> list[dict[str, Any]]:
         memory, services, out = MemoryStore(), Services(), []
@@ -66,8 +68,9 @@ def _dialog(world_dir, monkeypatch, turns, *, switch: str, followup: str | None)
         return out
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(Services, "_ensure_regions_loaded", regions)
+        patch.setattr(Services, "_ensure_regions_loaded", fake_regions)
         patch.setattr(cfg, "MR_ADDRESS_FOLLOWUP_LLM", switch, raising=False)
+        patch.setattr(cfg, "MR_ADDRESS_NAMED_STREET", named_street, raising=False)
         patch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM(answers))
@@ -79,8 +82,8 @@ def _press(button_id: str) -> tuple[str, str]:
     return (button_id, GATEWAY_V1_TITLES[button_id])
 
 
-def _listed(text: str) -> set[str]:
-    return {r["addressForSite"] for r in _REGIONS if r["addressForSite"] in text}
+def _listed(text: str, regions: list[dict[str, Any]] = _REGIONS) -> set[str]:
+    return {r["addressForSite"] for r in regions if r["addressForSite"] in text}
 
 
 @pytest.mark.parametrize("button_id", _ADDRESS_LEAVES)
@@ -166,3 +169,83 @@ def test_when_to_bring_biomaterial_gets_lab_hours(button_id, mini_prod_world, mo
     assert _listed(text) == {r["addressForSite"] for r in _REGIONS if r["analysis"]}, text
     assert "будни 07:00–18:30" in text and not on[1]["state"].get("_operator_offer_pending"), on[1]
     assert on[1]["telemetry"].get("address_followup") == "hours"
+
+
+# BUG-2026-10-26-ADDRESS-FOLLOWUP-NAMED-BRANCH-HOURS: на одной улице несколько филиалов — как «Победы» (126, 95, 83) в `/site/regions`.
+_STREET = [
+    {"addressForSite": "ул.Луговая, 12", "analysis": True, "ecg": True, "usi": False, **_HOURS},
+    {"addressForSite": "ул.Луговая, 40", "analysis": True, "ecg": False, "usi": True, **_HOURS, "weekdaysTo": "20:00:00"},
+    {"addressForSite": "ул.Луговая, 77", "analysis": True, "ecg": False, "usi": False, **_HOURS},
+]
+_STREET_REGIONS = _REGIONS + _STREET
+
+
+@pytest.mark.parametrize("button_id", _ADDRESS_LEAVES)
+@pytest.mark.parametrize("outcome", ["hours", "branch"])
+def test_time_at_a_named_street_gets_the_cards_of_its_branches(button_id, outcome, mini_prod_world, monkeypatch):  # noqa: F811
+    """Смоук деплоя 18 на проде: «а на Победы до скольки?» → часы всех пунктов забора. LLM выбрала три филиала на Победы, а
+    правило «слово есть в адресах больше чем двух филиалов — филиал не назван» их вычеркнуло. Инвариант: вопрос о времени работы
+    названного филиала (или улицы, на которой их несколько) получает карточки именно их, с графиком из данных, а не список всех;
+    исход LLM — `hours` (так она отвечает на живой пробе) или `branch` — не важен. off — как было: выбор вычеркнут."""
+
+    turns = [_press(button_id), "а на Луговой до скольки?"]
+    street = [r["addressForSite"] for r in _STREET]
+    answer = _answer(outcome, *street, regions=_STREET_REGIONS)
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", followup=answer, regions=_STREET_REGIONS, named_street="on")
+    text = on[1]["text"]
+    assert _listed(text, _STREET_REGIONS) == set(street) and not text.startswith(address_flow.HOURS_HEAD), text
+    assert text.count("График: будни 07:00–18:30") == 2 and "График: будни 07:00–20:00" in text, text
+    assert "address_followup_vetoed" not in on[1]["telemetry"] and on[1]["telemetry"].get("address_followup_picks") == 3
+    assert not on[1]["state"].get("_operator_offer_pending"), on[1]
+    off = _dialog(mini_prod_world, monkeypatch, turns, switch="on", followup=answer, regions=_STREET_REGIONS, named_street="off")
+    assert off[1]["telemetry"].get("address_followup_vetoed") == 3, off[1]["telemetry"]
+
+
+@pytest.mark.parametrize("button_id", _ADDRESS_LEAVES)
+def test_house_number_on_a_shared_street_gets_one_card(button_id, mini_prod_world, monkeypatch):  # noqa: F811
+    """Улица названа с номером дома — LLM выбирает один филиал, и карточка — только его (основа улицы общая для трёх адресов)."""
+
+    turns = [_press(button_id), "на Луговой 40 во сколько открываетесь?"]
+    answer = _answer("hours", "ул.Луговая, 40", regions=_STREET_REGIONS)
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", followup=answer, regions=_STREET_REGIONS, named_street="on")
+    assert _listed(on[1]["text"], _STREET_REGIONS) == {"ул.Луговая, 40"} and "Здесь можно сдать анализы, сделать УЗИ." in on[1]["text"], on[1]["text"]
+
+
+def test_word_of_more_branches_than_cards_does_not_name_them(mini_prod_world, monkeypatch):  # noqa: F811
+    """Встречный: слово, общее для большего числа филиалов, чем карточек в ответе (`max_picks`), филиалов не называет — все не
+    покажем, и одна-три карточки были бы чужим графиком; ответ — общий путь (здесь — часы пунктов забора), как без выключателя."""
+
+    regions = _STREET_REGIONS + [{"addressForSite": "ул.Луговая, 101", "analysis": True, "ecg": False, "usi": False, **_HOURS}]
+    assert len([r for r in regions if "Луговая" in r["addressForSite"]]) > address_flow.FOLLOWUP_TASK.max_picks
+    turns = [_press("menu.address"), "а на Луговой до скольки?"]
+    answer = _answer("hours", *[r["addressForSite"] for r in _STREET], regions=regions)
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", followup=answer, regions=regions, named_street="on")
+    assert on[1]["text"].startswith(address_flow.HOURS_HEAD) and on[1]["telemetry"].get("address_followup_vetoed") == 3, on[1]
+
+
+@pytest.mark.parametrize("button_id", _ADDRESS_LEAVES)
+def test_when_to_bring_without_a_named_branch_keeps_lab_hours(button_id, mini_prod_world, monkeypatch):  # noqa: F811
+    """Встречный (BUG-2026-10-26-ADDRESS-FOLLOWUP-HOURS): «когда принести» без названного филиала под выключателем — тот же
+    ответ, что без него: пункты забора с графиком и отсылка к подготовке."""
+
+    turns = [_press(button_id), "когда можно принести кал на анализ?"]
+    answers = [
+        _dialog(mini_prod_world, monkeypatch, turns, switch="on", followup=_answer("hours", regions=_STREET_REGIONS), regions=_STREET_REGIONS, named_street=s)
+        for s in ("on", "off")
+    ]
+    assert answers[0][1]["text"] == answers[1][1]["text"], answers[0][1]["text"]
+    text = answers[0][1]["text"]
+    assert text.startswith(address_flow.HOURS_HEAD) and text.endswith(address_flow.HOURS_NOTE), text
+    assert _listed(text, _STREET_REGIONS) == {r["addressForSite"] for r in _STREET_REGIONS if r["analysis"]}, text
+
+
+def test_city_word_does_not_name_the_branch_under_named_street():
+    """Встречный: порог «общего слова» поднят до числа карточек, но город филиала (`city` его данных) по-прежнему не называет
+    филиал, у которого город записан в адресе (карточка 25.10)."""
+
+    city = _REGIONS_CITY
+    addresses = [f"г. {city}, ул. Победы, 126", "ул. Победы, 95", "ул. Победы, 83", "ул.Аминева, 29"]
+    stems = address_flow._common_words(addresses, more_than=address_flow.FOLLOWUP_TASK.max_picks) | frozenset(address_flow._address_words(city))
+    assert not address_flow.named_in(f"как работаете в праздники в {city}е?", addresses[0], common=stems)
+    assert all(address_flow.named_in("а на Победы до скольки?", a, common=stems) for a in addresses[:3])
+    assert not address_flow.named_in("а на Победы до скольки?", addresses[3], common=stems)
