@@ -332,7 +332,8 @@ def test_catalog_confirm_question_reask_and_refusal(mini_prod_world, monkeypatch
     assert "Похоже, вы имели в виду врача «Евграфова»" in first.text
     assert first.expects == _expected("yes_no", "catalog_confirm", first.text, 1)
     assert second.text == first.text and second.expects == _expected("yes_no", "catalog_confirm", first.text, 2)
-    assert third.expects is None  # «нет» принят: дальше — вопрос о фамилии, не «да/нет»
+    # «нет» принят: дальше — вопрос о фамилии, не «да/нет»; вопрос-слот со свободным ответом (`pending_buttons = on`, прод с 21.10)
+    assert third.expects == _expected("free", "slot_value", third.text, 1)
 
 
 @pytest.fixture
