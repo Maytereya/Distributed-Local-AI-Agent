@@ -469,28 +469,6 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
     return candidate
 
 
-def _extract_schedule_specialty(text: str) -> str | None:
-    """
-    Извлекает специальность для запросов расписания.
-
-    :param text: текст запроса
-    :return: специальность или None
-    """
-    spec = extract_specialty(text or "")
-    if spec:
-        return spec
-    if re.search(
-        r"\b(фгдс|фдгс|фгс|егдс|эгдс|фкс|эндоскоп\w*|гастроскоп\w*|колоноскоп\w*|"
-        r"ректороманоскоп\w*|эзофагогастродуоденоскоп\w*)\b",
-        text or "",
-        re.I,
-    ):
-        return "эндоскопист"
-    if re.search(r"\bузи\b", text or "", re.I):
-        return "узи"
-    return None
-
-
 def _is_procedure_doctor_info_query(text: str, service_name: str | None) -> bool:
     """
     Определяет запрос "какой врач делает конкретную процедуру".
@@ -1434,7 +1412,7 @@ async def deterministic_rule_decision(
         )
     elif detect_schedule_intent(text):
         entities: dict[str, Any] = {}
-        specialty = _extract_schedule_specialty(text)
+        specialty = extract_specialty(text)
         doctor_name = _extract_doctor_name(text, mode="schedule")
         if doctor_name:
             entities["doctor_name"] = doctor_name
