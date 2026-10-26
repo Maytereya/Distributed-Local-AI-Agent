@@ -722,7 +722,8 @@ settings = Settings(
         # «процедура → специальность» в коде. shadow — ответ не меняется, в ход пишется согласие нынешней выдачи врачей с
         # данными (`svc_doc_*`); on — врачи услуги из данных (роль правил только сужает, если среди них есть); off — как было.
         # [MESSENGER_ROUTER] doctors_by_service_data
-        doctors_by_service_data=_get_enum("MESSENGER_ROUTER", "doctors_by_service_data", default="off", allowed={"off", "shadow", "on"}),
+        # По умолчанию shadow — как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
+        doctors_by_service_data=_get_enum("MESSENGER_ROUTER", "doctors_by_service_data", default="shadow", allowed={"off", "shadow", "on"}),
         # Подавитель A′-1 (`router._suppress_grounder_rejected_slots`): услугу, которую в этом ходу отвергла LLM, резолвер
         # прайса по буквам в состоянии не воскрешает (инвариант 2 BUG-2026-06-02-02); off — как было.
         # [MESSENGER_ROUTER] slot_suppress_llm
