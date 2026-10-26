@@ -54,10 +54,22 @@ def test_bare_name_gets_the_maximum_from_data(answer_world, monkeypatch):  # noq
 
 
 def test_several_variants_ask_which_one(answer_world, monkeypatch):  # noqa: F811
-    out = turn(answer_world, monkeypatch, "Чекап", switch="on", answers=_answers(_overview("Ежегодный Чекап", "Женский чекап Базовый")))
+    # Голое название на теме врачей (правило ставит «Узи лимфоузлов» в DOCTOR_INFO): несколько вариантов — с ценами и вопросом.
+    lymph = ("УЗИ периферических лимфоузлов (1 область) с эластографией", "УЗИ периферических лимфоузлов комплексно - все зоны (детское)")
+    out = turn(answer_world, monkeypatch, "Узи лимфоузлов", switch="on", answers=_answers(_overview(*lymph), label="APPOINTMENT"))
 
     assert out["text"].startswith("В прайсе клиники несколько вариантов:"), out["text"]
-    assert "— Ежегодный Чекап — 2 055 руб." in out["text"] and "Какой вариант интересует?" in out["text"], out["text"]
+    assert f"— {lymph[0]} — 1 800 руб." in out["text"] and "Какой вариант интересует?" in out["text"], out["text"]
+
+
+@pytest.mark.parametrize("reply", ["Чекап", "Анализ T-SPOT"])
+def test_price_and_test_assist_topics_keep_their_own_data_answer(reply, answer_world, monkeypatch):  # noqa: F811
+    # На цене и подборе анализов у хода свой ответ по данным (выбор строки цены, ответ подбора) — строже; обзор его не перебивает
+    # (карточка 26.10: «мазок на онкоцитологию» → «Мазок на эозинофилы…», «соскоб на лишай» → «ЗППП: соскоб»).
+    for label in ("PRICE", "TEST_ASSIST"):
+        out = turn(answer_world, monkeypatch, reply, switch="on", answers=_answers(_overview(_T_SPOT), label=label))
+        if out["telemetry"].get("tu_label_final") in {"PRICE", "TEST_ASSIST"}:
+            assert _OVERVIEW_MARK not in out["calls"], (label, out["telemetry"])
 
 
 @pytest.mark.parametrize(
