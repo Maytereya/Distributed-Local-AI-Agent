@@ -644,6 +644,30 @@ def _maybe_offer_operator_on_reask_limit(
     return ResponseEnvelope(text=expects.reask_limit_text(limited), handoff=False, state_update=response.state_update)
 
 
+# Дедлайн хода истёк (`llm_turn_deadline_s`): LLM не успела там, где была нужна, — честно, без ответа правил с фактом.
+DEADLINE_OFFER_TEXT = "Не успел подготовить точный ответ — чтобы не ошибиться, его даст оператор. Перевести на оператора?"
+
+
+def _offer_operator_on_deadline(response: ResponseEnvelope, state: SessionState, memory: MemoryStore) -> ResponseEnvelope:
+    """Дедлайн хода не оставил времени вызову LLM — ответ хода честный оффер оператора, а не ответ правил
+    (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, решение владельца 27.10: «истёк дедлайн — уточню у оператора, не правило с ценой»).
+
+    Под выключателем `llm_turn_deadline_s` (0 — дедлайна нет, ответ тот же). Перевод на оператора остаётся переводом.
+    Вопросы, которые задал бы заменённый ответ, снимаются — как у предела переспросов: «да» следующего хода — ответ на оффер.
+    """
+
+    if response.handoff or not llm_runtime.turn_deadline_hit():
+        return response
+    from .response_builder import PREPARE_VARIANT_PENDING_KEY
+
+    reset_appointment_runtime_state(state)
+    _clear_catalog_confirm_pending(state, memory)
+    state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+    mark_operator_offer_pending(state, memory)
+    turn_telemetry.override(answer_source="llm_deadline_offer")
+    return ResponseEnvelope(text=DEADLINE_OFFER_TEXT, handoff=False, state_update=response.state_update)
+
+
 def _get_catalog_confirm_pending(state: SessionState) -> dict[str, Any] | None:
     payload = state.last_entities.get(_CATALOG_CONFIRM_STATE_KEY)
     if not isinstance(payload, dict):
@@ -4376,6 +4400,7 @@ async def patient_routing_stream(
         )
 
     _note_decision(decision, evidence, ctx.stage_timings)
+    response = _offer_operator_on_deadline(response, state, memory)
     # Предел переспросов (D2.4, под `reask_limit = on`) — раньше анти-залипа: тот не трогает ответ с оффером.
     response = _maybe_offer_operator_on_reask_limit(response, state, memory)
     offered = _maybe_offer_operator_on_repeat(response, state, memory, user_text)

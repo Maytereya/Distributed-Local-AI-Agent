@@ -26,6 +26,10 @@
   правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
 - `nlu_timeout_s` — LLM-классификатор не уложился в потолок `classifier_timeout_s` (очередь и генерация вместе), значение —
   потолок; ход пошёл путём сбоя LLM (BUG-2026-10-27-CLASSIFIER-NO-TIMEOUT);
+- нагрузка LLM (BUG-2026-10-27-LLM-QUEUE-GIVES-UP): `llm_deadline_s` — дедлайн хода (`llm_turn_deadline_s`), `llm_deadline_hit` —
+  вызовов, которым дедлайн не оставил времени (исход `deadline` в очереди или `timeout` генерации), `llm_queue_gaveup` — вызовов, не
+  дождавшихся слота (`queue_timeout` / `deadline`: ход пошёл путём сбоя); только если не ноль; `answer_source = llm_deadline_offer` —
+  ответ хода заменён честным оффером оператора;
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;
 - ход (е), 22.10: `tool_ms` — время шагов плана по инструментам (`{"price_info": мс, …}`, повторы суммируются);
   `tu_decisions_spent` — сколько решений хода потрачено (лимит `llm_decision_turn_calls`); `tu_decisions_denied` —

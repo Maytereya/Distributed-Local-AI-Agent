@@ -316,7 +316,7 @@ async def messenger_generate(
             try:
                 turn_parse.cancel_unfinished()
             finally:
-                turn_telemetry.note(tu_decisions_spent=llm_runtime.turn_decisions_spent())
+                turn_telemetry.note(tu_decisions_spent=llm_runtime.turn_decisions_spent(), **llm_runtime.turn_load_note())
                 llm_runtime.end_turn_budget(budget)
                 turn_telemetry.finish(turn, handoff=handoff, chars=len(assistant_text))
                 if assistant_text:
@@ -431,7 +431,7 @@ async def messenger_generate_once(
         try:
             turn_parse.cancel_unfinished()
         finally:
-            turn_telemetry.note(tu_decisions_spent=llm_runtime.turn_decisions_spent())
+            turn_telemetry.note(tu_decisions_spent=llm_runtime.turn_decisions_spent(), **llm_runtime.turn_load_note())
             llm_runtime.end_turn_budget(budget)
             turn_telemetry.finish(turn, handoff=out_handoff, chars=len(out_text))
             await memory.aset(state)

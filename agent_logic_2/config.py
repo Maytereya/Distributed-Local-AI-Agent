@@ -196,6 +196,7 @@ class MessengerRouterConfig:
     llm_decision_breaker_failures: int
     llm_decision_breaker_open_s: int
     classifier_timeout_s: int
+    llm_turn_deadline_s: int
     choose_cache_ttl_s: int
     choose_symptom: str
     choose_readiness: str
@@ -487,6 +488,11 @@ settings = Settings(
         # генерация — не дольше S секунд; не успел — тот же путь, что при сбое LLM (правило или «LLM недоступна»).
         # 0 (по умолчанию) — как было: генерация до 45 с плюс очередь до 30 с.
         classifier_timeout_s=_get_int("MESSENGER_ROUTER", "classifier_timeout_s", 0, min_value=0, max_value=45),
+        # Дедлайн хода для LLM (решение владельца 27.10: «лучше подождать LLM, чем правила», BUG-2026-10-27-LLM-QUEUE-GIVES-UP):
+        # вызов LLM ждёт слот до «остаток дедлайна − p95 задачи» вместо своих 1,5–3 с очереди, генерация — не дольше остатка;
+        # слоты — начатым ходам первыми; не успел — исход `deadline`, ответ хода — честный оффер оператора, не правило.
+        # Секунды от начала хода (шлюз режет на 60 с). 0 (по умолчанию) — как было. [MESSENGER_ROUTER] llm_turn_deadline_s
+        llm_turn_deadline_s=_get_int("MESSENGER_ROUTER", "llm_turn_deadline_s", 0, min_value=0, max_value=58),
         # Кэш внятных ответов модуля выбора (ход (в), L-12): секунд жизни; сбой и мусор не кэшируются.
         # Коротко — ошибка модели не становится ответом всем на часы; 0 — без кэша (стенд меряет без него).
         choose_cache_ttl_s=_get_int("MESSENGER_ROUTER", "choose_cache_ttl_s", 1800, min_value=0, max_value=86400),
@@ -900,6 +906,7 @@ MR_LLM_DECISION_TURN_SECONDS = settings.messenger_router.llm_decision_turn_secon
 MR_LLM_DECISION_BREAKER_FAILURES = settings.messenger_router.llm_decision_breaker_failures
 MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_open_s
 MR_CLASSIFIER_TIMEOUT_S = settings.messenger_router.classifier_timeout_s
+MR_LLM_TURN_DEADLINE_S = settings.messenger_router.llm_turn_deadline_s
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
