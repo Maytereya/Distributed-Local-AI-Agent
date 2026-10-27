@@ -89,6 +89,7 @@ def _turn(
     reserve: float = 0.3,
     memory: Any = None,
     session: str = "",
+    guard: float = 0,
 ) -> dict[str, Any]:
     """Ход через эндпоинт; `busy_s` — соседи держат оба слота столько секунд от начала хода; `reserve` — p95 задач теста."""
 
@@ -105,7 +106,7 @@ def _turn(
             loop = asyncio.get_running_loop()
             for _ in range(2):
                 loop.call_later(busy_s, pool.release)
-        sid = session or f"deadline-{deadline}-{busy_s}-{delay}-{text}"
+        sid = session or f"deadline-{deadline}-{busy_s}-{delay}-{guard}-{text}"
         req = MessengerGenerateRequest(session_id=sid, text=text, debug=True)
         started = time.monotonic()
         body = json.loads((await messenger_generate_once(req, memory=memory or MemoryStore(), services=Services())).body)
@@ -115,6 +116,7 @@ def _turn(
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
         patch.setattr(cfg, "MR_LLM_TURN_DEADLINE_S", deadline, raising=False)
+        patch.setattr(cfg, "MR_CLASSIFIER_TIMEOUT_S", guard, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_SEMAPHORE", llm_runtime._SlotPool(2))
         patch.setattr(llm_runtime, "_P95_S", {})
@@ -197,6 +199,34 @@ def test_generation_is_cut_at_the_deadline(mini_prod_world, monkeypatch):  # noq
     assert turn["text"] == DEADLINE_OFFER_TEXT and turn["telemetry"].get("llm_deadline_hit") == 1, turn["telemetry"]
     assert "llm_queue_gaveup" not in turn["telemetry"]
     assert turn["s"] < _LONG_S - 2, turn["s"]
+
+
+def test_under_deadline_the_classifier_guard_bounds_generation_not_the_queue(mini_prod_world, monkeypatch):  # noqa: F811
+    """Шаг 2: под дедлайном хода потолок классификатора (`classifier_timeout_s`) — на генерацию, ожидание слота держит дедлайн
+    хода. Без дедлайна тот же ход под нагрузкой сдаётся по потолку на очереди и уходит путём сбоя LLM."""
+
+    text = _REPLIES["no_rule"]
+    loaded = _turn(mini_prod_world, monkeypatch, text, deadline=_DEADLINE_S, busy_s=_BUSY_S, guard=1)
+    free = _turn(mini_prod_world, monkeypatch, text, deadline=_DEADLINE_S, guard=1)
+    without = _turn(mini_prod_world, monkeypatch, text, deadline=0, busy_s=_BUSY_S, guard=1)
+
+    got, want = _same(loaded, free)
+    assert got == want
+    assert loaded["outcomes"] == [("classifier", "ok")] and "nlu_timeout_s" not in loaded["telemetry"], loaded["telemetry"]
+    assert without["outcomes"] == [("classifier", "queue_timeout")] and without["telemetry"].get("nlu_timeout_s") == 1
+
+
+def test_under_deadline_a_hung_classifier_is_still_cut_by_its_guard(mini_prod_world, monkeypatch):  # noqa: F811
+    """Встречный: от зависшей модели потолок защищает и под дедлайном — ход идёт путём сбоя LLM, как без дедлайна, а не ждёт
+    до дедлайна и не отвечает оффером дедлайна."""
+
+    text = _REPLIES["no_rule"]
+    hung = _turn(mini_prod_world, monkeypatch, text, deadline=_DEADLINE_S, delay=_LONG_S, guard=1)
+    hung_off = _turn(mini_prod_world, monkeypatch, text, deadline=0, delay=_LONG_S, guard=1)
+
+    assert hung["outcomes"] == [("classifier", "timeout")] and hung["telemetry"].get("nlu_timeout_s") == 1, hung["telemetry"]
+    assert hung["telemetry"].get("answer_source") != "llm_deadline_offer" and "llm_deadline_hit" not in hung["telemetry"]
+    assert hung["text"] == hung_off["text"] and hung["s"] < _LONG_S - 2, hung["s"]
 
 
 def test_yes_to_the_deadline_offer_hands_off(mini_prod_world, monkeypatch):  # noqa: F811

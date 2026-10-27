@@ -300,7 +300,11 @@ async def generate_text_with_usage(
     deadline_s: float | None = None,
 ) -> tuple[str, dict[str, int]]:
     """`deadline_s` — потолок всего вызова, очередь и генерация вместе (предохранитель классификатора); исход сбоя —
-    прежний `queue_timeout` или `timeout`. None — как было: очередь и генерация ограничены каждая своим."""
+    прежний `queue_timeout` или `timeout`. None — как было: очередь и генерация ограничены каждая своим.
+
+    Под дедлайном хода (`llm_turn_deadline_s`) `deadline_s` — потолок генерации (времени в слоте): ожидание слота держит
+    дедлайн хода, иначе классификатор под нагрузкой сдавался бы по своему потолку и ход уходил на правила
+    (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 2); от зависшей модели потолок защищает по-прежнему."""
 
     model = llm or LLMName.get()
     resolved_think = ollama_settings.resolve_think(think)
@@ -321,14 +325,17 @@ async def generate_text_with_usage(
     site = _caller_site()
     queue_ms = 0
     cut = False
+    in_turn = _deadline_turn() is not None
+    generation_cap: float = max(5, int(timeout_s)) if deadline_s is None else min(max(5, int(timeout_s)), deadline_s)
     if deadline_s is not None:
         queue_timeout_ms = min(queue_timeout_ms, int(deadline_s * 1000))
     try:
-        async with llm_slot(queue_timeout_ms, reserve_s=_reserve_s(site, max(5, int(timeout_s))), ceiling_s=deadline_s):
-            queue_ms = int((_time.monotonic() - started_at) * 1000)
+        async with llm_slot(queue_timeout_ms, reserve_s=_reserve_s(site, generation_cap), ceiling_s=None if in_turn else deadline_s):
+            slot_at = _time.monotonic()
+            queue_ms = int((slot_at - started_at) * 1000)
             generation_s: float = max(5, int(timeout_s))
             if deadline_s is not None:
-                generation_s = min(generation_s, max(0.0, deadline_s - (_time.monotonic() - started_at)))
+                generation_s = min(generation_s, max(0.0, deadline_s - (_time.monotonic() - (slot_at if in_turn else started_at))))
             generation_s, cut = _deadline_cap(generation_s)
             res = await asyncio.wait_for(
                 _OLLAMA_CLIENT.generate(
