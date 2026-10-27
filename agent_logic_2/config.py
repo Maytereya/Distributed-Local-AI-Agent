@@ -474,7 +474,8 @@ settings = Settings(
         # 14–19.10 лимит отрезал 7 из 73 выборов строки цены — второй круг поиска после «ни одна» (разбор реплики,
         # выбор строки, второй выбор). Прежде — 2 и 10 (решение 13.10, Q4).
         llm_decision_turn_calls=_get_int("MESSENGER_ROUTER", "llm_decision_turn_calls", 3, min_value=0, max_value=20),
-        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 20, min_value=0, max_value=120),
+        # 25 с — прод с 26.10 (деплой 18, runbook §3: секунды LLM-решений хода не возвращаются; STEP-2026-10-15-DEFAULTS-B).
+        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 25, min_value=0, max_value=120),
         # Предохранитель LLM-решений (L-11): N сбоев генерации подряд → S секунд без вызовов; таймаут
         # очереди не считается (иначе качество бота зависит от нагрузки соседей). 0 сбоев — выключен.
         llm_decision_breaker_failures=_get_int("MESSENGER_ROUTER", "llm_decision_breaker_failures", 3, min_value=0, max_value=100),
@@ -511,9 +512,9 @@ settings = Settings(
         # владельца 19.10, п. 5): вопрос-слот («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?»,
         # реквизиты результата) ставит `_expects` вида «свободный ответ», ответ решает функция; уточняющий вопрос на «Какой
         # филиал вам удобен?» получает ответ и тот же вопрос снова; «обе» на составную цену — цены обеих; второе «нет» на
-        # «Похоже, вы имели в виду …?». off — как было.
-        # [MESSENGER_ROUTER] pending_buttons
-        pending_buttons=_get_enum("MESSENGER_ROUTER", "pending_buttons", default="off", allowed={"off", "on"}),
+        # «Похоже, вы имели в виду …?». off — как было. По умолчанию on — как на проде с 21.10 (деплой 12;
+        # STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] pending_buttons
+        pending_buttons=_get_enum("MESSENGER_ROUTER", "pending_buttons", default="on", allowed={"off", "on"}),
         # Предел переспросов (D2.4; пункт 5 принципов, инвариант 3bacf58): off — как было (обработчик висящего
         # вопроса переспрашивает без счёта); on — один вопрос звучит не больше двух раз подряд, третьего нет:
         # бот называет нужный ответ и предлагает оператора. [MESSENGER_ROUTER] reask_limit
@@ -560,34 +561,41 @@ settings = Settings(
         # решения владельца 22.10): фамилия — слово реплики, точно совпавшее с фамилией врача в любой падежной форме; опечатка — только
         # в имени, которое назвала LLM, и исход — вопрос «Похоже, вы имели в виду…?». off — как было (_CATALOG_DOCTOR_STOPWORDS).
         # [MESSENGER_ROUTER] names_doctor_catalog
-        names_doctor_catalog=_get_enum("MESSENGER_ROUTER", "names_doctor_catalog", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_doctor_catalog=_get_enum("MESSENGER_ROUTER", "names_doctor_catalog", default="on", allowed={"off", "on"}),
         # doctor_name из ответа LLM из одного служебного слова («хочу», «запись») — не врач по справочнику МИС (resolve_doctor_name), а не по
         # списку (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: справочник ни одно из 14 слов не находит). off — как было (_DOCTOR_NOISE_TOKENS).
         # [MESSENGER_ROUTER] names_doctor_noise
-        names_doctor_noise=_get_enum("MESSENGER_ROUTER", "names_doctor_noise", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_doctor_noise=_get_enum("MESSENGER_ROUTER", "names_doctor_noise", default="on", allowed={"off", "on"}),
         # Короткий ответ в контексте врача («<фамилия>, да») — фамилия только по справочнику МИС (точное совпадение у правила), без списка
         # «да / хорошо / ладно» (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: список ни разу не решал исход). off — как было (_DOCTOR_FOLLOWUP_FILLERS).
         # [MESSENGER_ROUTER] names_doctor_followup
-        names_doctor_followup=_get_enum("MESSENGER_ROUTER", "names_doctor_followup", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_doctor_followup=_get_enum("MESSENGER_ROUTER", "names_doctor_followup", default="on", allowed={"off", "on"}),
         # Результаты анализов: одно слово на вопрос о реквизитах — фамилия, только если её назвала LLM-классификатор этого хода (сущность
         # surname / patient_name — те же слова реплики); без LLM — не фамилия, бот переспросит (решение владельца 22.10 (а);
         # STEP-2026-10-24-NAMES-NO-STOPWORDS). Порядок «фамилия, год, код, номер» — как было. off — как было (_QF_RESULT_SURNAME_STOPWORDS).
         # [MESSENGER_ROUTER] names_result_surname
-        names_result_surname=_get_enum("MESSENGER_ROUTER", "names_result_surname", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_result_surname=_get_enum("MESSENGER_ROUTER", "names_result_surname", default="on", allowed={"off", "on"}),
         # Реплика — ФИО пациента (12 мест: запись, вид недоступной цели, неподтверждённый врач → ФИО): форма 2–3 слова принимает и
         # «Общий анализ крови» — решает LLM-классификатор этого хода (patient_name — те же слова реплики); без LLM — не ФИО (решение
         # владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было (_PATIENT_FIO_STOPWORDS).
         # [MESSENGER_ROUTER] names_patient_fio
-        names_patient_fio=_get_enum("MESSENGER_ROUTER", "names_patient_fio", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_patient_fio=_get_enum("MESSENGER_ROUTER", "names_patient_fio", default="on", allowed={"off", "on"}),
         # Правило шага ФИО записи (rule_appointment_patient_name) не решает по форме и списку: правило зовут до LLM, под on оно молчит, и
         # реплику (ФИО или нет, какая тема) решает LLM-классификатор хода (STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было
         # (_PATIENT_NAME_STOPWORDS). [MESSENGER_ROUTER] names_patient_rule
-        names_patient_rule=_get_enum("MESSENGER_ROUTER", "names_patient_rule", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_patient_rule=_get_enum("MESSENGER_ROUTER", "names_patient_rule", default="on", allowed={"off", "on"}),
         # Быстрое заполнение ФИО пациента (после «ФИО / меня зовут», голая форма, тройка слов) — только если кандидат — те же слова, что
         # patient_name LLM-классификатора этого хода; без LLM ФИО не заполняется (решение владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS;
         # свип 24.10: прежний путь клал «Общий Анализ Крови» в ФИО). off — как было (_QF_PATIENT_NAME_STOPWORDS).
         # [MESSENGER_ROUTER] names_patient_fill
-        names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="on", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -596,9 +604,9 @@ settings = Settings(
         variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
         # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
         # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
-        # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
-        # выключателем, умолчание «как было»). [MESSENGER_ROUTER] mis_honest_degradation
-        mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="off", allowed={"off", "on"}),
+        # приписка «по данным на ДД.ММ» или оператор. off — как было. По умолчанию on — как на проде с 18.10 (деплой 8;
+        # STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] mis_honest_degradation
+        mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="on", allowed={"off", "on"}),
         # Тема реестра перебивает метку OTHER только после подтверждения LLM по смыслу (решение владельца 18.10:
         # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
         # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
@@ -610,7 +618,8 @@ settings = Settings(
         # П1 на ходах `topic_by_llm` (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): LLM решила, что пациент спрашивает об услуге не цену,
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
-        p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
+        p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="on", allowed={"off", "on"}),
         # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
@@ -619,7 +628,8 @@ settings = Settings(
         # памятки — услуги, которые разбор нашёл в реплике, а не реплика без слов пяти списков подготовки; ни одной услуги — без
         # поиска по словам; сбой разбора — «уточните». Разбор строится и на ходах подготовки. off — как было.
         # [MESSENGER_ROUTER] prepare_by_parse
-        prepare_by_parse=_get_enum("MESSENGER_ROUTER", "prepare_by_parse", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 24.10 (деплой 17; STEP-2026-10-15-DEFAULTS-B).
+        prepare_by_parse=_get_enum("MESSENGER_ROUTER", "prepare_by_parse", default="on", allowed={"off", "on"}),
         # Цена читает фразу разбора хода (DESIGN-2026-10-25-PRICE-STAGE2, этап 2 «без стоп-слов»): сильное совпадение — фраза
         # как есть, без вырезателя; фраза поиска, подписи и журнала синонимов — из разбора, а не срез реплики по спискам;
         # «названа ли услуга» — решение понимания хода; без LLM — только дословное название или код, иначе «уточните» /
@@ -629,12 +639,14 @@ settings = Settings(
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
         # [MESSENGER_ROUTER] topic_by_llm
-        topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
+        # По умолчанию — восемь веток, как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
+        topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default="rule_test_assist,rule_doctor_info_specialty,rule_schedule,rule_analysis_lookup_ambiguous,rule_website_help,rule_address_work_hours,rule_test_result,rule_prepare"),
         # Вопрос цели записи («К какому врачу или на какую услугу записать?» — кнопка «Записаться на приём» и тот же вопрос
         # текстом) — вопрос-слот одной функции ответа на висящий вопрос (`pending_buttons`): ответ, который LLM признала
         # ответом, идёт в запись, а не в вопрос «Отменить оформление?» правил смены темы
         # (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH). off — как было. [MESSENGER_ROUTER] booking_target_slot_llm
-        booking_target_slot_llm=_get_enum("MESSENGER_ROUTER", "booking_target_slot_llm", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        booking_target_slot_llm=_get_enum("MESSENGER_ROUTER", "booking_target_slot_llm", default="on", allowed={"off", "on"}),
         # Ответ на вопрос кнопки-темы (`button_menu`, режим `slot`: «Какой анализ интересует?», «К какой процедуре нужна
         # подготовка?»): тему знает кнопка, LLM-классификатор её не переспрашивает (журнал прода 14–24.10: 59 % таких ответов
         # ждали его 3,7 с, до 12 с). Одна функция ответа на висящий вопрос решила «это ответ» — тема кнопки. `slot` — вопросы-
@@ -651,16 +663,19 @@ settings = Settings(
         # анализов (со сроком готовности); в области нет кандидата на фразу — весь прайс, как без кнопки. `doctor` — только
         # «Цена приёма врача» (на «Цену анализа» пациенты ведут и УЗИ, и процедуры — набор buttons_v1: 84 из 264), `all` — обе.
         # off — как было. [MESSENGER_ROUTER] button_price_scope
-        button_price_scope=_get_enum("MESSENGER_ROUTER", "button_price_scope", default="off", allowed={"off", "doctor", "all"}),
+        # По умолчанию doctor — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        button_price_scope=_get_enum("MESSENGER_ROUTER", "button_price_scope", default="doctor", allowed={"off", "doctor", "all"}),
         # Список филиалов в ответе о сдаче анализов (ЭКГ, УЗИ) без записи и на кнопке «Где и до скольки принимают» (раздел
         # «Сдать анализы») — только филиалы с этим флагом данных филиалов (`analysis` / `ecg` / `usi`): карточка buttons_v1 25.10 —
         # в 26 ответах «где сдать» был филиал без забора анализов. off — как было. [MESSENGER_ROUTER] address_branch_flags
-        address_branch_flags=_get_enum("MESSENGER_ROUTER", "address_branch_flags", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        address_branch_flags=_get_enum("MESSENGER_ROUTER", "address_branch_flags", default="on", allowed={"off", "on"}),
         # Реплика сразу после «Адреса и часы работы» / «Где и до скольки принимают»: LLM выбирает из списка филиалов, какие названы,
         # и что спрошено (график, день, анализы / УЗИ / ЭКГ, выходные, нет в данных); ответ печатает код из данных филиалов, чего нет —
         # честно и оффер оператора (buttons_v1: 87 провалов «общий список вместо ответа»). off — как было.
         # [MESSENGER_ROUTER] address_followup_llm
-        address_followup_llm=_get_enum("MESSENGER_ROUTER", "address_followup_llm", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        address_followup_llm=_get_enum("MESSENGER_ROUTER", "address_followup_llm", default="on", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
@@ -673,7 +688,8 @@ settings = Settings(
         # Ход подбора анализов (TEST_ASSIST), дошедший до свободного текста LLM, отвечает по данным хода
         # (BUG-2026-10-21-WALKIN-LLM-FREE-TEXT): строки прайса выбирает LLM (`choose`, задача `test_assist_answer`), название
         # и срок печатает код, нет данных и сбой — честный оффер оператора. off — как было. [MESSENGER_ROUTER] test_assist_from_data
-        test_assist_from_data=_get_enum("MESSENGER_ROUTER", "test_assist_from_data", default="off", allowed={"off", "on"}),
+        # По умолчанию on — как на проде с 24.10 (деплой 17; STEP-2026-10-15-DEFAULTS-B).
+        test_assist_from_data=_get_enum("MESSENGER_ROUTER", "test_assist_from_data", default="on", allowed={"off", "on"}),
         # Цена у строк, выбранных ответом подбора анализов по данным хода (решение владельца 26.10, топ-5 разбора 95 цен, п. 1):
         # сумму печатает код из той же строки прайса (принцип 1), частичный ответ — цены найденных строк и «остального в прайсе
         # нет — уточнит оператор». Давность прайса — как у пути цены (`services/_freshness`). Действует при
@@ -711,7 +727,8 @@ settings = Settings(
         # «процедура → специальность» в коде. shadow — ответ не меняется, в ход пишется согласие нынешней выдачи врачей с
         # данными (`svc_doc_*`); on — врачи услуги из данных (роль правил только сужает, если среди них есть); off — как было.
         # [MESSENGER_ROUTER] doctors_by_service_data
-        doctors_by_service_data=_get_enum("MESSENGER_ROUTER", "doctors_by_service_data", default="off", allowed={"off", "shadow", "on"}),
+        # По умолчанию shadow — как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
+        doctors_by_service_data=_get_enum("MESSENGER_ROUTER", "doctors_by_service_data", default="shadow", allowed={"off", "shadow", "on"}),
         # Подавитель A′-1 (`router._suppress_grounder_rejected_slots`): услугу, которую в этом ходу отвергла LLM, резолвер
         # прайса по буквам в состоянии не воскрешает (инвариант 2 BUG-2026-06-02-02); off — как было.
         # [MESSENGER_ROUTER] slot_suppress_llm
@@ -732,8 +749,9 @@ settings = Settings(
         # Корзина-калькулятор, базовый объём ТЗ 17.08 §6 (ответы заказчика 16.09): под позициями корзины — итог (одна цена у
         # каждой позиции — сумма; у позиции развилка вариантов — «от … до …» без выдуманной суммы) и «Взятие биоматериала
         # оплачивается отдельно» с перечнем взятия по данным (название строки прайса и материалы МИС `biomatNames`, цены — из
-        # прайса). off — как было. [MESSENGER_ROUTER] basket_calc
-        basket_calc=_get_enum("MESSENGER_ROUTER", "basket_calc", default="off", allowed={"off", "on"}),
+        # прайса). off — как было. По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
+        # [MESSENGER_ROUTER] basket_calc
+        basket_calc=_get_enum("MESSENGER_ROUTER", "basket_calc", default="on", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",

@@ -101,10 +101,13 @@ def _model_reads_the_question(prompt: str) -> str:
 
 
 def _llm(side: str, label: str) -> _LLM:
-    answers = (*_NOT_OFFERED, *_PICKS, _ANY)
-
     def classify(prompt: str) -> str:
-        return _classifier(label) if side in prompt and not any(answer in prompt for answer in answers) else _classifier("APPOINTMENT")
+        # Классификатор судит реплику хода («Текст пациента:» в конце промпта), а не контекст прошлых сообщений: побочный
+        # вопрос — его тема, ответ на вопрос о филиале — запись. До 27.10 подделка искала ответы-выборы во всём промпте, и
+        # «на Ленина» из вопроса о часах («а во сколько работает филиал на Ленина?») давало записи вместо ADDRESS — под
+        # `topic_by_llm` с `rule_address_work_hours` (прод с 22.10) тему такой реплики решает классификатор.
+        current = prompt.rsplit("Текст пациента:", 1)[-1]
+        return _classifier(label) if side in current else _classifier("APPOINTMENT")
 
     return _LLM({_PENDING_MARK: _model_reads_the_question, _CLASSIFIER_MARK: classify, _PRICE_MARK: json.dumps({"picks": [1]})})
 

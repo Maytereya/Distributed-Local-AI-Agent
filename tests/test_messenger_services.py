@@ -31,6 +31,8 @@ from messengers_router.response_builder import build_price_response, build_test_
 from messengers_router.services import Services, resolve_price_service_name_from_catalog
 from messengers_router.services import prepare as prepare_mod
 from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
+from messengers_router.services.addresses import APPOINTMENT_BRANCHES_UNAVAILABLE_TEXT
+from tests.spans_oracle import prepare_turn
 from messengers_router.policies import (
     build_branch_index,
     extract_specialty,
@@ -637,10 +639,10 @@ def test_doctors_schedule_week_clears_stale_no_slots_reason_on_later_match(monke
     )
 
 
-def test_doctors_schedule_week_api_error_string_serves_stale(monkeypatch):
-    """При строке-ошибке CRM отдаём последний валидный (positive) ответ из
-    stale-окна, если он есть — и без удвоения вызовов retry-петлёй (api_error
-    re-raise'ится сразу, в отличие от raised exception)."""
+def test_doctors_schedule_week_api_error_string_does_not_serve_stale(monkeypatch):
+    """При строке-ошибке CRM последний валидный ответ из stale-окна пациенту не отдаётся: расписание — только
+    живое, сбой — честный перевод (`mis_honest_degradation = on`, прод с 18.10; решения владельца 08.10 и 18.10).
+    Без удвоения вызовов retry-петлёй (api_error re-raise'ится сразу, в отличие от raised exception)."""
     svc = Services(
         schedule_fresh_ttl_seconds=10,
         schedule_stale_ttl_seconds=120,
@@ -688,11 +690,11 @@ def test_doctors_schedule_week_api_error_string_serves_stale(monkeypatch):
     clock["ts"] += 11
     second = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
 
-    # api_error НЕ ретраится на уровне _fetch_schedule_source: +1 вызов (не +2),
-    # затем отдаётся stale из кэша.
+    # api_error НЕ ретраится на уровне _fetch_schedule_source: +1 вызов (не +2); stale из кэша не отдаётся.
     assert calls["count"] == 2
-    assert second["schedule"], "Expected stale schedule when source returns api error"
-    assert not second.get("handoff_required", False)
+    assert second["schedule"] == [], "устаревшее расписание при сбое не выдаётся за живое"
+    assert second.get("handoff_required") is True
+    assert second.get("handoff_message") == handoff_message("service_error_schedule")
 
 
 def test_doctors_schedule_week(monkeypatch):
@@ -1121,7 +1123,8 @@ def test_doctors_schedule_week_cache_miss_after_fresh_ttl(monkeypatch):
     assert calls["count"] == 2
 
 
-def test_doctors_schedule_week_returns_stale_on_source_error(monkeypatch):
+def test_doctors_schedule_week_hands_off_instead_of_stale_on_source_error(monkeypatch):
+    """Сбой источника при живом stale-окне кэша — перевод, а не устаревшие слоты (`mis_honest_degradation = on`, прод)."""
     svc = Services(
         schedule_fresh_ttl_seconds=10,
         schedule_stale_ttl_seconds=120,
@@ -1171,10 +1174,11 @@ def test_doctors_schedule_week_returns_stale_on_source_error(monkeypatch):
     clock["ts"] += 11
     second = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
 
-    # Вторая проверка делает 2 попытки запроса (retry), затем отдает stale из кэша.
+    # Вторая проверка делает 2 попытки запроса (retry); stale из кэша не отдаётся.
     assert calls["count"] == 3
-    assert second["schedule"], "Expected stale schedule when source is unavailable"
-    assert not second.get("handoff_required", False)
+    assert second["schedule"] == [], "устаревшее расписание при сбое не выдаётся за живое"
+    assert second.get("handoff_required") is True
+    assert second.get("handoff_message") == handoff_message("service_error_schedule")
 
 
 def test_doctors_schedule_week_negative_cache_ttl(monkeypatch):
@@ -1368,6 +1372,7 @@ def _prepare_llm_picks(monkeypatch, title_part: str | None, *, kb: tuple = ()) -
         return tuple(m for m in memos if title_part.lower() in m.title.lower())[:1]
 
     monkeypatch.setattr(prepare_mod, "select_prepare_memos", fake_select)
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos_by_parse", fake_select)  # путь прода (`prepare_by_parse = on`)
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: tuple(kb))
     return offered
 
@@ -1383,7 +1388,7 @@ def test_test_prepare_answers_from_kb_patient_memo(monkeypatch):
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
     _prepare_llm_picks(monkeypatch, "гастроскопия", kb=(memo,))
 
-    res = run(svc.test_prepare("Как подготовиться к ФГДС?", {}))
+    res = prepare_turn(svc, "Как подготовиться к ФГДС?", phrases=("ФГДС",), monkeypatch=monkeypatch)
 
     assert res["prepare"] == f"Памятка клиники «{memo.title}»:\n{memo.text}"
     assert res["note"] == "prepare: main_index"
@@ -1400,7 +1405,7 @@ def test_test_prepare_prefers_service_info_preparation(monkeypatch):
         lambda: [
             {
                 "serviceName": "Анализ крови на холестерин",
-                "preparation": "Кровь сдаётся натощак, желательно утром.",
+                "preparation": "<p>Подготовка к исследованию</p><p>Кровь сдаётся натощак, желательно утром.</p>",
             }
         ],
     )
@@ -1422,7 +1427,7 @@ def test_test_prepare_prefers_service_info_for_analysis_name_query(monkeypatch):
         lambda: [
             {
                 "serviceName": "Анализ крови на холестерин",
-                "preparation": "Кровь сдаётся натощак, желательно утром.",
+                "preparation": "<p>Подготовка к исследованию</p><p>Кровь сдаётся натощак, желательно утром.</p>",
             }
         ],
     )
@@ -1524,20 +1529,18 @@ def test_test_prepare_memo_rejected_by_llm_never_reaches_the_patient(monkeypatch
             }
         ],
     )
-    _prepare_llm_picks(monkeypatch, None)
+    from messengers_router.services.prepare import _BLOOD_GENERAL_TITLE
 
-    res = run(
-        svc.test_prepare(
-            "Здравствуйте скажите пожалуйста а кровь на гормоны сдают на голодный желудок?",
-            {},
-        )
-    )
+    _prepare_llm_picks(monkeypatch, _BLOOD_GENERAL_TITLE)  # памятку о формалине LLM отвергла, общую о крови — выбрала
+
+    reply = "Здравствуйте скажите пожалуйста а кровь на гормоны сдают на голодный желудок?"
+    res = prepare_turn(svc, reply, phrases=("кровь на гормоны",), monkeypatch=monkeypatch)
 
     answer = str(res.get("prepare") or "").lower()
     # Про кровь — общая памятка забора крови клиники.
     assert "натощак" in answer
     assert "формалин" not in answer
-    assert res.get("note") == "prepare: blood-collection general guidance fallback"
+    assert res.get("note") == "prepare: blood-collection general memo (LLM)"
 
 
 def test_prepare_roots_match_does_not_match_holesterol_with_sterile_substring():
@@ -1575,7 +1578,7 @@ def test_test_prepare_cholesterol_not_confused_by_urogenital_soskob(monkeypatch)
         lambda name, default: False if name == "MR_PREPARE_LLM_WRAP_ENABLED" else default,
     )
 
-    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {}))
+    res = prepare_turn(svc, "Как подготовиться к анализу на холестерин?", phrases=("анализу на холестерин",), monkeypatch=monkeypatch)
     answer = str(res.get("prepare") or "").lower()
 
     assert "Gardnerella vaginalis [кач.]" not in _offered_titles(offered)
@@ -1592,9 +1595,8 @@ def test_test_prepare_no_memo_offers_operator_without_handoff(monkeypatch):
     _prepare_llm_picks(monkeypatch, None)
 
     # Не-кровяной предмет: общей памятки нет. Оффер оператора — вопросом, без
-    # перевода (для крови с BUG-2026-06-02-05 отдаётся памятка — см.
-    # test_prepare_blood_no_specific_rules_falls_back_to_general_memo).
-    res = run(svc.test_prepare("подготовка к гастроскопии", {}))
+    # перевода (общая памятка о сдаче крови — вариант выбора LLM: test_prepare_general_memo_class).
+    res = prepare_turn(svc, "подготовка к гастроскопии", phrases=("гастроскопии",), monkeypatch=monkeypatch)
 
     assert "Такой памятки по подготовке у меня нет" in str(res.get("prepare") or "")  # «гастроскопии» — слово реплики, не услуга прайса
     assert "оператор" in str(res.get("prepare") or "").lower()
@@ -1652,7 +1654,7 @@ def test_test_prepare_mis_memo_is_sent_as_is_without_llm(monkeypatch):
 
     monkeypatch.setattr(llm_runtime_mod, "generate_text", no_llm)
 
-    res = run(svc.test_prepare("подготовка к ттг", {}))
+    res = prepare_turn(svc, "подготовка к ттг", phrases=("ттг",), monkeypatch=monkeypatch)
     text = str(res.get("prepare") or "")
 
     assert text.startswith("Памятка клиники «ТТГ (TSH) тиреотропный гормон»:")
@@ -3238,7 +3240,9 @@ def test_address_info_appointment_mode_uses_price_units_care_setting_addresses(m
         ]
 
     async def fake_ensure_doctors_cache():
-        return []
+        # Срез врачей не пуст, как на проде (пустой — сбой МИС: под `mis_honest_degradation = on` перевод, DATA-5);
+        # адреса стационара — из места оказания priceUnits, не из филиалов врача.
+        return [{"id": 9, "fio": "Лорова Анна", "regions": ["г. Самара, ул. Победы, 83"], "units": ["Врач-оториноларинголог"], "specialization": "оториноларинголог"}]
 
     def fake_price_by_region(_region_id):
         return [
@@ -3391,7 +3395,9 @@ def test_news_info(monkeypatch):
         }]
 
     monkeypatch.setattr(news_mod.api_nayka, "site_promotions", fake_promos)
-    monkeypatch.setattr(news_mod.api_nayka, "site_regions", lambda **_kw: [])
+    # Справочник филиалов — как у МИС (пустой — сбой: под `mis_honest_degradation = on` перевод, DATA-14).
+    regions = [{"id": 1, "name": "Все", "parent": None}, {"id": 2, "name": "Самарская область", "parent": 1}, {"id": 3, "name": "Самара", "parent": 2}]
+    monkeypatch.setattr(news_mod.api_nayka, "site_regions", lambda **_kw: list(regions))
 
     res = run(svc.news_info("акция", {}))
 
@@ -4426,34 +4432,6 @@ def test_address_info_derives_samara_city_from_parent_hierarchy(monkeypatch):
     assert not any("Революционная" in a for a in addrs), addrs  # Тольятти
 
 
-def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch):
-    # BUG-2026-06-02-05: когда конкретных правил подготовки нет, но вопрос про
-    # сдачу КРОВИ — отдаём общую памятку забора крови (применима к любой сдаче
-    # крови), а не clarify «уточните название». Для мочи/кала общей памятки нет —
-    # оффер оператора. Класс-инвариант: источники памяток (МИС и база знаний)
-    # замоканы пустыми, проверяем именно запасной путь.
-    from messengers_router.services import prepare as prep_mod
-
-    s = Services()
-
-    async def _empty_api(q, ent):
-        return []
-
-    monkeypatch.setattr(s, "_prepare_candidates_from_analysis_api_cache", _empty_api)
-    monkeypatch.setattr(prep_mod, "kb_patient_memos", lambda: ())
-
-    blood = asyncio.run(s.test_prepare("Какая подготовка к сдаче крови на РедкийАнализ123", {}))
-    urine = asyncio.run(s.test_prepare("Какая подготовка к сдаче мочи на РедкийАнализ123", {}))
-
-    assert "blood-collection general guidance" in str(blood.get("note")), blood.get("note")
-    blood_text = str(blood.get("prepare") or "")
-    assert "живой очереди" in blood_text and "натощак" in blood_text and "паспорт" in blood_text
-    # моча/кал — общей памятки нет, оффер оператора
-    assert "blood-collection" not in str(urine.get("note")), urine.get("note")
-    assert "живой очереди" not in str(urine.get("prepare") or "")
-    assert urine.get("operator_offer") is True
-
-
 @pytest.mark.parametrize(
     "query,canonical,expected",
     [
@@ -5061,9 +5039,9 @@ def test_address_info_regions_tech_failure_marks_degraded_uses_cache(monkeypatch
     assert _LAB_ONLY_BRANCH not in (r.get("addresses") or [])
 
 
-def test_address_info_regions_tech_failure_no_cache_is_tech_unavailable(monkeypatch):
-    # /regions tech-failure + EMPTY doctors-cache → honest tech_unavailable payload:
-    # no misleading addresses, honest text, marked degraded, NOT auto-handoff.
+def test_address_info_regions_tech_failure_no_cache_hands_off(monkeypatch):
+    # /regions tech-failure + EMPTY doctors-cache → no misleading addresses, marked degraded, and the honest
+    # handoff (`mis_honest_degradation = on`, prod since 18.10: «сбой МИС → оператор», вариант «а» — филиалы врача не проверить).
     svc = Services()
 
     async def boom():
@@ -5077,10 +5055,10 @@ def test_address_info_regions_tech_failure_no_cache_is_tech_unavailable(monkeypa
     ent = {"city": "Самара", "specialty": "гинеколог", "__appointment_mode": True}
     r = run(svc.address_info("Запись к врачу-гинекологу", ent))
     assert r.get("degraded") is True
-    assert r.get("degraded_upstream") == "regions"
+    assert r.get("degraded_upstream") == "doctors"   # пустой срез врачей проверяется первым
     assert not (r.get("addresses") or [])             # no guessing
-    assert "техническ" in str(r.get("handoff_message") or "").lower()
-    assert not r.get("handoff_required")              # no auto-escalation
+    assert r.get("handoff_required") is True
+    assert r.get("handoff_message") == APPOINTMENT_BRANCHES_UNAVAILABLE_TEXT
 
 
 def test_address_info_regions_clean_empty_is_not_degraded(monkeypatch):

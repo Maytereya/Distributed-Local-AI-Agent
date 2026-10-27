@@ -50,6 +50,7 @@ from messengers_router.services import _common as _common_mod
 from messengers_router.services import _prepare_select_llm as PS
 from messengers_router.services import core as svc_mod
 from messengers_router.services import prepare as prepare_mod
+from tests.spans_oracle import prepare_turn
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -292,18 +293,24 @@ def test_tie_without_llm_answers_with_both_memos_each_under_its_title(monkeypatc
             },
             {
                 "serviceName": "Антитела к рецепторам ТТГ",
-                "preparation": "Забор крови натощак. При наблюдении за динамикой кровь сдавать в одной лаборатории.",
+                # Подпись поля «Подготовка к исследованию» — у большинства памяток МИС (1412 из 1621, срез 20.10): её снимает
+                # путь прода по срезу (`MemoCorpus.caption`), а не список заголовков.
+                "preparation": "Подготовка к исследованию\nЗабор крови натощак. При наблюдении за динамикой кровь сдавать в одной лаборатории.",
             },
         ],
     )
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: ())
+    # Без LLM выбора «названа» только карточка, которую фраза называет по данным МИС (`prepare_by_parse = on`, прод с 24.10):
+    # ничья двух карточек — синоним клиники на обе.
+    both = ("ТТГ (TSH) тиреотропный гормон", "Антитела к рецепторам ТТГ")
+    monkeypatch.setattr(prepare_mod, "mis_synonym_candidates", lambda text: both if str(text).strip().lower() == "ттг" else ())
 
     async def must_not_call(*_args, **_kwargs):
         raise AssertionError("в strict LLM не зовём")
 
     monkeypatch.setattr(PS, "generate_text", must_not_call)
 
-    res = run(Services().test_prepare("подготовка к ттг", {"__runtime_llm_mode": "strict"}))
+    res = prepare_turn(Services(), "подготовка к ттг", {"__runtime_llm_mode": "strict"}, phrases=("ттг",), monkeypatch=monkeypatch)
     text = res["prepare"]
 
     assert res["note"] == "prepare: several memos"
@@ -474,7 +481,7 @@ def test_no_memo_offers_the_operator_and_yes_hands_off(monkeypatch):
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: (_FKS,))
     _llm_replies(monkeypatch, '{"match": null}')
 
-    payload = run(Services().test_prepare("Как подготовиться к кольпоскопии?", {}))
+    payload = prepare_turn(Services(), "Как подготовиться к кольпоскопии?", phrases=("кольпоскопии",), monkeypatch=monkeypatch)
 
     assert payload["operator_offer"] is True
     assert "кольпоскопии" not in payload["prepare"] and payload["prepare"].endswith("Перевести на оператора?")  # слово реплики — не название

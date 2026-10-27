@@ -124,7 +124,9 @@ def test_spends_at_most_two_decisions(name, mini_prod_world, monkeypatch):  # no
     _deploy(monkeypatch)
     _turn, row, oracle = _class_turn(name, mini_prod_world, monkeypatch)
     acting = _acting(row)
-    assert len(acting) <= 2, acting
+    # Итог корзины (`basket_total`, `basket_calc = on` — прод с 26.10) — третье решение хода корзины, поиск — не больше двух.
+    search = [decision for decision in acting if decision[0] != "basket_total"]
+    assert len(search) <= 2 and len(acting) - len(search) <= 1, acting
     if oracle.phrase_calls:
         assert acting[0] == ("turn_phrases", "picked")  # выбор фраз — первое решение хода, из его бюджета
     assert not any(entry.get("shadow") for entry in row.get("choose") or [])

@@ -13,8 +13,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from messengers_router.services import Services
@@ -22,6 +20,7 @@ from messengers_router.services import core as svc_mod
 from messengers_router.services import prepare as prepare_mod
 from messengers_router.services import _prepare_select_llm as select_mod
 from messengers_router.services._prepare_select_llm import SOURCE_CLINIC_GENERAL, SOURCE_MIS, PrepareMemo
+from tests.spans_oracle import prepare_turn
 
 _NECHIPORENKO = PrepareMemo(SOURCE_MIS, "Анализ мочи по Нечипоренко", "Перед исследованием воздержаться от мочегонных.", score=0.72)
 _QUESTION = "Подготовка к анализам крови"
@@ -37,9 +36,11 @@ def _run(monkeypatch, *, pick) -> tuple[dict, list]:
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: ())
     monkeypatch.setattr(prepare_mod, "select_prepare_memos", select)
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos_by_parse", select)  # путь прода (`prepare_by_parse = on`)
     svc = Services()
     svc.ensure_background_refresh_started = lambda: None
-    return asyncio.run(svc.test_prepare(_QUESTION, {})), seen
+    # «анализам крови» — общее слово, не услуга (правило 5 промпта разметки): разбор хода — ни одной фразы.
+    return prepare_turn(svc, _QUESTION, phrases=(), monkeypatch=monkeypatch), seen
 
 
 def _general(memos) -> tuple:

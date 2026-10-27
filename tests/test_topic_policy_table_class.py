@@ -18,7 +18,9 @@ from tests.test_llm_primary_rules_fallback_class import _turn
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
-_LLM_ANSWER = json.dumps({"label": "OTHER", "confidence": 0.9, "context_action": "new_topic", "entities": {}})
+# Классификатор отвечает подбором анализов: под `topic_by_llm` прода (с 22.10) тему веток подбора и поиска анализа решает он, и
+# переклейки «названная услуга нашлась в каталоге — цена» — строки таблицы (с OTHER корпус переклеек не давал: OTHER — итог).
+_LLM_ANSWER = json.dumps({"label": "TEST_ASSIST", "confidence": 0.9, "context_action": "new_topic", "entities": {}})
 _REPLIES = (
     "есть ли у вас анализ на ферритин",
     "анализ на ферритин и глюкозу есть?",

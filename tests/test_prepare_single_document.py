@@ -25,6 +25,7 @@ from messengers_router.services import Services
 from messengers_router.services import core as svc_mod
 from messengers_router.services import prepare as prepare_mod
 from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
+from tests.spans_oracle import prepare_turn
 
 _GASTRO = PrepareMemo(
     SOURCE_KB,
@@ -55,6 +56,7 @@ def _services(monkeypatch, *, pick: str | None, gastro: PrepareMemo = _GASTRO) -
         return (next(memo for memo in memos if pick in memo.title),)
 
     monkeypatch.setattr(prepare_mod, "select_prepare_memos", select)
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos_by_parse", select)  # путь прода (`prepare_by_parse = on`)
     return svc
 
 
@@ -66,7 +68,7 @@ def _long(memo: PrepareMemo) -> PrepareMemo:
 def test_answer_is_the_one_chosen_memo(monkeypatch):
     svc = _services(monkeypatch, pick="Гастроскопия")
 
-    res = run(svc.test_prepare("Как подготовиться к гастроскопии под наркозом?", {}))
+    res = prepare_turn(svc, "Как подготовиться к гастроскопии под наркозом?", phrases=("гастроскопии под наркозом",), monkeypatch=monkeypatch)
 
     assert _GASTRO.text in res["prepare"]
     assert res["prepare_source_title"] == _GASTRO.title
@@ -82,7 +84,7 @@ def test_long_memo_goes_as_is_without_llm_and_without_other_memos(monkeypatch):
 
     monkeypatch.setattr("messengers_router.llm_runtime.generate_text", no_llm)
 
-    res = run(svc.test_prepare("Как подготовиться к гастроскопии под наркозом?", {}))
+    res = prepare_turn(svc, "Как подготовиться к гастроскопии под наркозом?", phrases=("гастроскопии под наркозом",), monkeypatch=monkeypatch)
     text = str(res.get("prepare") or "")
 
     assert res.get("prepare_wrap_status") == "not_wrapped"
@@ -95,7 +97,7 @@ def test_memos_about_other_procedures_do_not_answer_for_it(monkeypatch):
     # Подходящей памятки нет — оффер оператора, а не чужая подготовка.
     svc = _services(monkeypatch, pick=None)
 
-    res = run(svc.test_prepare("Как подготовиться к введению спирали?", {}))
+    res = prepare_turn(svc, "Как подготовиться к введению спирали?", phrases=("введению спирали",), monkeypatch=monkeypatch)
     text = str(res.get("prepare") or "").lower()
 
     assert res.get("operator_offer") is True

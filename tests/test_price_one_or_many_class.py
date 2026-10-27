@@ -370,13 +370,15 @@ def test_one_service_or_several(name, config, llm, mini_prod_world, monkeypatch)
 
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_parse_on_spends_at_most_two_decisions(name, mini_prod_world, monkeypatch):
-    """Под `turn_parse = on` (живая LLM, оракул выбирает верно) решений хода не больше двух: выбор фраз — первое, выбор
+    """Под `turn_parse = on` (живая LLM, оракул выбирает верно) решений поиска не больше двух: выбор фраз — первое, выбор
     строк корзины, строки цены или срока — второе; бюджет хода не исчерпан. Лимит хода с 19.10 — 3 решения (третье —
-    второй круг поиска цены после «ни одна»); обычный ход его не тратит."""
+    второй круг поиска цены после «ни одна»); обычный ход его не тратит. Итог корзины (`basket_total`, `basket_calc = on` —
+    прод с 26.10) — третье решение хода корзины, не больше одного (runbook деплоя 18: «ход корзины с итогом тратит все 3»)."""
 
     _turn, row, oracle = _class_turn(name, "deploy_parse", "oracle", mini_prod_world, monkeypatch)
     decisions = [(entry["task"], entry["status"]) for entry in row.get("choose") or [] if not entry.get("shadow")]
-    assert len(decisions) <= 2, decisions
+    search = [decision for decision in decisions if decision[0] != "basket_total"]
+    assert len(search) <= 2 and len(decisions) - len(search) <= 1, decisions
     assert "phrases" not in oracle.calls or decisions[0] == ("turn_phrases", "picked"), decisions
     assert not [call for call in row.get("llm") or [] if call.get("outcome") == "budget"], row.get("llm")
 

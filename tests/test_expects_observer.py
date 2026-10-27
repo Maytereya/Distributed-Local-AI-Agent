@@ -332,12 +332,15 @@ def test_catalog_confirm_question_reask_and_refusal(mini_prod_world, monkeypatch
     assert "Похоже, вы имели в виду врача «Евграфова»" in first.text
     assert first.expects == _expected("yes_no", "catalog_confirm", first.text, 1)
     assert second.text == first.text and second.expects == _expected("yes_no", "catalog_confirm", first.text, 2)
-    assert third.expects is None  # «нет» принят: дальше — вопрос о фамилии, не «да/нет»
+    # «нет» принят: дальше — вопрос о фамилии, не «да/нет»; вопрос-слот со свободным ответом (`pending_buttons = on`, прод с 21.10)
+    assert third.expects == _expected("free", "slot_value", third.text, 1)
 
 
 @pytest.fixture
 def anesthesia_services(monkeypatch):
-    from tests.test_prepare_kb_memo_variants import _KB, _WITHOUT
+    from tests.spans_oracle import SpansOracle
+    from tests.test_prepare_kb_memo_variants import _KB, _PHRASES, _WITHOUT
+    from messengers_router import llm_runtime
     from messengers_router.services import Services
     from messengers_router.services import prepare as prepare_mod
 
@@ -346,6 +349,8 @@ def anesthesia_services(monkeypatch):
 
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: _KB)
     monkeypatch.setattr(prepare_mod, "select_prepare_memos", select)
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos_by_parse", select)  # путь прода (`prepare_by_parse = on`)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(_PHRASES))  # разбор хода подготовки — фразы реплик
     return Services()
 
 

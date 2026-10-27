@@ -22,6 +22,7 @@ import json
 import pytest
 
 from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import SpansOracle
 from tests.test_l14_two_turn_consumers import _FOUND_GGT, _QUOTED, _Scripted, _play, _priced, _shown
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
@@ -173,6 +174,16 @@ def _with_memo(monkeypatch) -> None:
     monkeypatch.setattr(prep, "kb_patient_memos", lambda: (memo,))
 
 
+def _prod_parse(monkeypatch) -> None:
+    """Разбор хода подготовки — разметка LLM, как на проде: `prepare_by_parse` и `turn_spans_llm` включены вместе с деплоя 17
+    (24.10). Пока умолчание `turn_spans_llm` — off, гейт иначе строил бы разбор старым генератором окон (он режет без LLM), а
+    этого сочетания на проде не было."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_TURN_SPANS_LLM", "on", raising=False)
+
+
 @pytest.mark.parametrize("config", SHOWN)
 @pytest.mark.parametrize("first", ["сколько стоит ферритин", "сколько готовится ферритин"])
 @pytest.mark.parametrize("ask", ["а как подготовиться?", "подскажите пожалуйста как подготовиться", "а натощак?"])
@@ -180,8 +191,10 @@ def test_prepare_without_own_subject_is_about_the_shown_service(ask, first, conf
     """LLM видит показанную услугу и по смыслу выбирает её памятку; в ответе нет слов вопроса."""
 
     _with_memo(monkeypatch)
+    _prod_parse(monkeypatch)
     llm = _PrepareLLM()
-    played = _play([first, ask], f"shown-prep-{first}-{ask}", mini_prod_world, monkeypatch, config, llm=llm)
+    oracle = SpansOracle(("ферритин",), inner=llm)  # первый ход называет ферритин, вопрос о подготовке — ничего
+    played = _play([first, ask], f"shown-prep-{first}-{ask}", mini_prod_world, monkeypatch, config, llm=oracle)
     assert _MEMO_TEXT[:20] in played[1].text, played[1].text
     assert llm.prompts and _CONTEXT_MARK in llm.prompts[-1] and "«Ферритин»" in llm.prompts[-1]
 
@@ -190,12 +203,15 @@ def test_prepare_without_own_subject_is_about_the_shown_service(ask, first, conf
 @pytest.mark.parametrize(
     ("ask", "expected"),
     [
-        ("а как подготовиться?", "Памятки по подготовке к «Ферритин» у меня нет"),  # памяток нет: предмет — показанная услуга
-        ("а натощак?", "к «Ферритин» или к другому"),  # свои слова, LLM нет: спросить, а не гадать
-        ("а как подготовиться к ттг?", "Такой памятки по подготовке у меня нет"),  # свой предмет: не «ферритин»; не услуга прайса — без названия
+        # LLM нет — разбор хода не удался: без LLM предмет не угадываем ни по буквам, ни по показанному (решение владельца
+        # 22.10 (а); до пути прода — «Памятки по подготовке к «Ферритин» у меня нет» / «к «Ферритин» или к другому»)
+        ("а как подготовиться?", "Уточните, пожалуйста, к какому анализу или процедуре нужна подготовка"),
+        ("а натощак?", "Уточните, пожалуйста, к какому анализу или процедуре нужна подготовка"),
+        ("а как подготовиться к ттг?", "Уточните, пожалуйста, к какому анализу или процедуре нужна подготовка"),
     ],
 )
 def test_prepare_without_llm_never_prints_question_words(ask, expected, config, mini_prod_world, monkeypatch):  # noqa: F811
+    _prod_parse(monkeypatch)
     played = _play(["сколько стоит ферритин", ask], f"shown-prep-nollm-{ask}", mini_prod_world, monkeypatch, config)
     assert expected in played[1].text, played[1].text
     assert not [q for q in _QUOTED.findall(played[1].text) if _normalise_catalog_text(q) in {_normalise_catalog_text(ask.strip("?")), "а натощак"}]
@@ -205,7 +221,9 @@ def test_prepare_without_llm_never_prints_question_words(ask, expected, config, 
 def test_prepare_after_several_shown_asks_which(config, mini_prod_world, monkeypatch):  # noqa: F811
     """Показаны два варианта ОАК — «а как подготовиться?» спрашивает, к какому из них (принцип 5)."""
 
-    played = _play(["сколько стоит оак", "а как подготовиться?"], "shown-prep-family", mini_prod_world, monkeypatch, config)
+    _prod_parse(monkeypatch)
+    oracle = SpansOracle(("оак",))  # первый ход называет ОАК, вопрос о подготовке — ничего; выбор строки — недоступна
+    played = _play(["сколько стоит оак", "а как подготовиться?"], "shown-prep-family", mini_prod_world, monkeypatch, config, llm=oracle)
     assert played[1].text.startswith("К какому из анализов нужна подготовка: «Общий анализ крови (Le, Er, Hb, СОЭ)»"), played[1].text
 
 

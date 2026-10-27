@@ -243,3 +243,4 @@ tests/test_test_assist_button_guess_class.py
 tests/test_price_select_named_class.py
 tests/test_booking_options_price_class.py
 tests/test_service_answer_no_similar_class.py
+tests/test_spans_oracle.py

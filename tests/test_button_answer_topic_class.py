@@ -132,7 +132,9 @@ def test_answer_to_button_question_skips_classifier(button_id, reply, mini_prod_
 def test_off_keeps_classifier_like_prod(button_id, mini_prod_world, monkeypatch):  # noqa: F811
     off = _dialog(mini_prod_world, monkeypatch, [_press(button_id), _REPLIES[0]], switch="off")
     assert off[1]["telemetry"].get("nlu_llm") is True, off[1]["telemetry"]
-    assert "button" not in (off[0]["state"].get("_pending") or {}), "off — состояние как было"
+    # Метка листа у висящего вопроса — только когда её кто-то читает: на проде её читает `button_price_scope = doctor` (26.10).
+    marked = button_flow.QUESTION_KEY in (off[0]["state"].get("_pending") or {})
+    assert marked is button_flow.marks_questions(), "off — метка вопроса только для читателей"
 
 
 def test_typed_question_without_button_keeps_classifier(mini_prod_world, monkeypatch):  # noqa: F811

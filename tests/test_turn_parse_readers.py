@@ -114,7 +114,8 @@ def test_run_on_list_the_rules_missed_is_a_basket_by_the_parse(mini_prod_world, 
     assert "planner_list_to_cart" in row["tu_acted"]
     for name, cost in (("Ферритин", "530"), ("Глюкоза", "190"), ("Холестерол", "225")):
         assert f"По услуге «{name}»:\n1. {name} — {cost} руб." in turn["text"]
-    assert llm.asked(_BASKET_MARK) == [] and [entry["task"] for entry in row["choose"]] == ["turn_phrases"]
+    # Итог корзины (`basket_calc = on`, прод с 26.10) — решение `basket_total`; подделка его не знает — без «Итого».
+    assert llm.asked(_BASKET_MARK) == [] and [entry["task"] for entry in row["choose"]] == ["turn_phrases", "basket_total"]
 
 
 def test_one_service_phrase_the_rules_cut_is_not_a_basket(mini_prod_world, monkeypatch):  # noqa: F811
@@ -135,7 +136,7 @@ def test_basket_asks_rows_only_for_weak_phrases(mini_prod_world, monkeypatch):  
     turn, row = _turn(CASES["list_true_three"].text, llm, mini_prod_world, monkeypatch, "readers-weak")
     [basket] = llm.asked(_BASKET_MARK)
     assert "«ттг» →" in basket and "«витамин д» →" in basket and "«ферритин» →" not in basket
-    assert [entry["task"] for entry in row["choose"]] == ["turn_phrases", "price_basket"]
+    assert [entry["task"] for entry in row["choose"]] == ["turn_phrases", "price_basket", "basket_total"]
     assert "Ферритин — 530" in turn["text"] and "ТТГ (TSH) тиреотропный гормон — 400" in turn["text"]
 
 

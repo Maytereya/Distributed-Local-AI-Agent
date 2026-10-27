@@ -643,8 +643,8 @@
  ],
  "run_on_ten_four-deploy_parse": [
   {
-   "text": "Сейчас не удалось получить данные автоматически. Соединяю с оператором.",
-   "handoff": true,
+   "text": "По этому вопросу у меня нет данных — точно ответит оператор.\n\nЕсли хотите уточнить, переведу на оператора. Перевести?",
+   "handoff": false,
    "label": "TEST_ASSIST",
    "plan": [
     "TEST_ASSIST",
@@ -652,7 +652,12 @@
    ],
    "service_name_effective": null,
    "service_name": null,
-   "pending": null,
+   "pending": {
+    "label": "OTHER",
+    "missing": [
+     "operator_offer_confirm"
+    ]
+   },
    "tu_parse_status": "unavailable",
    "tu_rule": "parse_unavailable",
    "parse_acted": true
@@ -660,8 +665,8 @@
  ],
  "run_on_ten_four-prod": [
   {
-   "text": "Сейчас не удалось получить данные автоматически. Соединяю с оператором.",
-   "handoff": true,
+   "text": "По этому вопросу у меня нет данных — точно ответит оператор.\n\nЕсли хотите уточнить, переведу на оператора. Перевести?",
+   "handoff": false,
    "label": "TEST_ASSIST",
    "plan": [
     "TEST_ASSIST",
@@ -669,7 +674,12 @@
    ],
    "service_name_effective": null,
    "service_name": null,
-   "pending": null,
+   "pending": {
+    "label": "OTHER",
+    "missing": [
+     "operator_offer_confirm"
+    ]
+   },
    "tu_parse_status": "unavailable",
    "tu_rule": "parse_unavailable",
    "parse_acted": true
