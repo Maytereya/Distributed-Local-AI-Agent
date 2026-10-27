@@ -69,6 +69,12 @@ _ROLE_CATALOG_TEXT: dict[str, str] = {
     "role_absent": "Среди врачей клиники такого специалиста не нашёл — точнее подскажет администратор.",
     "role_qualifier": "Подобрать врача с таким уточнением (например, детский приём или приём по ДМС) поможет администратор.",
 }
+# Сбой LLM в узле `llm_fail_offer` (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4) — тот же путь с оффером: не «нет данных» и не
+# ответ правил по буквам, а «не разобрал».
+_LLM_FAIL_TEXT: dict[str, str] = {
+    "llm_fail_offer": "Не смог точно разобрать вопрос — чтобы не ошибиться, ответит оператор.",
+    "role_fail_offer": "Подобрать врача по вашему вопросу точно поможет администратор.",
+}
 
 
 # L-06в (ревью 05.10, решение владельца 08.10): отказ стоп-листа — с оффером оператора.
@@ -84,7 +90,7 @@ def build_unsupported_catalog_response(
     if not isinstance(payload, dict):
         return None
     kind = str(payload.get("kind") or "").strip()
-    text = _UNSUPPORTED_CATALOG_TEXT.get(kind) or _ROLE_CATALOG_TEXT.get(kind)
+    text = _UNSUPPORTED_CATALOG_TEXT.get(kind) or _ROLE_CATALOG_TEXT.get(kind) or _LLM_FAIL_TEXT.get(kind)
     if not text:
         return None
     if state is not None and memory is not None:

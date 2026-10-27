@@ -13,12 +13,12 @@ Legacy merge-policy сохранен как fallback/escape hatch.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import classifier, topic_shadow, turn_telemetry, walkin
 from .context_summary import seeded_context_for_nlu
-from .llm_mode_policy import RuntimeOptions
+from .llm_mode_policy import RuntimeOptions, fail_offer
 from .mess_types import RouteDecision, SessionState
 from .runtime_config import config as c
 
@@ -300,15 +300,21 @@ async def _analyze_legacy_with_candidates(
         prefetched_llm=prefetched_llm,
         skip_rule=by_llm,
     )
+    fail_offered = False
     if by_llm and _llm_failed(llm):
-        # Сбой LLM — решает правило, как без выключателя (политика сбоя этапа 4, как `llm_primary_rules_fallback`).
-        turn_telemetry.note(nlu_topic_by_llm="rules_fallback")
+        # Сбой LLM — решает правило, как без выключателя (политика сбоя этапа 4, как `llm_primary_rules_fallback`). Под
+        # `llm_fail_offer` с узлом `topic` — честный оффер: тему этой ветки правило решает по буквам («кровь ребёнку 10 мес» →
+        # «без записи, все пункты»), её затем и отдали LLM (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4).
+        fail_offered = fail_offer("topic")
+        turn_telemetry.note(nlu_topic_by_llm="fail_offer" if fail_offered else "rules_fallback")
         llm = rule
     elif by_llm:
         turn_telemetry.note(nlu_topic_by_llm="llm", nlu_src="llm")
         topic_source = {"src": "llm", "rule": topic_source.get("rule", "")}
     llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
     merged, source = _merge(rule, llm, llm_mode=llm_mode)
+    if fail_offered:
+        merged = replace(merged, label="OTHER", flags=set(merged.flags) | {"llm_fail_offer", "topic_by_llm"})
     if by_llm and llm is not rule:
         # Тему решила LLM, правило — кандидат: детекторы того же правила после NLU метку LLM не перебивают
         # (`router._apply_post_nlu_guardrails`, строка `policy_nonbookable_walkin`).

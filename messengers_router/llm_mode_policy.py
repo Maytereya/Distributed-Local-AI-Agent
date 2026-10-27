@@ -12,6 +12,16 @@ from typing import Any, Literal
 LLMMode = Literal["strict", "hybrid", "rich"]
 
 
+def fail_offer(node: str) -> bool:
+    """Узел `node` под `[MESSENGER_ROUTER] llm_fail_offer`: сбой LLM в нём — честный оффер оператора, а не ответ правил
+    (`address_followup`, `topic`, `facet`, `role_pick`; BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4). Пусто — как было."""
+
+    from .runtime_config import config as _cfg
+
+    raw = str(getattr(_cfg, "MR_LLM_FAIL_OFFER", "") or "")
+    return node in {part.strip() for part in raw.split(",") if part.strip()}
+
+
 @dataclass(frozen=True)
 class RuntimeOptions:
     llm_mode: LLMMode = "hybrid"

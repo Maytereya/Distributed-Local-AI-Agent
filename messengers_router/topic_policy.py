@@ -57,6 +57,12 @@ _ROWS: tuple[Relabel, ...] = (
         "BUG-2026-10-22-P1-FACET-NONE-AS-PRICE",
     ),
     Relabel(
+        "p1_facet_fail_offer", "question_facet", "OTHER", "_relabel_test_assist_catalog_hit_as_price",
+        "ход `topic_by_llm`: тему TEST_ASSIST решила LLM, услуга найдена, свойство вопроса не решено (сбой LLM) → честный оффер,"
+        " а не цена «как было» (`llm_fail_offer` с узлом `facet`)",
+        "BUG-2026-10-27-LLM-QUEUE-GIVES-UP",
+    ),
+    Relabel(
         "flow_price_city_reply_override", "guardrail_post", "PRICE", "_apply_post_nlu_guardrails",
         "ответ городом на висящий вопрос цены — продолжение цены",
     ),

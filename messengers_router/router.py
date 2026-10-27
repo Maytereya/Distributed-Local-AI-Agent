@@ -60,7 +60,7 @@ from .appointment_flow_guard import (
     should_keep_appointment_flow_override,
 )
 from .nlu_pipeline import analyze_with_candidates
-from .llm_mode_policy import RuntimeOptions
+from .llm_mode_policy import RuntimeOptions, fail_offer
 from .planner import build_plan as planner_build_plan, price_of as planner_price_of
 from .executor import execute_plan as executor_execute_plan
 from .response_builder import (
@@ -173,7 +173,8 @@ def _unsupported_catalog_kind(flags: set[str]) -> str | None:
     :return: тип unavailable-кейса или None
     """
 
-    for kind in ("topic_other_offer", "role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist", "unsupported_document_service"):
+    refusals = ("topic_other_offer", "role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist")
+    for kind in (*refusals, "unsupported_document_service", "llm_fail_offer", "role_fail_offer"):  # сбой LLM в узле — последним
         if kind in flags:
             return kind
     return None
@@ -1991,6 +1992,10 @@ def _relabel_test_assist_catalog_hit_as_price(
         return _copy_decision(decision, flags=flags | {"p1_availability_kept"})
     if facet == "where_when":
         return _relabel(decision, "p1_where_when", label="ADDRESS", flags=flags | {"p1_where_when"}, source="guardrail_post")
+    if not facet and "topic_by_llm" in flags and fail_offer("facet"):
+        # Сбой LLM свойства вопроса — не цена «как было» («есть ли ПЦР на аскаридоз?» → цены антител): честный оффер
+        # (`llm_fail_offer` с узлом `facet`; BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4).
+        return _relabel(decision, "p1_facet_fail_offer", label="OTHER", flags=flags | {"llm_fail_offer"})
     if facet == "none" and _p1_facet_none_offer():
         # «Ни одно» от LLM — спрашивают об услуге не цену («со скольки лет берут кровь из вены?», g0577): данных хода на такой
         # вопрос нет — честный оффер оператора тем же путём, что OTHER от LLM, а не цена чужой строки

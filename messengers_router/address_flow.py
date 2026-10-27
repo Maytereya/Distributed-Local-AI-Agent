@@ -30,6 +30,7 @@ from typing import Any, Iterable
 
 from . import button_menu, turn_telemetry
 from .choice import Option, Status, Task, choose
+from .llm_mode_policy import fail_offer
 from .mess_types import SessionState
 from .runtime_config import config as _cfg
 
@@ -156,6 +157,8 @@ FOLLOWUP_TASK = Task(
     queue_timeout_ms=3000,
 )
 NO_DATA_TEXT = "Этого в данных о филиалах у меня нет — точно подскажет оператор. Перевести на оператора?"
+# Сбой LLM на реплике после адресного листа (`llm_fail_offer` с узлом `address_followup`): не «нет в данных» — не разобрал.
+FAILED_TEXT = "Не смог точно разобрать вопрос о филиалах — чтобы не ошибиться, подскажет оператор. Перевести на оператора?"
 _CAN = {"analysis": "сдать анализы", "usi": "сделать УЗИ", "ecg": "сделать ЭКГ"}
 HOURS_HEAD = "Анализы принимают без записи, в порядке живой очереди, в часы работы пунктов забора:"
 # Часов забора по анализам в `/site/regions` нет, а у части анализов время сдачи задаёт подготовка в справочнике МИС («оптимальное
@@ -185,6 +188,11 @@ async def followup(text: str, branches: list[dict[str, Any]]) -> Followup | None
     except Exception:  # новый слой: его сбой не ломает ход — общий путь
         logger.warning("address_followup_failed", exc_info=True)
         choice = None
+    if (choice is None or choice.failed) and fail_offer("address_followup"):
+        # Сбой LLM — не «общий вопрос»: общий путь печатал весь список филиалов / «без записи» во всех пунктах на вопрос с
+        # условием (праздник, флюорография, конкретный филиал) — честный оффер (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4).
+        turn_telemetry.note(address_followup="failed_offer", address_followup_picks=0)
+        return Followup(outcome="failed")
     outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
     picks = tuple(rows[int(i) - 1] for i in (choice.ids if choice is not None else ()) if str(i).isdigit() and 1 <= int(i) <= len(rows))
     # Под `address_named_street` слово адреса не называет филиал, только когда филиалов с ним больше, чем карточек в ответе: улица
@@ -260,6 +268,8 @@ def _open_on_weekend(work_time: str) -> bool:
 def followup_text(found: Followup, branches: list[dict[str, Any]]) -> tuple[str, bool]:
     """Ответ из данных филиалов — (текст, нужен ли оффер оператора). Код печатает адрес, телефон, график и флаги (принцип 1)."""
 
+    if found.outcome == "failed":
+        return FAILED_TEXT, True
     blocks: list[str] = []
     if found.branches:
         blocks = ["\n".join(_card(b)) for b in found.branches]

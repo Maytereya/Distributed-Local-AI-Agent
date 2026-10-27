@@ -197,6 +197,7 @@ class MessengerRouterConfig:
     llm_decision_breaker_open_s: int
     classifier_timeout_s: int
     llm_turn_deadline_s: int
+    llm_fail_offer: str
     choose_cache_ttl_s: int
     choose_symptom: str
     choose_readiness: str
@@ -494,6 +495,13 @@ settings = Settings(
         # слоты — начатым ходам первыми; не успел — исход `deadline`, ответ хода — честный оффер оператора, не правило.
         # Секунды от начала хода (шлюз режет на 60 с). 0 (по умолчанию) — как было. [MESSENGER_ROUTER] llm_turn_deadline_s
         llm_turn_deadline_s=_get_int("MESSENGER_ROUTER", "llm_turn_deadline_s", 0, min_value=0, max_value=58),
+        # Узлы, где сбой LLM даёт честный оффер оператора, а не ответ правил «как было» (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4;
+        # проверка ответов без LLM 27.10, таблица узлов), через запятую: `address_followup` — реплика после адресного листа (весь
+        # список / «без записи» во всех пунктах); `topic` — ветка `topic_by_llm` (тема правила); `facet` — свойство вопроса П1
+        # (переклейка в цену); `role_pick` — выбор роли врача («есть запись к X», список врачей по слову) — отдельно, на грани
+        # правила ≤ 3 переводов на 1 чужую цену, решение владельца по карточке. Пусто (по умолчанию) — как было.
+        # [MESSENGER_ROUTER] llm_fail_offer
+        llm_fail_offer=_get_str("MESSENGER_ROUTER", "llm_fail_offer", default=""),
         # Кэш внятных ответов модуля выбора (ход (в), L-12): секунд жизни; сбой и мусор не кэшируются.
         # Коротко — ошибка модели не становится ответом всем на часы; 0 — без кэша (стенд меряет без него).
         choose_cache_ttl_s=_get_int("MESSENGER_ROUTER", "choose_cache_ttl_s", 1800, min_value=0, max_value=86400),
@@ -912,6 +920,7 @@ MR_LLM_DECISION_BREAKER_FAILURES = settings.messenger_router.llm_decision_breake
 MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_open_s
 MR_CLASSIFIER_TIMEOUT_S = settings.messenger_router.classifier_timeout_s
 MR_LLM_TURN_DEADLINE_S = settings.messenger_router.llm_turn_deadline_s
+MR_LLM_FAIL_OFFER = settings.messenger_router.llm_fail_offer
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
