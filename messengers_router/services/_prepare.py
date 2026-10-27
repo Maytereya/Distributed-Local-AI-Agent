@@ -733,7 +733,8 @@ class MemoCorpus:
     Корень из прайса без памятки («гомоцистеин», если памятки нет) — участвует: он и говорит, что памятки о предмете нет.
     Подпись поля — строка, которой начинается большинство памяток («Подготовка к исследованию»: 1412 из 1621, срез 20.10):
     у ответа свой заголовок («Памятка клиники «X»:»), подпись его дублирует. Её задаёт срез, а не список заголовков в коде;
-    одинаковой первой строки у большинства нет — подписи нет.
+    одинаковой первой строки у большинства нет — подписи нет. У одной памятки подписи нет тоже: её первая строка — сама памятка, а не
+    общая подпись, и урезанный срез МИС иначе отдал бы «Памятка клиники «X»:» без текста (STEP-2026-10-27-DEFAULTS-PROD, находка 3).
     """
 
     def __init__(self, rows: list[Any], catalog_names: Sequence[str] = ()) -> None:
@@ -759,7 +760,7 @@ class MemoCorpus:
         self.titles = tuple(titles)
         self.vocabulary = frozenset().union(*docs, *(_phrase_roots(name) for name in catalog_names))
         top = max(firsts.items(), key=lambda kv: kv[1], default=("", 0))
-        self.caption = top[0] if top[1] * 2 > len(docs) else ""
+        self.caption = top[0] if top[1] >= 2 and top[1] * 2 > len(docs) else ""
         self._weights: dict[str, float] = {}
 
     def known(self, root: str) -> bool:

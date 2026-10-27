@@ -1634,6 +1634,8 @@ def test_test_prepare_mis_memo_is_sent_as_is_without_llm(monkeypatch):
     # стоило 11–20 с ответа. Отдаём текст клиники, склеив переносы строк из HTML.
     svc = Services()
 
+    # Подпись поля «Подготовка к исследованию» задаёт срез: первая строка большинства памяток, и памяток не меньше двух (у одной
+    # первая строка — сама памятка, `MemoCorpus.caption`).
     monkeypatch.setattr(
         svc_mod.api_service_info,
         "load_service_info",
@@ -1644,7 +1646,11 @@ def test_test_prepare_mis_memo_is_sent_as_is_without_llm(monkeypatch):
                     "<p>Подготовка к исследованию</p><p>Кровь лучше сдавать утром натощак, после 8-14 часового\n"
                     "      перерыва в еде. Воду пить не запрещается.</p>"
                 ),
-            }
+            },
+            {
+                "serviceName": "Ферритин",
+                "preparation": "<p>Подготовка к исследованию</p><p>Кровь сдают утром натощак.</p>",
+            },
         ],
     )
     _prepare_llm_picks(monkeypatch, "ттг")

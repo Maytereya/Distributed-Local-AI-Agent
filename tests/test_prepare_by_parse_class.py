@@ -323,6 +323,17 @@ def test_memo_caption_by_data_drops_the_same_lines_as_the_heading_list() -> None
         assert prepare_mod._memo_lines_without_caption(memo, corpus.caption) == prepare_mod._memo_lines(memo)
 
 
+@pytest.mark.parametrize("row", list(_ROWS), ids=lambda row: row["serviceName"])
+def test_single_memo_slice_has_no_caption_and_keeps_its_text(row) -> None:
+    """Срез из одной памятки (урезанная выгрузка МИС): её первая строка — сама памятка, не подпись поля; ответ не пустеет."""
+
+    corpus = P.memo_corpus([row])
+    assert corpus.caption == ""
+    memo = select_mod.PrepareMemo(select_mod.SOURCE_MIS, row["serviceName"], P._memo_plain_text(row["preparation"]))
+    shown = prepare_mod._memo_lines_without_caption(memo, corpus.caption)
+    assert set(prepare_mod._memo_lines(memo)) <= set(shown) and shown  # ни одной строки текста не срезано
+
+
 @pytest.mark.parametrize(
     "title, other",
     [("ПАМЯТКА Гастроскопия (без наркоза)", "ПАМЯТКА Гастроскопия с наркозом"), ("ПАМЯТКА ФКС БЕЗ НАРКОЗА ", "ПАМЯТКА ФКС с наркозом ")],
