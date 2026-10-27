@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from ollama import GenerateResponse
 
 from messengers_router.services._common import _normalise_catalog_text
+from messengers_router.services._prices_helpers import _PRICE_TOKEN_RE
 
 SPANS_MARK = "Слова сообщения с номерами:"
 
@@ -40,7 +41,8 @@ def spans_groups(prompt: str, phrases: Iterable[str]) -> list[list[int]]:
     words = [_normalise_catalog_text(item.partition(":")[2]) for item in numbered]
     groups: list[list[int]] = []
     for phrase in phrases:
-        want = _normalise_catalog_text(phrase).split()
+        # Слова фразы — как слова разметки (`_turn_spans.words`): дефис и «+» — разделители («врача-терапевта» — два слова)
+        want = [_normalise_catalog_text(token) for token in _PRICE_TOKEN_RE.findall(str(phrase or ""))]
         for k in range(len(words) - len(want) + 1):
             if want and words[k : k + len(want)] == want:
                 if not any(k + 1 <= last and first <= k + len(want) for first, last in groups):
@@ -78,6 +80,19 @@ class SpansOracle:
             raise ConnectionError("тест: LLM недоступна для этого места")
         self.asked.append("inner")
         return await self.inner.generate(prompt=prompt, system=system, **kwargs)
+
+
+def keep_llm_breaker_closed(monkeypatch) -> None:
+    """Предохранитель LLM-решений (`llm_decision_breaker_failures`: 3 сбоя подряд — пауза) в многоходовом тесте не размыкается.
+
+    Подделка, которая отвечает только на часть мест (разметка — да, классификатор и прочее — «недоступна»), размыкает его уже
+    в первом ходе, и разметку следующего хода код не спрашивает — тест видит сбой разметки вместо пути прода. На проде так не
+    бывает: LLM либо отвечает, либо лежит целиком (тогда разомкнутый предохранитель — честный путь «LLM недоступна»).
+    """
+
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_BREAKER_FAILURES", 0, raising=False)
 
 
 def prepare_turn(services: Any, reply: str, entities: dict[str, Any] | None = None, *, phrases: Iterable[str] | None, monkeypatch) -> dict[str, Any]:
