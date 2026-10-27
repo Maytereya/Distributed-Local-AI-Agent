@@ -17,6 +17,10 @@
 - реплики вне класса (без уточнения П2, без сущности) не меняются — судья не зовётся;
 - два хода: «а сколько стоит по омс?» после цены — услуга из контекста — тоже судит LLM; короткий вопрос после
   «не нашёл» не получает цену того, чего пациент не видел.
+
+Путь прода с 27.10 в гейте (`turn_spans_llm`, `price_by_parse` — on; STEP-2026-10-15-DEFAULTS-B): при недоступной LLM цена — только
+реплике, которая сама целиком — дословное название или код; вопрос с названием внутри — «Уточните…» (решение владельца 27.10), до
+названия из сущности ход не доходит. Эталон «без судьи, LLM недоступна — цена по сущности» (путь как было) удалён 27.10.
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services import prices
+from messengers_router.text_templates import PRICE_CLARIFY_NAME_TEXT
+from tests.spans_oracle import keep_llm_breaker_closed
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _Oracle, _assert_follow_up_stays_on_what_was_shown
@@ -90,9 +96,24 @@ class _PickOnP2(_Oracle):
         return await super().generate(prompt=prompt, system=system, **kwargs)
 
 
+class _DownOnP2(_Oracle):
+    """Первый ход (реплика без «омс») — LLM отвечает: разметка называет УЗИ, выбор строки — строки `_PICK`; на реплике с «омс»
+    LLM недоступна целиком (сбой судьи на втором ходе)."""
+
+    def __init__(self) -> None:
+        super().__init__(("узи щитовидной железы",), _PICK)
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        question = re.search(r"пациента: «(.*?)»", prompt, re.S)
+        if question and "омс" in question.group(1).lower():
+            raise ConnectionError("тест: LLM недоступна на ходе с «омс»")
+        return await super().generate(prompt=prompt, system=system, **kwargs)
+
+
 def _llm(kind: str):
     """`not_it` — на выбор строки LLM отвечает «подходящих нет»; `pick` — выбирает строки `_PICK`; `pick_p2` — их же,
-    но только на реплике с «омс»; `down` — сбой. Выбор фраз разбора у оракулов — пустой; прочие места — «недоступна»."""
+    но только на реплике с «омс»; `down` — сбой; `down_p2` — на первом ходе LLM отвечает (разметка и выбор строки), на реплике
+    с «омс» — сбой. Выбор фраз разбора у оракулов (кроме `down_p2`) — пустой; прочие места — «недоступна»."""
 
     return {
         "not_it": lambda: _Oracle((), ("—",)),
@@ -100,6 +121,7 @@ def _llm(kind: str):
         "pick_p2": _PickOnP2,
         "not_it_p2": _NotItOnP2,
         "down": _Down,
+        "down_p2": _DownOnP2,
     }[kind]()
 
 
@@ -113,6 +135,7 @@ def _run(turns, world, monkeypatch, *, judge: bool, llm: str, session: str) -> t
     monkeypatch.setattr(prices, "_p2_name_from_entity", _WITH_JUDGE if judge else (lambda *_args, **_kwargs: False))
     client = _llm(llm)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", client)
+    keep_llm_breaker_closed(monkeypatch)  # подделки отвечают на часть мест — предохранитель не размыкается между ходами
     with ev_world.FrozenWorld(world, "day") as frozen:
         record = run_dialog(list(turns), session)
         rows = [row for row in frozen.telemetry if row.get("kind", "turn") == "turn"]
@@ -154,20 +177,6 @@ def test_old_off_key_in_the_config_changes_nothing(mini_prod_world, monkeypatch)
     assert "rows" in client.asked and row["p2_llm_judge"] == "not_found"
 
 
-@pytest.mark.parametrize("llm", ["down"])
-def test_without_the_judge_the_entity_prices(llm, mini_prod_world, monkeypatch):  # noqa: F811
-    """Эталон сравнений — ход без судьи (было до 15.10): цена УЗИ по сущности, выбор строки LLM не спрашивается.
-
-    Только при недоступной LLM: с 20.10 (деплой 11; выключатель `price_candidates_by_meaning` снят 22.10) словарный гард П2
-    не останавливает вопрос до LLM — «по омс» судит выбор строки и без судьи сущности, так что «без судьи» с работающей LLM
-    на проде не бывает."""
-
-    [turn], [row], client = _run([_P2], mini_prod_world, monkeypatch, judge=False, llm=llm, session=f"p2llm-off-{llm}")
-    assert _USG in turn["text"], turn["text"]
-    assert "rows" not in getattr(client, "asked", [])
-    assert "p2_llm_judge" not in row
-
-
 def test_on_the_llm_says_not_it_and_there_is_no_price(mini_prod_world, monkeypatch):  # noqa: F811
     [turn], [row], client = _run([_P2], mini_prod_world, monkeypatch, judge=True, llm="not_it", session="p2llm-not")
     assert not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
@@ -182,12 +191,17 @@ def test_on_the_llm_picks_the_row_and_it_is_priced(mini_prod_world, monkeypatch)
 
 @pytest.mark.parametrize("reply", (_P2, *_CONVERSATIONAL))
 def test_on_with_the_llm_down_answers_as_off(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """Сбой LLM — ответ как без судьи (цена по сущности): не делаем хуже при сбое."""
+    """Сбой LLM — ответ как без судьи: не делаем хуже при сбое.
+
+    Путь прода (решения владельца 22.10 и 27.10): без LLM название внутри вопроса — «Уточните…», и с судьёй, и без него; до
+    названия из сущности ход не доходит. Было (путь off): цена по сущности — при «по омс» платная цена УЗИ (П2: стало лучше),
+    у разговорных формулировок — верная цена приёма (по принципам нейтрально: без LLM не угадываем; по пользе — просьба
+    уточнить вместо цены)."""
 
     [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, judge=False, llm="down", session=f"p2llm-d-off-{reply[-9:]}")
     [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge=True, llm="down", session=f"p2llm-d-on-{reply[-9:]}")
-    assert on["text"] == off["text"] and _priced(on["text"]), on["text"]
-    assert row["p2_llm_judge"] == "fallback"
+    assert on["text"] == off["text"] == PRICE_CLARIFY_NAME_TEXT, on["text"]
+    assert row.get("p2_llm_judge") is None, row.get("p2_llm_judge")
 
 
 @pytest.mark.parametrize("reply", _CONVERSATIONAL)
@@ -217,20 +231,22 @@ def test_on_does_not_touch_replies_outside_the_class(reply, mini_prod_world, mon
 _TWO_TURNS = ("сколько стоит узи щитовидной железы", "а сколько стоит по омс?")
 
 
-@pytest.mark.parametrize("llm", ["not_it_p2", "pick", "down"])
+@pytest.mark.parametrize("llm", ["not_it_p2", "pick", "down_p2"])
 @pytest.mark.parametrize("judge", [False, True], ids=["no_judge", "judge"])
 def test_two_turns_the_p2_follow_up_on_the_context_service(judge, llm, mini_prod_world, monkeypatch):  # noqa: F811
     """Второй ход с уточнением П2 без названия после цены услуги — «а сколько стоит по омс?» не получает цену ни при
     каком положении судьи (П2). С 16.10 (L-13 — единственная политика): цена, выбранная LLM, услугой контекста не
-    становится — второй ход «Уточните» (П2 соблюдён раньше судьи); LLM недоступна — первый ответ — список правил, а
-    второй — как без судьи (сбой судьи не обходит политику L-13)."""
+    становится — второй ход «Уточните» (П2 соблюдён раньше судьи); LLM недоступна на втором ходе — ответ как без судьи (сбой
+    судьи не обходит политику L-13). До 27.10 сбой был всей LLM на обоих ходах (`down`: первый ответ — список правил с ценой);
+    на пути прода без LLM первый ход — «Уточните…» без цены, предмет теста (ход после цены) не наступает, поэтому LLM лежит
+    только на втором ходе (`down_p2`)."""
 
     (first, second), _rows, _ = _run(
         _TWO_TURNS, mini_prod_world, monkeypatch, judge=judge, llm=llm, session=f"p2llm-two-{judge}-{llm}"
     )
     assert _priced(first["text"]), first["text"]
     assert not _priced(second["text"]), second["text"]
-    if llm == "down" and judge:
+    if llm == "down_p2" and judge:
         (_first_off, second_off), _rows, _ = _run(
             _TWO_TURNS, mini_prod_world, monkeypatch, judge=False, llm=llm, session=f"p2llm-two-cmp-{llm}"
         )

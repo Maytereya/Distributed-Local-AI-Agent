@@ -22,8 +22,8 @@ import json
 import pytest
 
 from messengers_router.services._common import _normalise_catalog_text
-from tests.spans_oracle import SpansOracle
-from tests.test_l14_two_turn_consumers import _FOUND_GGT, _QUOTED, _Scripted, _play, _priced, _shown
+from tests.spans_oracle import SPANS_MARK, SpansOracle, is_spans, keep_llm_breaker_closed
+from tests.test_l14_two_turn_consumers import _FOUND_GGT, _QUOTED, _PickRows, _Scripted, _play, _priced, _shown
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 SHOWN = ("deploy", "next")
@@ -77,7 +77,7 @@ def test_llm_picked_row_is_the_context_and_the_next_question_shows_it(config, mi
     """Два хода через эндпоинт: строку выбрала LLM по термину — она в контексте; «сколько стоит?» — её цена, ничего
     другого."""
 
-    first, second = _play(["сколько стоит ггтп", "сколько стоит?"], "shown-ggt", mini_prod_world, monkeypatch, config, llm=_FOUND_GGT())
+    first, second = _play(["сколько стоит ггтп", "сколько стоит?"], "shown-ggt", mini_prod_world, monkeypatch, config, llm=_FOUND_GGT(), spans=("ггтп",))
     assert _priced(first.text) == [_normalise_catalog_text(_GGT)]
     assert (first.service_name, first.shown) == (_GGT, [_GGT])
     assert set(_priced(second.text)) <= _shown(first.text) and _priced(second.text), second.text
@@ -90,7 +90,9 @@ def test_old_off_value_in_the_config_changes_nothing(mini_prod_world, monkeypatc
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_CONTEXT_SHOWN", "off", raising=False)
-    first, second = _play(["сколько стоит ггтп", "сколько стоит?"], "shown-ggt-old-off", mini_prod_world, monkeypatch, "deploy", llm=_FOUND_GGT())
+    first, second = _play(
+        ["сколько стоит ггтп", "сколько стоит?"], "shown-ggt-old-off", mini_prod_world, monkeypatch, "deploy", llm=_FOUND_GGT(), spans=("ггтп",)
+    )
     assert (first.service_name, first.shown) == (_GGT, [_GGT])
     assert set(_priced(second.text)) <= _shown(first.text) and _priced(second.text), second.text
 
@@ -98,11 +100,15 @@ def test_old_off_value_in_the_config_changes_nothing(mini_prod_world, monkeypatc
 @pytest.mark.parametrize("config", SHOWN)
 @pytest.mark.parametrize("first", ["сколько стоит ферритин", "сколько стоит оак", "сколько стоит ггтп"])
 def test_a_price_after_an_answer_does_not_search_the_letter(first, config, mini_prod_world, monkeypatch):  # noqa: F811
-    """«а цена?» без названия услуги — о показанном: ни «По услуге «а»», ни цен строк, которых пациент не видел."""
+    """«а цена?» без названия услуги — о показанном: ни «По услуге «а»», ни цен строк, которых пациент не видел. Путь прода:
+    фраза услуги первого хода — разметка LLM, строки слабой фразы — выбор LLM (иначе первый ответ — «Уточните…» или названия
+    без цен, и показанного нет)."""
 
-    llm = _FOUND_GGT() if "ггтп" in first else None
-    played = _play([first, "а цена?"], f"shown-a-{first}", mini_prod_world, monkeypatch, config, llm=llm)
+    phrase = first.removeprefix("сколько стоит ")
+    llm = {"ггтп": _FOUND_GGT, "оак": lambda: _PickRows("Общий анализ крови")}.get(phrase, lambda: None)()
+    played = _play([first, "а цена?"], f"shown-a-{first}", mini_prod_world, monkeypatch, config, llm=llm, spans=(phrase,))
     seen = _shown(played[0].text)
+    assert _priced(played[0].text), played[0].text  # первый ответ показал цены — вопросу «а цена?» есть о чём быть
     assert set(_priced(played[1].text)) <= seen, played[1].text
     assert not [q for q in _QUOTED.findall(played[1].text) if _normalise_catalog_text(q) in {"а", "а цена"}], played[1].text
 
@@ -113,7 +119,7 @@ def test_readiness_names_one_service_and_holds_it(config, mini_prod_world, monke
     контексте — услуга, которую ответ назвал пациенту одной строкой; догадка — никогда). Два хода: «сколько стоит?» —
     её цена, ничего другого."""
 
-    first, second = _play(["сколько готовится ферритин", "сколько стоит?"], "shown-readiness", mini_prod_world, monkeypatch, config)
+    first, second = _play(["сколько готовится ферритин", "сколько стоит?"], "shown-readiness", mini_prod_world, monkeypatch, config, spans=("ферритин",))
     assert first.text == "Срок готовности «Ферритин» — 1–2 дня."
     assert (first.service_name, first.shown) == ("Ферритин", ["Ферритин"])
     assert _priced(second.text) == ["ферритин"], second.text
@@ -123,7 +129,9 @@ def test_readiness_names_one_service_and_holds_it(config, mini_prod_world, monke
 def test_policy_answer_without_prices_still_holds_nothing(config, mini_prod_world, monkeypatch):  # noqa: F811
     """Граница правила 14.10: ответ политики без цен («не нашёл») ничего не назвал — услуги в контексте нет."""
 
-    first, second = _play(["сколько стоит гастроскопия", "сколько стоит?"], "shown-policy", mini_prod_world, monkeypatch, config, llm=_Scripted(terms=("ФГДС",)))
+    first, second = _play(
+        ["сколько стоит гастроскопия", "сколько стоит?"], "shown-policy", mini_prod_world, monkeypatch, config, llm=_Scripted(terms=("ФГДС",)), spans=("гастроскопия",)
+    )
     if not _priced(first.text):
         assert first.service_name is None and not first.shown
         assert not _priced(second.text), second.text
@@ -133,9 +141,13 @@ def test_policy_answer_without_prices_still_holds_nothing(config, mini_prod_worl
 @pytest.mark.parametrize("again", ["сколько стоит?", "а цена?"])
 def test_repeat_shows_exactly_what_was_shown(again, config, first, mini_prod_world, monkeypatch):  # noqa: F811
     """Находка 4: повтор вопроса без названия услуги — ровно показанные строки (одна строка «Глюкоза» — не семья
-    «Глюкозы в моче» и «в синовиальной жидкости»; два варианта ОАК — эти два, не «ещё 6»), без слов вопроса."""
+    «Глюкозы в моче» и «в синовиальной жидкости»; два варианта ОАК — эти два, не «ещё 6»), без слов вопроса. Путь прода: фраза
+    услуги — разметка LLM; строки слабой «оак» выбирает LLM (варианты «Общего анализа крови», как живая модель)."""
 
-    played = _play([first, again], f"shown-repeat-{first}-{again}", mini_prod_world, monkeypatch, config)
+    phrase = first.removeprefix("сколько стоит ")
+    llm = _PickRows("Общий анализ крови") if phrase == "оак" else None
+    played = _play([first, again], f"shown-repeat-{first}-{again}", mini_prod_world, monkeypatch, config, llm=llm, spans=(phrase,))
+    assert _priced(played[0].text), played[0].text  # первый ответ показал цены — повтору есть что повторять
     assert _priced(played[1].text) == _priced(played[0].text), played[1].text
     assert not [q for q in _QUOTED.findall(played[1].text) if _normalise_catalog_text(q) in {"а", "сколько стоит", "а цена"}]
 
@@ -166,6 +178,22 @@ class _PrepareLLM:
         return GenerateResponse(model="m", response=json.dumps({"match": match}), done=True)
 
 
+class _SpansDownOn(SpansOracle):
+    """Оракул разметки, у которого на репликах `down` разметка недоступна (LLM легла между ходами); остальное — как `SpansOracle`."""
+
+    def __init__(self, phrases: tuple[str, ...], *, down: tuple[str, ...], inner=None) -> None:
+        super().__init__(phrases, inner=inner)
+        self.down = {_normalise_catalog_text(reply) for reply in down}
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        if is_spans(prompt):
+            numbered = prompt.split(SPANS_MARK, 1)[1].strip().splitlines()[0].split()
+            if " ".join(_normalise_catalog_text(item.partition(":")[2]) for item in numbered) in self.down:
+                self.asked.append("spans:down")
+                raise ConnectionError("тест: разметка недоступна")
+        return await super().generate(prompt=prompt, system=system, **kwargs)
+
+
 def _with_memo(monkeypatch) -> None:
     from messengers_router.services import prepare as prep
     from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
@@ -176,8 +204,8 @@ def _with_memo(monkeypatch) -> None:
 
 def _prod_parse(monkeypatch) -> None:
     """Разбор хода подготовки — разметка LLM, как на проде: `prepare_by_parse` и `turn_spans_llm` включены вместе с деплоя 17
-    (24.10). Пока умолчание `turn_spans_llm` — off, гейт иначе строил бы разбор старым генератором окон (он режет без LLM), а
-    этого сочетания на проде не было."""
+    (24.10). С 27.10 это и умолчание кода (STEP-2026-10-15-DEFAULTS-B); выключатель задан явно, чтобы тест не зависел от
+    умолчания: старым генератором окон (он режет без LLM) прод разбор не строит."""
 
     from messengers_router.runtime_config import config as cfg
 
@@ -211,8 +239,14 @@ def test_prepare_without_own_subject_is_about_the_shown_service(ask, first, conf
     ],
 )
 def test_prepare_without_llm_never_prints_question_words(ask, expected, config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Первый ход показал «Ферритин» (фраза — разметка LLM), к ходу подготовки LLM легла: разбор хода не удался."""
+
     _prod_parse(monkeypatch)
-    played = _play(["сколько стоит ферритин", ask], f"shown-prep-nollm-{ask}", mini_prod_world, monkeypatch, config)
+    keep_llm_breaker_closed(monkeypatch)
+    oracle = _SpansDownOn(("ферритин",), down=(ask,))
+    played = _play(["сколько стоит ферритин", ask], f"shown-prep-nollm-{ask}", mini_prod_world, monkeypatch, config, llm=oracle)
+    assert _priced(played[0].text) == ["ферритин"], played[0].text  # показанное есть — вопрос о подготовке мог бы быть о нём
+    assert oracle.asked[-1] == "spans:down", oracle.asked  # на ходе подготовки разметку спросили, и она недоступна
     assert expected in played[1].text, played[1].text
     assert not [q for q in _QUOTED.findall(played[1].text) if _normalise_catalog_text(q) in {_normalise_catalog_text(ask.strip("?")), "а натощак"}]
 
@@ -222,8 +256,19 @@ def test_prepare_after_several_shown_asks_which(config, mini_prod_world, monkeyp
     """Показаны два варианта ОАК — «а как подготовиться?» спрашивает, к какому из них (принцип 5)."""
 
     _prod_parse(monkeypatch)
-    oracle = SpansOracle(("оак",))  # первый ход называет ОАК, вопрос о подготовке — ничего; выбор строки — недоступна
-    played = _play(["сколько стоит оак", "а как подготовиться?"], "shown-prep-family", mini_prod_world, monkeypatch, config, llm=oracle)
+    # Первый ход называет ОАК, вопрос о подготовке — ничего. Под `price_by_parse = on` (прод с 26.10) слабая фраза «оак»
+    # получает строки только выбором LLM — подделка выбирает варианты «Общего анализа крови», как живая модель; без выбора
+    # ответ — названия без цен, и показанного нет.
+    played = _play(
+        ["сколько стоит оак", "а как подготовиться?"],
+        "shown-prep-family",
+        mini_prod_world,
+        monkeypatch,
+        config,
+        llm=_PickRows("Общий анализ крови"),
+        spans=("оак",),
+    )
+    assert len(played[0].shown or ()) >= 2, played[0].text
     assert played[1].text.startswith("К какому из анализов нужна подготовка: «Общий анализ крови (Le, Er, Hb, СОЭ)»"), played[1].text
 
 

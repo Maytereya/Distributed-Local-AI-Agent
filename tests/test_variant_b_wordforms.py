@@ -29,6 +29,7 @@ from tests.test_price_one_or_many_class import _configure
 from tests.test_price_turns_golden import FIXTURE, mini_prod_world, run_dialog  # noqa: F401 — фикстура модуля
 
 _SYPHILIS = "сколько стоит экспресс-тест на сифилис IgG и IgM"
+_SYPHILIS_PHRASE = "экспресс-тест на сифилис IgG и IgM"  # фраза услуги в реплике — разметка LLM
 _RIGHT = "Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)"
 _WRONG = "Кровь на сифилис (реакция микропреципитации с кардиолипиновым антигеном,антитела IgG и IgM к Treponema pallidum)"
 
@@ -102,11 +103,18 @@ def test_boundaries_of_the_class(question, expected, mini_prod_world, monkeypatc
 
 @pytest.mark.parametrize("value", ["off", "on"])
 def test_through_the_endpoint_with_the_llm_down_two_turns(value, mini_prod_world, monkeypatch):  # noqa: F811
-    """Через эндпоинт, набор прода, LLM недоступна: вариант B — названия без цен; под `on` первой — верная строка; второй
-    ход «а сколько?» не называет цены строки, которой пациент не выбирал."""
+    """Через эндпоинт, набор прода, выбор строки LLM недоступен: вариант B — названия без цен; под `on` первой — верная строка;
+    второй ход «а сколько?» не называет цены строки, которой пациент не выбирал. Разметка фраз — оракул (`turn_spans_llm = on`,
+    прод с деплоя 17): при лежащей LLM целиком цена — только реплике-названию, иначе «Уточните» (`price_by_parse = on`), и до
+    варианта B ход не доходит."""
+
+    from messengers_router import llm_runtime
+    from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 
     _configure(monkeypatch, "deploy")
     _switch(monkeypatch, value)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle((_SYPHILIS_PHRASE,)))
+    keep_llm_breaker_closed(monkeypatch)
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         first, second = run_dialog([_SYPHILIS, "а сколько?"], f"variant-b-{value}")
     assert not re.search(r"\d\s*руб", first["text"] + second["text"]), (first["text"], second["text"])

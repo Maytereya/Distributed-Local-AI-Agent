@@ -14,6 +14,10 @@
 - суд не сужает список (дополнение 20.10, карточка корзин dev): слова рядом с названием, которые сами называют услугу — сильное
   окно другого размера («бактериоскопия мазка цитология …») или слова прайса («тимофеевка луговая ферритин …»), — не условие:
   пациент склеил перечень без запятой, ответ как под off; «Не распознал» — словами пациента в его порядке.
+
+Путь прода с 27.10 в гейте (`turn_spans_llm = on`, деплой 17): фразы размечает LLM номерами слов; подделки отвечают на разметку
+теми же фразами, что выбирали из окон. Разметка, оторвавшая «по омс» от «ферритин» (ошибка модели против правила 3 промпта
+`turn_spans`), делает позицию сильной без суда — известный дефект BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS (xfail ниже).
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services._turn_phrases import strong_inside
+from tests.spans_oracle import is_spans, keep_llm_breaker_closed, spans_response
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _PHRASES_MARK, _ROWS_MARKS
@@ -42,17 +47,26 @@ _CONVERSATIONAL = (
 _CONDITION = ("сколько стоит ферритин по омс и глюкоза",)
 
 
-class _RuleFive:
-    """LLM: разбор выбирает фразы, в которых ровно одна из услуг; выбор строк — правило 5 (позицию с условием «омс» не
-    брать); `down` — выбор строк недоступен."""
+# Разметка слов `turn_spans` (прод с деплоя 17): фраза — услуга со своими словами, как фраза разбора прежнего генератора окон
+# («ферритин первый раз», «ферритин по омс»; группа не начинается предлогом — «омс ферритин»). Один перечень на все реплики —
+# длинная фраза раньше короткой.
+_SPANS = ("ферритин первый раз", "ферритин по омс", "омс ферритин", "ферритин", "глюкоза")
 
-    def __init__(self, *, down: bool = False) -> None:
+
+class _RuleFive:
+    """LLM: разбор выбирает фразы, в которых ровно одна из услуг (разметка слов — `phrases`); выбор строк — правило 5 (позицию
+    с условием «омс» не брать); `down` — выбор строк недоступен."""
+
+    def __init__(self, *, down: bool = False, phrases: tuple[str, ...] = _SPANS) -> None:
         self.down = down
+        self.phrases = phrases
         self.rows_prompts: list[str] = []
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
         options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        if is_spans(prompt):  # раньше метки старого промпта: системная часть разметки содержит ту же фразу
+            return spans_response(prompt, self.phrases)
         if _PHRASES_MARK in seen:
             picks = [n for n, text in options if bool(re.search("ферритин", text.lower())) != bool(re.search("глюкоз", text.lower()))]
             return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)
@@ -69,6 +83,7 @@ def _turn(reply: str, world, monkeypatch, *, judge: str, llm: _RuleFive) -> dict
     _deploy(monkeypatch)
     monkeypatch.setattr(cfg, "MR_BASKET_WEAK_PHRASE_JUDGE", judge, raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    keep_llm_breaker_closed(monkeypatch)
     with ev_world.FrozenWorld(world, "day") as frozen:
         session = "bwpj-" + judge + "-" + re.sub(r"\W+", "_", reply)
         [turn] = run_dialog([reply], session)
@@ -85,9 +100,20 @@ def test_conversational_word_beside_the_name_keeps_both_prices(reply, mini_prod_
     assert "[добавлено: «первый раз»]" in llm.rows_prompts[0]
 
 
+_BUG_1 = "BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS: условие у сильной позиции списка под разметкой turn_spans не судится — чинит С3"
+
+
+@pytest.mark.parametrize(
+    "phrases",
+    [
+        pytest.param(_SPANS, id="whole"),
+        # Разметка оторвала условие: «ферритин» — сильная позиция, «Ферритин — 530 руб.» при «по омс» (проба 27.10).
+        pytest.param(("ферритин", "глюкоза"), marks=pytest.mark.xfail(strict=True, reason=_BUG_1), id="torn"),
+    ],
+)
 @pytest.mark.parametrize("reply", _CONDITION)
-def test_a_condition_the_clinic_does_not_offer_gives_no_price(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    on = _turn(reply, mini_prod_world, monkeypatch, judge="on", llm=_RuleFive())
+def test_a_condition_the_clinic_does_not_offer_gives_no_price(reply, phrases, mini_prod_world, monkeypatch):  # noqa: F811
+    on = _turn(reply, mini_prod_world, monkeypatch, judge="on", llm=_RuleFive(phrases=phrases))
 
     assert _FERRITIN not in on["text"] and _GLUCOSE in on["text"], on["text"]
     assert "Не распознал: ферритин по омс" in on["text"], on["text"]  # словами пациента
@@ -129,10 +155,13 @@ class _GluedList:
 
     def __init__(self, cut: tuple[str, ...]) -> None:
         self.cut = {_normalise_catalog_text(text) for text in cut}
+        self.spans = cut
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
         options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        if is_spans(prompt):  # разметка слов `turn_spans` — те же фразы `cut`
+            return spans_response(prompt, self.spans)
         if _PHRASES_MARK in seen:
             picks = [n for n, text in options if _normalise_catalog_text(text) in self.cut]
             return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)

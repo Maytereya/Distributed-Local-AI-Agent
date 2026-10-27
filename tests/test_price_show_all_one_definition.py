@@ -26,8 +26,10 @@ from typing import Any
 import pytest
 
 from evalbench import world as ev_world
-from messengers_router import classifier
+from messengers_router import classifier, llm_runtime
 from messengers_router.services import _prices_helpers
+from tests.spans_oracle import keep_llm_breaker_closed
+from tests.test_open_bugs_2026_10_14 import _ProdLLM, _family_llm, _same_service
 from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
@@ -199,6 +201,10 @@ def test_classifier_has_no_copy_of_the_rule(monkeypatch):
 
 
 # --------------------------------------------------------------------------- через эндпоинт, два хода
+#
+# Путь прода (переворот 27.10: `turn_spans_llm`, `price_by_parse` = on): без LLM цена — «Уточните название», до списка с
+# подсказкой диалог не доходил. LLM диалога — пути прода (`test_open_bugs_2026_10_14._ProdLLM`: разметка называет услугу, выбор
+# строки признаёт её строки, как живая модель); во всех наборах.
 
 _SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
 _FAMILY_QUESTION = "сколько стоит общий анализ крови"
@@ -229,11 +235,13 @@ def _dialog(turns: list[str], session_id: str) -> list[dict[str, Any]]:
     return asyncio.run(run())
 
 
-def _play(turns: list[str], config: str, monkeypatch, world_dir) -> list[dict[str, Any]]:
+def _play(turns: list[str], config: str, monkeypatch, world_dir, llm: _ProdLLM) -> list[dict[str, Any]]:
     from messengers_router.runtime_config import config as cfg
 
     for key, value in _SETS[config].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    keep_llm_breaker_closed(monkeypatch)  # подделка отвечает не на все места: на проде LLM либо отвечает, либо лежит целиком
     with ev_world.FrozenWorld(world_dir, "day") as world:
         record = _dialog(turns, f"show-all-{config}-{abs(hash(tuple(turns)))}")
         assert list(world.net.attempts) == []
@@ -246,7 +254,7 @@ def test_show_all_reply_expands_the_shown_family(reply, config, mini_prod_world,
     """Класс: после списка семейства с подсказкой «напишите: "все"» реплика «показать все» в любой узнаваемой форме
     (в том числе слово ровно из подсказки) раскрывает весь список — метка PRICE правилом, все строки с ценой."""
 
-    first, second = _play([_FAMILY_QUESTION, reply], config, monkeypatch, mini_prod_world)
+    first, second = _play([_FAMILY_QUESTION, reply], config, monkeypatch, mini_prod_world, _family_llm())
     hint = _HINT.search(first["text"])
     assert hint, first["text"]
     shown = [m.group("name") for m in _NUMBERED.finditer(first["text"])]
@@ -258,6 +266,7 @@ def test_show_all_reply_expands_the_shown_family(reply, config, mini_prod_world,
     expanded = [m.group("name") for m in _NUMBERED.finditer(second["text"])]
     assert len(expanded) == total
     assert set(shown) <= set(expanded)
+    assert _same_service(expanded), expanded  # раскрыта только показанная услуга (решение владельца 26.10)
     assert not _HINT.search(second["text"])
 
 
@@ -266,5 +275,7 @@ def test_show_all_reply_expands_the_shown_family(reply, config, mini_prod_world,
 def test_show_all_rule_needs_a_shown_family(turns, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Без показанного списка семейства правило «показать все» не срабатывает (одна цена — не список)."""
 
-    record = _play(turns, config, monkeypatch, mini_prod_world)
+    record = _play(turns, config, monkeypatch, mini_prod_world, _ProdLLM(("ферритин",), "ферритин"))
+    if len(turns) > 1:
+        assert record[0]["text"].count(" руб.") == 1, record[0]["text"]  # дошли до одной цены
     assert "rule_price_family_show_all" not in record[-1]["flags"]

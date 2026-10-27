@@ -6,6 +6,10 @@
 (`evalbench.run --cfg MR_PARSE_FAIL_VARIANTS=3`); по умолчанию 3 — как на проде (STEP-2026-10-15-DEFAULTS-B), запасное
 при нечитаемом значении — 5. Инвариант: у слабой позиции вариантов не больше настройки и не меньше двух (одна строка —
 не «та самая цена»).
+
+Путь прода (`turn_spans_llm = on`, деплой 17; `price_by_parse = on`, деплой 18): при лежащей LLM целиком цены нет вовсе
+(«Уточните название»), поэтому настройка действует, когда разметка фраз ответила, а выбор строки корзины — нет (оракул
+разметки, прочие места — «недоступна»).
 """
 
 from __future__ import annotations
@@ -13,8 +17,10 @@ from __future__ import annotations
 import pytest
 
 from evalbench import world as ev_world
+from messengers_router import llm_runtime
 from messengers_router.services import _basket_select as bs
-from tests.test_price_one_or_many_class import CASES, _configure, _priced_sections
+from tests.spans_oracle import SpansOracle
+from tests.test_price_one_or_many_class import CASES, TRUE_CUT, _configure, _priced_sections
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура модуля
 
 
@@ -44,6 +50,7 @@ def test_weak_position_without_llm_shows_at_most_the_setting(limit, mini_prod_wo
     _configure(monkeypatch, "deploy_parse")
     monkeypatch.setattr(cfg, "MR_PARSE_FAIL_VARIANTS", limit, raising=False)
     case = CASES["list_true_three"]  # «ферритин» сильная, «ттг» и «витамин д» — слабые
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(TRUE_CUT["list_true_three"]))
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         [turn] = run_dialog([case.text], f"parse-fail-variants-{limit}")
     sections = _priced_sections(turn["text"])

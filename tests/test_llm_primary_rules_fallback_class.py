@@ -22,6 +22,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime
 from messengers_router.recovery_policy import CLARIFY_REASON_CODES
+from messengers_router.text_templates import PRICE_CLARIFY_NAME_TEXT
 from tests.test_booking_slots_by_meaning import _LLM
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
@@ -51,7 +52,13 @@ _REPLIES = {
 }
 
 
-def _turn(world_dir, monkeypatch, reply: str, *, engine: str, fallback: str, answer) -> dict[str, Any]:
+def _turn(world_dir, monkeypatch, reply: str, *, engine: str, fallback: str, answer, spans: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """Один ход через эндпоинт; классификатор отвечает `answer`, прочие места LLM — «недоступна».
+
+    :param spans: фразы-услуги для разметки хода (`turn_spans_llm = on`) — оракул `tests/spans_oracle.py`; None (по умолчанию) —
+        разметка недоступна, как всё прочее (поведение для прежних вызовов не меняется)
+    """
+
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
     from messengers_router.runtime_config import config as cfg
@@ -67,7 +74,13 @@ def _turn(world_dir, monkeypatch, reply: str, *, engine: str, fallback: str, ans
         patch.setattr(cfg, "MR_NLU_ENGINE", engine, raising=False)
         patch.setattr(cfg, "MR_LLM_PRIMARY_RULES_FALLBACK", fallback, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
-        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM({_CLASSIFIER_MARK: answer}))
+        client = _LLM({_CLASSIFIER_MARK: answer})
+        if spans is not None:
+            from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
+
+            client = SpansOracle(spans, inner=client)
+            keep_llm_breaker_closed(patch)
+        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", client)
         choice._CACHE.clear()
         out = asyncio.run(run())
         out["telemetry"] = world.take_telemetry() or {}
@@ -102,12 +115,19 @@ def test_urgent_stays_urgent_when_llm_fails(failure, mini_prod_world, monkeypatc
 
 
 def test_price_of_named_service_survives_llm_outage(mini_prod_world, monkeypatch):  # noqa: F811
-    """Исходный симптом: при недоступной LLM «сколько стоит ферритин» — цена, а не меню «Уточните, что именно…»."""
+    """Исходный симптом: при недоступной LLM «сколько стоит ферритин» — меню «Уточните, что именно…» вместо пути цены.
+
+    Ход решают правила — путь цены (PRICE). С 26.10 (`price_by_parse = on`, прод) без LLM цену получает только реплика-название
+    (решение 22.10 (а), политика 27.10): «сколько стоит ферритин» — уточнение названия на пути цены, «ферритин» — цена. До 27.10
+    первая реплика получала цену по буквам; пациент теперь видит «Уточните название услуги» — нейтрально по принципам."""
 
     turn = _turn(mini_prod_world, monkeypatch, _REPLIES["price"], engine="llm_primary", fallback="on", answer=_down)
-
     assert turn["label"] == "PRICE", turn
-    assert "руб" in turn["text"].lower(), turn["text"]
+    assert turn["text"] == PRICE_CLARIFY_NAME_TEXT, turn["text"]
+
+    bare = _turn(mini_prod_world, monkeypatch, "ферритин", engine="llm_primary", fallback="on", answer=_down)
+    assert bare["label"] == "PRICE", bare
+    assert "руб" in bare["text"].lower(), bare["text"]
 
 
 @pytest.mark.parametrize("failure", sorted(_FAILURES))

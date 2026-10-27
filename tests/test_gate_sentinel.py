@@ -71,12 +71,15 @@ def test_bot_answers_without_local_snapshots(source, tmp_path):
 
 def test_mini_prod_price_comes_from_the_fixture_catalog(tmp_path):
     root = _world(FIXTURE, tmp_path)
+    # Голое название: зонд проверяет прайс мира, а не разбор реплики. Мир гейта — LLM недоступна, и под `price_by_parse = on`
+    # (прод с 26.10) цену без LLM получает только реплика-название (решение 22.10 (а)); до 27.10 тут было «сколько стоит общий
+    # анализ крови» — теперь «Уточните название», без цен.
     with ev_world.FrozenWorld(root, "day"):
-        (body,) = _ask(("сколько стоит общий анализ крови",))
+        (body,) = _ask(("ферритин",))
     catalog = PriceCatalog.from_world(root / "apidata")
     matched = [p for p in catalog.pairs(body["text"]) if p.status == "matched"]
     assert matched, body["text"][:200]
-    assert all("общий анализ крови" in (p.name or "").lower() for p in matched)
+    assert all("ферритин" in (p.name or "").lower() for p in matched)
 
 
 def test_mini_prod_fixture_is_a_small_public_extract():

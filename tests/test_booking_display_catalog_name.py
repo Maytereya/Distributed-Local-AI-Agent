@@ -20,6 +20,39 @@ import pytest
 from messengers_router.policies import appointment_service_display
 
 
+_GYN = "Прием (осмотр, консультация) врача-акушера-гинеколога"
+
+
+class _PickGyn:
+    """LLM выбора строки (суд услуги записи) отмечает строку «Прием (осмотр, консультация) врача-акушера-гинеколога»; прочие места — «недоступна»."""
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+        from ollama import GenerateResponse
+
+        if "ответить пациенту на вопрос о цене" not in f"{system}\n\n{prompt}":
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        picks = []
+        for line in prompt.splitlines():
+            head, dot, rest = line.partition(". ")
+            if dot and head.isdigit() and rest.rsplit(" — ", 1)[0].strip() == _GYN:
+                picks.append(int(head))
+        answer = {"match": picks, "search_terms": []} if system is None else {"picks": picks, "reason": "none", "search_terms": []}
+        return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
+
+
+def _gyn_llm(monkeypatch) -> None:
+    """Разметка хода — оракул с фразой «консультацию гинеколога», суд услуги записи — `_PickGyn` (`turn_spans_llm = on`,
+    `price_by_parse = on`, прод с 24/26.10). Без LLM суд записи не выбирает строку (Ш4): одно название правил уходит на
+    переспрос «Похоже, вы имели в виду «…»? да/нет» — пациент подтверждает догадку лишним ходом (нейтрально по принципам),
+    и тест не дошёл бы до своего предмета."""
+
+    from messengers_router import llm_runtime
+    from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("консультацию гинеколога",), inner=_PickGyn()))
+    keep_llm_breaker_closed(monkeypatch)
+
+
 def _catalog_names_with_priem() -> list[str]:
     from messengers_router.services import Services
 
@@ -41,8 +74,10 @@ def test_booking_phrase_is_not_a_service_name(phrase):
     assert appointment_service_display({"service_name": phrase, "specialty": "терапевт"}) == "приём к терапевту"
 
 
-def test_gynecologist_booking_names_the_service_to_patient_and_operator():
+def test_gynecologist_booking_names_the_service_to_patient_and_operator(monkeypatch):
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
+
+    _gyn_llm(monkeypatch)
     from messengers_router.memory import MemoryStore
     from messengers_router.services import Services
 

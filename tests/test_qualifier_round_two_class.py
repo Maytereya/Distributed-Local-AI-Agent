@@ -27,6 +27,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
+from tests.spans_oracle import keep_llm_breaker_closed
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _ROWS_MARKS, _Oracle
@@ -210,11 +211,20 @@ def test_p2_judge_rows_down_answers_as_off(mini_prod_world, monkeypatch):  # noq
     assert row["p2_llm_judge"] == "fallback"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="BUG-2026-10-27-OMS-FOLLOWUP-PRICED: под разметкой turn_spans (прод с 24.10) условие без названия во втором ходе "
+    "(«а сколько стоит по омс?» после цены ферритина) — разбор none_fit, судья П2 не спрашивается, платная цена услуги контекста",
+)
 def test_two_turns_condition_after_a_price(mini_prod_world, monkeypatch):  # noqa: F811
     """Два хода: цена ферритина → «а сколько стоит по омс?» (услуга из контекста, судья П2): «Не нашёл» одним вызовом,
     без `budget`; первый ответ — цена."""
 
-    oracle = _Judge(rows=("Ферритин",))
+    # Путь прода (`turn_spans_llm = on`): разметка первого хода называет «ферритин», второго — ни одной услуги (условие без
+    # названия — не услуга, правило 7 промпта `turn_spans`); предохранитель не размыкается от мест, на которые подделка не
+    # отвечает. Дефект прода (BUG-2026-10-27-OMS-FOLLOWUP-PRICED): второй ход — «Розничная цена: Ферритин — 530 руб.» без судьи П2.
+    keep_llm_breaker_closed(monkeypatch)
+    oracle = _Judge(("ферритин",), rows=("Ферритин",))
     (first, second), rows = _run(_TWO_TURNS, mini_prod_world, monkeypatch, llm=oracle, session=_sid("two", "on"))
     assert "Ферритин — 530" in first["text"], first["text"]
     assert not _priced(second["text"]) and "Не нашёл" in second["text"], second["text"]

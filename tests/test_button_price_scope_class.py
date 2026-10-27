@@ -8,7 +8,11 @@
 Инвариант класса (свип по всем названиям мини-прайса фикстуры): у ответа на вопрос кнопки цены с областью — если в
 области есть кандидат на фразу, ни одной строки вне области; нет — ответ тот же, что без кнопки (весь прайс). Без области
 (выключатель, режим `doctor` для «Цены анализа», вопрос не кнопки) — как было. Встречный: дословное название вне области
-(синоним МИС, точное имя) — по-прежнему его строки. LLM недоступна — путь правил, как в мире гейта.
+(синоним МИС, точное имя) — по-прежнему его строки.
+
+Свип — при лежащей LLM, как в мире гейта. Под `price_by_parse = on` (прод с 26.10, Ш4) без решения LLM строки слабой фразы с
+ценой не показываются вовсе, и свип проверяет в основном сильные фразы. Экземпляры класса — с подделкой выбора строки «выбрала всё,
+что ей показали» (`picks_all`): ответ — ровно строки, которые область пустила к выбору LLM, т. е. проверяется сама область.
 """
 
 from __future__ import annotations
@@ -54,6 +58,28 @@ def _ids(payload: dict[str, Any]) -> set[int]:
 
 
 _LAB = {int(r["serviceId"]) for r in _ROWS if str(r.get("deadline") or "").strip()}
+_PRICE_SELECT_MARK = "ответить пациенту на вопрос о цене"
+
+
+class _PicksAll:
+    """LLM выбора строки цены отмечает все показанные ей строки; прочие места — «недоступна»."""
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+        from ollama import GenerateResponse
+
+        if _PRICE_SELECT_MARK not in f"{system}\n\n{prompt}":
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        picks = [int(head) for head, dot, _rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        answer = {"match": picks, "search_terms": []} if system is None else {"picks": picks, "reason": "none", "search_terms": []}
+        return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
+
+
+@pytest.fixture
+def picks_all(monkeypatch):
+    from tests.spans_oracle import keep_llm_breaker_closed
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PicksAll())
+    keep_llm_breaker_closed(monkeypatch)
 
 
 @pytest.mark.parametrize("scope", ["doctor", "tests"])
@@ -80,7 +106,7 @@ def test_no_scope_keeps_the_answer(mini_prod_world):  # noqa: F811
         assert _ids(_price(mini_prod_world, query, "")) == _ids(_price(mini_prod_world, query)), phrase
 
 
-def test_class_instances(mini_prod_world):  # noqa: F811
+def test_class_instances(mini_prod_world, picks_all):  # noqa: F811
     """Экземпляры класса: «кардио…» на «Цену приёма врача» — не анализ «С-реактивный белок (кардио)»; «щитовидная железа» —
     УЗИ, не профиль анализов; на «Цену анализа» — наоборот; «ЭКГ» на «Цену анализа» — ЭКГ (в анализах кандидата нет)."""
 

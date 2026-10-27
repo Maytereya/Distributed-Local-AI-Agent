@@ -193,8 +193,8 @@ def test_one_catalog_name_is_not_split_by_strong_pieces(world):
 
 def test_verbatim_catalog_name_is_strong_as_written(catalog, world):
     """Название прайса, набранное целиком, — сильное по данным как написано (L-15b, шаг 5): вырезатель
-    фразы правил теряет в нём дефис и предлоги, и фраза разбора с ним была бы слабой. Цена и корзина
-    правил зовут `strong_rows` без этого — их поведение не меняется."""
+    фразы правил теряет в нём дефис и предлоги, и фраза разбора с ним была бы слабой. Цена пути прода (`price_by_parse = on`,
+    деплой 18) зовёт `strong_rows` с фразой как есть, без вырезателя, — название целиком сильное и у неё."""
 
     from messengers_router.services._strong_match import strong_rows
 
@@ -202,7 +202,7 @@ def test_verbatim_catalog_name_is_strong_as_written(catalog, world):
         _cands, parse = _decide(f"сколько стоит {name}", catalog)
         assert (parse.status, parse.source) == ("strong_whole", "data"), name
         assert {row["serviceName"] for row in parse.items[0].rows} == {name}
-        assert strong_rows(name, catalog) == []  # прежнее определение у цены и корзины — без изменений
+        assert {row["serviceName"] for row in strong_rows(name, catalog)} == {name}  # цена пути прода — фраза как есть
 
 
 def test_single_candidate_skips_llm(catalog, world):

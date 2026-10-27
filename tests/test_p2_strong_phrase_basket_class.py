@@ -18,6 +18,12 @@
 - список без слов вне прайса — ответ под `llm` тот же, что под `off`;
 - без окон («ферритин по омс» — слабая позиция) — ответ не меняется;
 - два хода: короткий вопрос после такого ответа не получает цену позиции, которой пациент не видел.
+
+Путь прода с 27.10 в гейте (`turn_spans_llm = on`, деплой 17; STEP-2026-10-15-DEFAULTS-B): фразы размечает LLM номерами слов, окон
+нет. Подделка отвечает на разметку теми же фразами. Разметка, оторвавшая «по омс» от «ферритин» (ошибка модели против правила 3
+промпта `turn_spans`), — известный дефект BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS: `beside` заполнял только генератор окон,
+разметка — нет, суда условия нет, пациент видит «Ферритин — 530 руб.» (xfail strict ниже; чинит дизайн С3). Разметка по правилу 3
+(«ферритин по омс» целиком) — слабая позиция с судом П2, цены нет. Откат `off` (ответ 15.10) удалён 27.10 — путь не прода.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import is_spans, keep_llm_breaker_closed, spans_response
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _PHRASES_MARK, _ROWS_MARKS, _assert_follow_up_stays_on_what_was_shown
@@ -47,6 +54,9 @@ _CONVERSATIONAL = ("сколько стоит ферритин первый ра
 _OUTSIDE_THE_CLASS = ("сколько стоит ферритин, глюкоза", "сколько стоит ферритин и глюкоза")
 _FERRITIN = "Ферритин — 530"
 _GLUCOSE = "Глюкоза — 190"
+_BUG_1 = "BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS: условие у сильной позиции списка под разметкой turn_spans не судится — чинит С3"
+# Разметка «ферритин по омс» по правилу 3 промпта `turn_spans` — условие при названии (слабая позиция, суд П2).
+_WHOLE = ("ферритин по омс", "глюкоза")
 
 
 class _RuleFive:
@@ -63,6 +73,9 @@ class _RuleFive:
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
         options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        if is_spans(prompt):  # разметка слов `turn_spans` (прод с деплоя 17) — те же фразы; раньше метки старого промпта
+            self.asked.append("phrases")
+            return spans_response(prompt, sorted(self.phrases, key=lambda text: -len(text.split())))
         if _PHRASES_MARK in seen:
             self.asked.append("phrases")
             picks = [n for n, text in options if _normalise_catalog_text(text.strip("«»")) in self.phrases]
@@ -83,6 +96,7 @@ def _run(turns, world, monkeypatch, *, guard: str, llm, windows: bool = True, se
         monkeypatch.setattr(cfg, key, value, raising=False)
     monkeypatch.setattr(cfg, "MR_STRONG_PHRASE_GUARD", guard, raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    keep_llm_breaker_closed(monkeypatch)
     with ev_world.FrozenWorld(world, "day") as frozen:
         record = run_dialog(list(turns), session)
         rows = [row for row in frozen.telemetry if row.get("kind", "turn") == "turn"]
@@ -121,16 +135,7 @@ def test_precondition_windows_offer_the_phrase_without_the_condition(mini_prod_w
             assert beside == {"ферритин": "омс", "глюкоза": ""}, beside  # «по» — обвязка (`_FILLER`)
 
 
-@pytest.mark.parametrize("reply", _P2_BASKET)
-def test_off_keeps_the_answer_of_15_10(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """Откат (`off`) — как было: «Ферритин — 530» в корзине, выбор строк LLM не спрашивается (обе позиции сильные)."""
-
-    llm = _RuleFive()
-    [turn], [row] = _run([reply], mini_prod_world, monkeypatch, guard="off", llm=llm, session=_sid("off", reply))
-    assert _FERRITIN in turn["text"] and _GLUCOSE in turn["text"], turn["text"]
-    assert "rows" not in llm.asked and "strong_phrase_guard" not in row
-
-
+@pytest.mark.xfail(strict=True, reason=_BUG_1)
 @pytest.mark.parametrize("reply", _P2_BASKET)
 def test_the_condition_takes_the_price_away(reply, mini_prod_world, monkeypatch):  # noqa: F811
     llm = _RuleFive()
@@ -141,6 +146,7 @@ def test_the_condition_takes_the_price_away(reply, mini_prod_world, monkeypatch)
     assert row["strong_phrase_guard"] == "basket_not_found"
 
 
+@pytest.mark.xfail(strict=True, reason=_BUG_1)
 @pytest.mark.parametrize("reply", _P2_BASKET)
 def test_a_failed_row_choice_gives_no_price(reply, mini_prod_world, monkeypatch):  # noqa: F811
     """Сбой LLM выбора строк — позиция на суде без цены и без вариантов с ценой (П2); сильная соседняя — с ценой."""
@@ -153,13 +159,15 @@ def test_a_failed_row_choice_gives_no_price(reply, mini_prod_world, monkeypatch)
 @pytest.mark.parametrize("reply", _CONVERSATIONAL)
 def test_a_conversational_word_keeps_the_price(reply, mini_prod_world, monkeypatch):  # noqa: F811
     """Встречный инвариант: слово разговора рядом с сильной фразой («первый раз») гард по буквам считал бы
-    уточнением; LLM корзины его пропускает — ответ тот же, что под `off`."""
+    уточнением; цена обеих позиций остаётся, «Не распознал» нет.
 
-    [before], _rows = _run([reply], mini_prod_world, monkeypatch, guard="off", llm=_RuleFive(), session=_sid("coff", reply))
-    llm = _RuleFive()
-    [after], [row] = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=llm, session=_sid("cllm", reply))
-    assert _FERRITIN in before["text"] and after["text"] == before["text"], after["text"]
-    assert "rows" in llm.asked and row["strong_phrase_guard"] == "basket_rows"
+    Под разметкой (путь прода) суд не спрашивается вовсе: `beside` разметка не заполняет (корень BUG-2026-10-26-LIST-CONDITION-
+    CUT-BY-SPANS), поэтому прежняя проверка механизма окон («выбор строк спрошен», `strong_phrase_guard = basket_rows`) и
+    сравнение с откатом `off` сняты 27.10; идёт ли разговорное слово на суд — решит С3 (карточка ветки дефекта: суд разговорных
+    слов терял верные цены), ответ пациенту от этого не должен меняться."""
+
+    [after], _rows = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(), session=_sid("cllm", reply))
+    assert _FERRITIN in after["text"] and _GLUCOSE in after["text"] and "Не распознал" not in after["text"], after["text"]
 
 
 @pytest.mark.parametrize("reply", _OUTSIDE_THE_CLASS)
@@ -173,21 +181,31 @@ def test_lists_without_outside_words_do_not_change(reply, mini_prod_world, monke
 
 @pytest.mark.parametrize("reply", _P2_BASKET)
 def test_without_windows_nothing_changes(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """Без окон фраза с условием — слабая позиция («ферритин по омс») с гардом П2: выключатель ответа не меняет."""
+    """Без окон фраза с условием — слабая позиция («ферритин по омс») с гардом П2: выключатель ответа не меняет. Под разметкой
+    (путь прода) — то же при разметке по правилу 3 промпта `turn_spans`: условие не оторвано от названия."""
 
-    phrases = ("ферритин по омс", "глюкоза")
-    [off], _rows = _run([reply], mini_prod_world, monkeypatch, guard="off", llm=_RuleFive(phrases), windows=False, session=_sid("woff", reply))
-    [on], [row] = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(phrases), windows=False, session=_sid("won", reply))
-    assert on["text"] == off["text"] and _FERRITIN not in on["text"], on["text"]
+    [off], _rows = _run([reply], mini_prod_world, monkeypatch, guard="off", llm=_RuleFive(_WHOLE), windows=False, session=_sid("woff", reply))
+    [on], [row] = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(_WHOLE), windows=False, session=_sid("won", reply))
+    assert on["text"] == off["text"] and _FERRITIN not in on["text"] and _GLUCOSE in on["text"], on["text"]
     # Слабую позицию с сильным названием внутри судит LLM корзины (суд слабой фразы — всегда с 22.10, выключатель
     # `basket_weak_phrase_judge` снят), поэтому строка хода может нести вердикт суда; ответ — тот же, цены по ОМС нет.
     _ = row
 
 
+@pytest.mark.parametrize(
+    "phrases",
+    [
+        pytest.param(("ферритин", "глюкоза"), marks=pytest.mark.xfail(strict=True, reason=_BUG_1), id="torn"),
+        pytest.param(_WHOLE, id="whole"),
+    ],
+)
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
-def test_follow_up_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
+def test_follow_up_stays_on_what_was_shown(follow_up, phrases, mini_prod_world, monkeypatch):  # noqa: F811
+    """Разметка оторвала условие (`torn`) — дефект №1: первый ход уже с ценой ферритина; разметка по правилу 3 (`whole`) —
+    первый ход без неё, короткий вопрос следом не получает цену, которой пациент не видел."""
+
     (first, second), _rows = _run(
-        [_P2_BASKET[0], follow_up], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(), session=_sid("fu", follow_up)
+        [_P2_BASKET[0], follow_up], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(phrases), session=_sid("fu", follow_up, *phrases)
     )
     assert _FERRITIN not in first["text"], first["text"]
     _assert_follow_up_stays_on_what_was_shown(first, second)

@@ -5,13 +5,15 @@
 диалогов, которые политика меняла, `POLICY_PLANNED` ниже, слиты в него из `price_turns_policy_on.json` побайтно).
 
 Инварианты класса:
-- сильное совпадение по данным (дословное название, синоним МИС, код) — только эти строки, без LLM;
-- слабое совпадение, а LLM не ответила внятно: ОДНА слабая строка не показывается с ценой — до 5
-  названий с самым различающим словом пациента, без цен; таких нет — честный перевод; СПИСОК правил
-  (≥2 строк) остаётся списком (решение владельца 11.10 по замеру: строгий вариант B прятал и списки
-  с нужной строкой — форму 22.07); «одна» и «список» — по строкам, которые увидит пациент (`shown`),
-  а не по числу кандидатов правил: у приёма рендер пакета показывает одну строку из нескольких
-  кандидатов — она без цены (BUG-2026-10-13-L13-SHOWN-SHADOWED);
+- сильное совпадение по данным (дословное название, синоним МИС, код) — только эти строки, без LLM выбора строки;
+- слабое совпадение, а LLM выбора строки не ответила внятно: строка не показывается с ценой — до 5
+  названий с самым различающим словом пациента, без цен; таких нет — честный перевод; одна показанная
+  строка из нескольких кандидатов — тоже без цены (BUG-2026-10-13-L13-SHOWN-SHADOWED). Под `price_by_parse = on`
+  (прод с 26.10, Ш4) список правил с ценами без решения LLM не показывается вовсе (кандидаты правил — по буквам,
+  BUG-2026-10-25-RULES-LIST-FOREIGN-ROW); исключение 11.10 «список правил остаётся списком» — путь off, его тесты сняты 27.10;
+- LLM лежит целиком (разметка хода не ответила) — цена только реплике-названию, иначе «Уточните название»
+  (решения 22.10 и 27.10; ответы — в общем эталоне). Тесты политики ниже поэтому дают разметке хода оракул
+  (`tests/spans_oracle.py`): фразу разбора — LLM разметки, а выбор строки — «недоступна» или своя подделка;
 - LLM не нашла услугу и во втором круге — «не нашёл», без чужой цены;
 - политика заменяет только слабое предложение правил: правила ничего не предложили — их ответ;
 - решение политики пишется в телеметрию хода (`price_policy`);
@@ -30,6 +32,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_price_turns_golden import DIALOGS, FIXTURE, _golden, run_dialog, synonym_fork  # noqa: F401 — фикстура для synonym_fork-диалогов
 
 _PRICE_PROMPT_MARK = "ответить пациенту на вопрос о цене"
@@ -76,6 +79,18 @@ class _PriceLLM:
         return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
 
+def _spans(monkeypatch, phrases: tuple[str, ...], inner=None) -> SpansOracle:
+    """Разметка хода отвечает фразами `phrases` (LLM разметки работает), прочие места — `inner` или «недоступна».
+
+    Предохранитель LLM держится замкнутым: подделка, отвечающая только на часть мест, иначе размыкала бы его уже в первом
+    ходе, и разметку следующего хода код не спрашивал бы (на проде LLM либо отвечает, либо лежит целиком)."""
+
+    oracle = SpansOracle(phrases, inner=inner)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
+    keep_llm_breaker_closed(monkeypatch)
+    return oracle
+
+
 def _turn(question: str, session: str, mini_prod_world) -> dict:
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         [turn] = run_dialog([question], session)
@@ -84,22 +99,18 @@ def _turn(question: str, session: str, mini_prod_world) -> dict:
 
 
 def test_single_weak_row_without_llm_is_named_without_its_price(mini_prod_world, monkeypatch):
+    # Разметка нашла фразу, выбор строки не ответил: одна слабая строка — названием, без цены.
+    oracle = _spans(monkeypatch, ("экспресс тест определения сифилиса антитела igg igm к",))
     turn = _turn("сколько стоит экспресс тест определения сифилиса антитела igg igm к", "policy-single", mini_prod_world)
     assert "руб" not in turn["text"] and "520" not in turn["text"]
     assert "«Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)»" in turn["text"]
-
-
-def test_weak_list_without_llm_stays_the_rules_list(mini_prod_world, monkeypatch):
-    # Сужение варианта B (решение 11.10): список остаётся — при живой LLM его решает выбор модели
-    # (`test_choose_price.py::test_gastroscopy_is_fgds_by_model_term_not_gastrin_by_letters`).
-    turn = _turn("сколько стоит гастроскопия", "policy-gastro", mini_prod_world)
-    assert turn["text"] == _golden()["one_gastroscopy"][0]["text"]
-    assert turn["telemetry"]["price_policy"] == "rules_list"
+    assert "spans" in oracle.asked
 
 
 def test_one_shown_row_of_several_candidates_is_named_without_its_price(mini_prod_world, monkeypatch):
     # Приём: правила собрали пять строк невролога, рендер пакета покажет одну — её цена без LLM не
-    # звучит, хотя кандидатов больше одного (BUG-2026-10-13-L13-SHOWN-SHADOWED).
+    # звучит, хотя кандидатов больше одного (BUG-2026-10-13-L13-SHOWN-SHADOWED). Разметка нашла фразу, выбор строки не ответил.
+    _spans(monkeypatch, ("прием невролога",))
     turn = _turn("сколько стоит прием невролога", "policy-one-of-many", mini_prod_world)
     assert turn["plan"] == ["PRICE", "service_bundle_info"]
     assert "руб" not in turn["text"] and "2 700" not in turn["text"]
@@ -119,8 +130,8 @@ def _weak_rows(count: int) -> list[dict]:
     ("shown_count", "decision", "label"),
     [
         (1, "unavailable", "names"),  # пациент увидел бы одну строку из двенадцати — её цена не звучит
-        (3, None, "rules_list"),  # список — остаётся списком правил
-        (None, None, "rules_list"),  # `shown` не передан — правила покажут всех кандидатов
+        # Параметры «список (3 строки / `shown` не передан) — остаётся списком правил» сняты 27.10: это путь `price_by_parse = off`;
+        # под on (прод с 26.10, Ш4) без решения LLM список правил с ценами не показывается.
     ],
 )
 def test_policy_decides_by_rows_the_patient_sees_not_by_candidate_count(shown_count, decision, label, monkeypatch, tmp_path):
@@ -149,16 +160,16 @@ def test_policy_decides_by_rows_the_patient_sees_not_by_candidate_count(shown_co
 
 def test_model_found_nothing_twice_is_not_found_without_a_foreign_price(mini_prod_world, monkeypatch):
     llm = _PriceLLM([[], []], terms=["ФГДС"])
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    _spans(monkeypatch, ("гастроскопия",), inner=llm)
     turn = _turn("сколько стоит гастроскопия", "policy-nf", mini_prod_world)
     assert turn["text"].startswith("Не нашёл актуальную стоимость для «гастроскопия»")
     assert "750" not in turn["text"]
 
 
 def test_strong_match_is_shown_without_llm(mini_prod_world, monkeypatch):
-
+    # Фраза разбора «глюкоза» — дословное название: строку выбирать LLM не нужно (разметка — LLM хода, выбор строки — нет).
     llm = _PriceLLM([[1]])
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    _spans(monkeypatch, ("глюкоза",), inner=llm)
     turn = _turn("сколько стоит глюкоза", "policy-strong", mini_prod_world)
     assert "Глюкоза — 190" in turn["text"] and "в моче" not in turn["text"]
     assert llm.price_calls == 0
@@ -197,7 +208,8 @@ def test_too_general_or_empty_rules_proposal_keeps_the_rules_answer(monkeypatch,
 # Обязательный класс плана с 13.10 («Слепое пятно плана», мастер-хэндофф §4 (б)): после ответа без
 # цены следующий короткий вопрос не берёт услугу, которую пациент не видел и не выбирал. Первый ход —
 # ответ политики под on: «не нашёл» (LLM выбора цены отвечает «не та услуга» в обоих кругах, остальные
-# места LLM недоступны) и названия без цен (вариант B, LLM недоступна). Мини-прод: правила находят на
+# места LLM недоступны) и названия без цен (вариант B, выбор строки недоступен). Разметка хода — оракул
+# (фраза услуги первого хода; у короткого вопроса фраз нет): при лежащей целиком LLM первый ход — «Уточните». Мини-прод: правила находят на
 # «гастроскопию» анализы «Гастрин» (750 / 1 950 руб.), на «анализ ттг» — две строки ТТГ.
 #
 # Решение владельца 13.10, вариант (а): после такого ответа услуга из контекста снимается. Фраза
@@ -209,6 +221,7 @@ _ANSWER_WITHOUT_PRICE = {
     "not_found": ("сколько стоит гастроскопия", ("Гастрин", "Гастрин-17 стимулированный")),
     "names_without_prices": ("сколько стоит анализ ттг", ("ТТГ (TSH) тиреотропный гормон", "Антитела к рецепторам ТТГ")),
 }
+_SPANS = {"not_found": "гастроскопия", "names_without_prices": "анализ ттг"}  # фраза услуги первого хода — ответ разметки
 _SHORT_FOLLOWUPS = ("сколько стоит?", "а цена?", "и сколько?")
 _PRICE_MARK = " руб."  # цена в ответе — «750 руб.»; без пробела ловилось бы «Трубина» из подсказки
 
@@ -217,9 +230,9 @@ def _two_turns(scenario: str, followup: str, mini_prod_world, monkeypatch, tmp_p
     from messengers_router.services import _price_select_llm as PS
 
     monkeypatch.setattr(PS, "_journal_path", lambda: tmp_path / "journal.jsonl")
-    if scenario == "not_found":
-            monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceLLM([[]] * 4, terms=["ФГДС"]))
     question, _unseen = _ANSWER_WITHOUT_PRICE[scenario]
+    inner = _PriceLLM([[]] * 4, terms=["ФГДС"]) if scenario == "not_found" else None
+    _spans(monkeypatch, (_SPANS[scenario],), inner=inner)
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         return run_dialog([question, followup], f"policy-two-turns-{scenario}-{followup}")
 
@@ -255,8 +268,10 @@ def test_policy_handoff_leaves_no_service_in_context(mini_prod_world, monkeypatc
     """Перевод на оператора — третья форма ответа политики (LLM недоступна, названий целым словом нет):
     до `build_*` он не доходит, контекст снимает общий сброс после перевода (`clear_on_handoff` в
     `patient_routing_stream`). Тот же инвариант: следующий короткий вопрос цены не называет. Без сброса
-    (мутация) «сколько стоит?» отвечал «Ферритин — 530 руб.» — услугой, которую пациент не видел."""
+    (мутация) «сколько стоит?» отвечал «Ферритин — 530 руб.» — услугой, которую пациент не видел. Разметка нашла фразу
+    «ферритинн», выбор строки недоступен (при лежащей целиком LLM первый ход — «Уточните», а не перевод)."""
 
+    _spans(monkeypatch, ("ферритинн",))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         first, second = run_dialog(["сколько стоит ферритинн", "сколько стоит?"], "policy-handoff-two-turns")
         first_turn = list(world.telemetry)[0]

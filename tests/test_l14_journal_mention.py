@@ -20,6 +20,7 @@ import pytest
 
 from evalbench import world as ev_world
 from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_l14_two_turn_consumers import _FOUND_GGT, BASE_CONFIGS, _Scripted, _play
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
@@ -95,28 +96,29 @@ _UNKNOWN = lambda: _Scripted(cut=("спирометрия",), terms=("спиро
 
 @pytest.mark.parametrize("config", CONFIGS)
 @pytest.mark.parametrize(
-    ("said", "llm", "expected"),
+    ("said", "llm", "spans", "expected"),
     [
-        ("а подскажите пожалуйста сколько стоит ггтп сдать", _FOUND_GGT, ["ггтп"]),
-        ("а ггтп сколько стоит", _FOUND_GGT, ["ггтп"]),
-        ("а сколько стоит спирометрия", _UNKNOWN, ["спирометрия"]),
-        ("подскажите пожалуйста спирометрия сколько стоит сдать", _UNKNOWN, ["спирометрия"]),
-        ("Цена анализа", _UNKNOWN, []),
-        ("подскажите стоимость анализов", _UNKNOWN, []),
+        ("а подскажите пожалуйста сколько стоит ггтп сдать", _FOUND_GGT, ("ггтп",), ["ггтп"]),
+        ("а ггтп сколько стоит", _FOUND_GGT, ("ггтп",), ["ггтп"]),
+        ("а сколько стоит спирометрия", _UNKNOWN, ("спирометрия",), ["спирометрия"]),
+        ("подскажите пожалуйста спирометрия сколько стоит сдать", _UNKNOWN, ("спирометрия",), ["спирометрия"]),
+        ("Цена анализа", _UNKNOWN, (), []),
+        ("подскажите стоимость анализов", _UNKNOWN, (), []),
     ],
     ids=["ggt_sentence", "ggt_first", "unknown_a", "unknown_wrapped", "general_1", "general_2"],
 )
-def test_journal_writes_the_mention_phrase_through_the_endpoint(said, llm, expected, config, mini_prod_world, monkeypatch):  # noqa: F811
+def test_journal_writes_the_mention_phrase_through_the_endpoint(said, llm, spans, expected, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Класс через обработчик эндпоинта: фраза журнала — то, что пациент назвал услугой, без слов вопроса; реплика
     без названия услуги — ничего. Прежнее значение `journal_phrase = rules` в конфиге (прод держит ключ до деплоя 6)
-    ничего не меняет."""
+    ничего не меняет. Путь прода (`turn_spans_llm = on`): фразу услуги размечает LLM (`spans`; реплика без услуги — ни одной
+    фразы); без разметки фразы журнала нет вовсе — журнал пуст, а не «по буквам»."""
 
     from messengers_router.runtime_config import config as cfg
 
-    [turn] = _play([said], f"journal-mention-{said[:20]}", mini_prod_world, monkeypatch, config, llm=llm())
+    [turn] = _play([said], f"journal-mention-{said[:20]}", mini_prod_world, monkeypatch, config, llm=llm(), spans=spans)
     assert _phrases(turn) == expected, turn.journal
     monkeypatch.setattr(cfg, "MR_JOURNAL_PHRASE", "rules", raising=False)
-    [old_key] = _play([said], f"journal-old-key-{said[:20]}", mini_prod_world, monkeypatch, config, llm=llm())
+    [old_key] = _play([said], f"journal-old-key-{said[:20]}", mini_prod_world, monkeypatch, config, llm=llm(), spans=spans)
     assert (_phrases(old_key), old_key.text, old_key.handoff) == (expected, turn.text, turn.handoff)
 
 
@@ -126,7 +128,8 @@ def test_two_turns_short_question_writes_nothing(followup, config, mini_prod_wor
     """Два хода: после ответа о ГГТ (LLM по термину) короткий вопрос без названия услуги в журнал не попадает,
     первый ход пишет только «ггтп»."""
 
-    first, second = _play(["а подскажите пожалуйста сколько стоит ггтп сдать", followup], f"journal-two-{followup}", mini_prod_world, monkeypatch, config, llm=_FOUND_GGT())
+    turns = ["а подскажите пожалуйста сколько стоит ггтп сдать", followup]
+    first, second = _play(turns, f"journal-two-{followup}", mini_prod_world, monkeypatch, config, llm=_FOUND_GGT(), spans=("ггтп",))
     assert _phrases(first) == ["ггтп"], first.journal
     assert second.journal == [], second.journal
 
@@ -149,7 +152,9 @@ _WRAPPED_QUESTION = "Здравствуйте, а делаете ли вы лю�
 )
 def test_basket_positions_are_journaled_like_a_single_mention(said, picked, mention, mini_prod_world, monkeypatch):  # noqa: F811
     """Третий писатель журнала — слабые позиции корзины (L-15b, шаг 5): их фраза — без речевой обвязки с краёв, как у
-    одиночной услуги («а ггтп» → «ггтп»; находка вечернего dev 14.10: «а делаете ли вы оам» в журнале)."""
+    одиночной услуги («а ггтп» → «ггтп»; находка вечернего dev 14.10: «а делаете ли вы оам» в журнале). Путь прода
+    (`turn_spans_llm = on`): фразы позиций размечает LLM — разметка захватила обвязку с края («а ггтп»), как прежде выбор
+    фраз; строки корзины выбирает подделка `_JournalLLM`."""
 
     from messengers_router import llm_runtime
     from tests.test_price_turns_golden import run_dialog
@@ -157,7 +162,8 @@ def test_basket_positions_are_journaled_like_a_single_mention(said, picked, ment
     from tests.test_turn_parse_slot import _deploy
 
     _deploy(monkeypatch)
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(picked, "ЛГ (LH)"))
+    keep_llm_breaker_closed(monkeypatch)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(picked, inner=_JournalLLM(picked, "ЛГ (LH)")))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         run_dialog([said], f"journal-basket-edge-{said[:12]}")
         entries = _journal_rows(world._journal)

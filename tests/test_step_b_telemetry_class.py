@@ -30,8 +30,8 @@ _REPLIES = (
 )
 
 
-def _tel(world, monkeypatch, reply: str) -> dict:
-    return _turn(world, monkeypatch, reply, engine="legacy_v2", fallback="off", answer=_LLM_ANSWER)["telemetry"]
+def _tel(world, monkeypatch, reply: str, spans: tuple[str, ...] | None = None) -> dict:
+    return _turn(world, monkeypatch, reply, engine="legacy_v2", fallback="off", answer=_LLM_ANSWER, spans=spans)["telemetry"]
 
 
 def test_every_nlu_turn_has_label_after_nlu_and_final(mini_prod_world, monkeypatch):  # noqa: F811
@@ -59,9 +59,13 @@ def test_every_price_turn_says_which_guard_and_verdict(mini_prod_world, monkeypa
 
 
 def test_qualifier_absent_from_price_is_not_guard_none(mini_prod_world, monkeypatch):  # noqa: F811
-    """«по ОМС» — уточнение, которого в прайсе нет: решал гард условия (словарь, суд LLM или K3), не «гарда не было»."""
+    """«по ОМС» — уточнение, которого в прайсе нет: решал гард условия (словарь, суд LLM или K3), не «гарда не было».
 
-    tel = _tel(mini_prod_world, monkeypatch, "прием терапевта по омс сколько стоит")
+    Разметка хода — оракул (фраза услуги вместе с условием): без LLM разметки ход цены — «Уточните название» до гарда условия
+    (`price_by_parse = on`, прод с 26.10), и гарда в этом ходе честно не было."""
+
+    tel = _tel(mini_prod_world, monkeypatch, "прием терапевта по омс сколько стоит", spans=("прием терапевта по омс",))
+    assert tel.get("tu_label_final") == "PRICE", tel
     if tel.get("tu_label_final") == "PRICE":
         assert tel.get("price_guard") in _PRICE_GUARDS - {"none"}, tel
 

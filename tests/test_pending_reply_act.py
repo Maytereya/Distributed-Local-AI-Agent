@@ -12,6 +12,9 @@
 - пауза — без перевода; сбой LLM — ответ правил (`src = fallback`);
 - голый якорь и «якорь + хвост» — без вызова LLM; срочное — раньше всего;
 - два хода: после перевода следующий ответ не про оффер.
+
+Путь прода (переворот 27.10: `turn_spans_llm`, `price_by_parse` = on): вопрос о цене после перевода без LLM — «Уточните
+название»; в двухходовом тесте LLM — пути прода (`test_pending_reply_show_all._prod_llm`) поверх оракула висящего вопроса.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from tests.test_pending_reply import (  # noqa: F401 — mini_prod_world, synony
     mini_prod_world,
     synonym_fork,
 )
+from tests.test_pending_reply_show_all import _prod_llm
 
 _YES = "конечно переведите"  # без запятой — не «якорь + хвост»: решает модель
 _MANUAL = "Соединяю с оператором"
@@ -96,7 +100,8 @@ def test_urgent_comes_before_the_decision(mini_prod_world, monkeypatch):  # noqa
 def test_after_the_transfer_the_next_turn_is_not_about_the_offer(mini_prod_world, monkeypatch):  # noqa: F811
     records, states, _rows, _oracle = _play(
         [_STOPLIST_OFFER, _YES, "сколько стоит ферритин"], "act-two", "on", mini_prod_world, monkeypatch,
-        before=_offer_after_first_turn(), oracle=_PendingOracle({_YES: _answer("yes")}),
+        before=_offer_after_first_turn(),
+        oracle=_prod_llm(_PendingOracle({_YES: _answer("yes")}), monkeypatch, phrases=("мрт", "ферритин"), rows_of="ферритин"),
     )
     assert records[1]["handoff"]
     assert not states[1].get("_operator_offer_pending")

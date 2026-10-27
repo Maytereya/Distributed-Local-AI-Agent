@@ -111,7 +111,8 @@ def test_lazy_rules_keep_the_parse_on_golden(case, mini_prod_world, request, mon
 
 @pytest.mark.parametrize(
     "name, status",
-    [("list_true_three", "picked"), ("name_parens_commas", "strong_whole"), ("phrase_smear_pharynx", "picked")],
+    # «сколько стоит <название>» — не реплика-название целиком: под разметкой `turn_spans` (прод с деплоя 17) её решает LLM
+    [("list_true_three", "picked"), ("name_parens_commas", "picked"), ("phrase_smear_pharynx", "picked")],
 )
 def test_decided_parse_skips_the_rules(name, status, mini_prod_world, monkeypatch):  # noqa: F811
     [_turn], [row], calls = _run([CASES[name].text], agree="off", llm="oracle", case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session=f"lazy-b-{name}")
@@ -129,32 +130,37 @@ def test_by_default_the_rules_run_every_price_turn_and_the_agreement_is_written(
 
 
 @pytest.mark.parametrize("text", [CASES["list_caps_run_on_bare"].text, CASES["list_caps_run_on_priced"].text])
-def test_failed_parse_without_separators_acts_without_the_rules(text, mini_prod_world, monkeypatch):  # noqa: F811
-    """Сбой LLM без разделителей с 16.10 (Q2 отменено, T7 шаг 3) — разрез данными МИС или реплика целиком: разбор действует
-    сам, ленивые правила не считаются, ответ тот же, что при правилах на каждом ходе (они там — только телеметрия)."""
+def test_failed_parse_without_separators_runs_the_rules_and_answers_as_before(text, mini_prod_world, monkeypatch):  # noqa: F811
+    """Сбой LLM разметки (`turn_spans`, прод с деплоя 17): разреза без LLM нет (`fallback_split` пути off снят дизайном
+    DESIGN-2026-10-23-NO-STOPWORDS), понимание хода берёт путь правил — ленивые правила считаются; ответ — «Уточните название»
+    (`price_by_parse = on`), тот же, что при правилах на каждом ходе."""
 
     name = "list_caps_run_on_bare"
     eager, [eager_row], _ = _run([text], agree="on", llm="down", case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session="lazy-q2-on")
     lazy, [row], calls = _run([text], agree="off", llm="down", case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session="lazy-q2-off")
-    assert row["tu_parse_status"] == "unavailable" and row["tu_rule"] == "parse_unavailable"
-    assert calls.understand == 0
-    assert lazy == eager
+    assert row["tu_parse_status"] == "unavailable" and not str(row["tu_rule"]).startswith("parse_")
+    assert calls.understand == 1
+    assert lazy == eager and _tu(row) == _tu(eager_row)
+    assert "руб" not in lazy[0]["text"]
 
 
-@pytest.mark.parametrize("text, llm, status", [("сколько стоит?", "oracle", "empty")])  # пустой разбор — запасной путь
-def test_fallback_runs_the_rules_after_the_parse_and_answers_as_before(text, llm, status, mini_prod_world, monkeypatch):  # noqa: F811
+# Разметка прода (`turn_spans`, деплой 17): «сколько стоит?» решает LLM («ни одной услуги», `none_fit`) — правила не считаются;
+# `empty` (пустой разбор после вырезания слов вопроса) был у генератора пути off. Запасной путь прода — сбой LLM.
+@pytest.mark.parametrize("text, llm, status, rules", [("сколько стоит?", "down", "unavailable", 1), ("сколько стоит?", "oracle", "none_fit", 0)])
+def test_fallback_runs_the_rules_after_the_parse_and_answers_as_before(text, llm, status, rules, mini_prod_world, monkeypatch):  # noqa: F811
     name = "list_caps_run_on_bare"
     eager, [eager_row], _ = _run([text], agree="on", llm=llm, case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session=f"lazy-c-{status}-on")
     lazy, [row], calls = _run([text], agree="off", llm=llm, case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session=f"lazy-c-{status}-off")
     assert row["tu_parse_status"] == status
-    assert calls.understand == 1
+    assert calls.understand == rules
     assert lazy == eager and _tu(row) == _tu(eager_row)
 
 
 def test_single_weak_phrase_takes_the_rules_mention(mini_prod_world, monkeypatch):  # noqa: F811
-    """`single` — кандидат один, слабый: упоминание и «список ли» — правил, поэтому правила считаются."""
+    """`single` — кандидат один, слабый: упоминание и «список ли» — правил, поэтому правила считаются. Под разметкой
+    `turn_spans` (прод с деплоя 17) `single` — реплика из одного слова («ттг»), без LLM."""
 
-    text = "сколько стоит ттг"
+    text = "ттг"
     eager, [eager_row], _ = _run([text], agree="on", llm="down", case_name="list_true_three", world_dir=mini_prod_world, monkeypatch=monkeypatch, session="lazy-s-on")
     lazy, [row], calls = _run([text], agree="off", llm="down", case_name="list_true_three", world_dir=mini_prod_world, monkeypatch=monkeypatch, session="lazy-s-off")
     assert row["tu_parse_status"] == "single"
@@ -173,7 +179,8 @@ def test_rules_failure_on_the_fallback_does_not_break_the_turn(mini_prod_world, 
         with ev_world.FrozenWorld(mini_prod_world, "day") as world:
             [turn] = run_dialog(["сколько стоит?"], "lazy-fail")
             row = world.take_telemetry()
-    assert turn["text"] and row.get("tu_rule") == "error" and row.get("tu_parse_status") == "empty"
+    # «сколько стоит?» при лежащей LLM — сбой разметки (`unavailable`, прод с деплоя 17), а не пустой разбор генератора пути off
+    assert turn["text"] and row.get("tu_rule") == "error" and row.get("tu_parse_status") == "unavailable"
 
 
 # --------------------------------------------------------------------------- (д) два хода

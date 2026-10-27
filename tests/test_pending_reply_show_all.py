@@ -15,6 +15,11 @@
 - реплику из одного определения «все» LLM не решает (`src = fast`);
 - решение — в бюджете хода (не тень);
 - два хода: после полного списка короткий вопрос не получает цену невиданной услуги.
+
+Путь прода (переворот 27.10: `turn_spans_llm`, `price_by_parse` = on): без LLM первый ход — «Уточните название», до подсказки
+«все» диалог не доходил. LLM диалога — пути прода (`_prod_llm`: разметка называет «оак», выбор строки признаёт строки ОАК —
+ответ правил с подсказкой, как на проде), разбор ответа на висящий вопрос — `_PendingOracle` внутри неё; «сбой LLM» — сбой
+этого разбора.
 """
 
 from __future__ import annotations
@@ -29,6 +34,8 @@ from tests.test_pending_reply import (  # noqa: F401 — mini_prod_world, synony
     mini_prod_world,
     synonym_fork,
 )
+from tests.spans_oracle import keep_llm_breaker_closed
+from tests.test_open_bugs_2026_10_14 import _ProdLLM
 from tests.test_turn_parse_t3 import _assert_follow_up_stays_on_what_was_shown
 
 _FAMILY = "сколько стоит оак"
@@ -42,8 +49,20 @@ _PICK_ALL = _answer(picks=(1,))
 _DOWN = ConnectionError("ollama лежит")
 
 
+def _prod_llm(oracle: _PendingOracle, monkeypatch, phrases: tuple[str, ...] = ("оак",), rows_of: str = "общий анализ крови") -> _ProdLLM:
+    """LLM пути прода поверх оракула висящего вопроса: разметка — фразы-услуги `phrases` (на весь диалог), выбор строки — строки
+    со словами `rows_of`; прочее — `oracle`. Предохранитель LLM в диалоге не размыкается: подделка отвечает не на все места."""
+
+    keep_llm_breaker_closed(monkeypatch)
+    return _ProdLLM(phrases, rows_of, inner=oracle)
+
+
 def _after_hint(reply, mode: str, world, monkeypatch, *, oracle=None, name: str = "sa", more: tuple[str, ...] = ()):
-    return _play([_FAMILY, reply, *more], f"{name}-{mode}", mode, world, monkeypatch, oracle=oracle)
+    """(записи, состояния, телеметрия, оракул висящего вопроса) диалога «оак» → `reply` → `more` на пути прода."""
+
+    oracle = oracle if oracle is not None else _PendingOracle()
+    records, states, rows, _llm = _play([_FAMILY, reply, *more], f"{name}-{mode}", mode, world, monkeypatch, oracle=_prod_llm(oracle, monkeypatch))
+    return records, states, rows, oracle
 
 
 def _full_list(first: dict, second: dict) -> bool:

@@ -6,7 +6,12 @@
 понимает только LLM («покажите все варианты пожалуйста», «давай все»), — в контексте после раскрытия только показанное,
 а «а как подготовиться?» не про «УЗИ … все зоны (детское)».
 
-Инвариант: ответ на подсказку бота — не упоминание услуги; в контексте после хода — только показанное.
+Инвариант: ответ на подсказку бота — не упоминание услуги; в контексте после хода — только показанное; раскрыт список только
+той же услуги.
+
+Путь прода (переворот 27.10: `turn_spans_llm`, `price_by_parse` = on): без LLM первый ход — «Уточните название», до подсказки
+«все» диалог не доходил. LLM диалога — пути прода (`bugs._family_llm`: разметка, выбор строки), разбор ответа на висящий
+вопрос — `_PendingLLM` внутри неё.
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ import json
 import pytest
 from ollama import GenerateResponse
 
-from messengers_router import choice, llm_runtime
+from messengers_router import choice
 from tests import test_open_bugs_2026_10_14 as bugs
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
@@ -39,16 +44,16 @@ class _PendingLLM:
 @pytest.mark.parametrize(("reply", "by_llm"), [("все", False), ("Всё!", False), ("покажите все варианты пожалуйста", True), ("давай все", True)])
 def test_show_all_under_one_pending_answer_holds_what_was_shown(reply, by_llm, mini_prod_world, monkeypatch):  # noqa: F811
     llm = _PendingLLM()
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
-    monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
     monkeypatch.setitem(bugs._ALL_SETS, "deploy_pending_on", {**bugs._SETS["deploy"]})
     choice._CACHE.clear()
 
     turns = [bugs._FAMILY_QUESTION, reply, bugs._PREPARE]
-    first, second, third = bugs._play(turns, "deploy_pending_on", monkeypatch, mini_prod_world, f"show-all-pending-{reply}")
+    first, second, third = bugs._play(turns, "deploy_pending_on", monkeypatch, mini_prod_world, f"show-all-pending-{reply}", llm=bugs._family_llm(llm))
     hint = bugs._HINT.search(first["text"])
     assert hint and hint.group("word") == "все", first["text"]
-    assert len(bugs._NUMBERED.findall(second["text"])) > len(bugs._NUMBERED.findall(first["text"])), second["text"]  # раскрыт весь список
+    expanded = bugs._NUMBERED.findall(second["text"])
+    assert len(expanded) > len(bugs._NUMBERED.findall(first["text"])), second["text"]  # раскрыт весь список
+    assert bugs._same_service(expanded), expanded  # только той же услуги
     shown = {m.group("name") for m in bugs._NUMBERED.finditer(first["text"])} | {m.group("name") for m in bugs._NUMBERED.finditer(second["text"])}
     bugs._assert_context_is_what_was_shown([first, second, third], shown, bugs._QUERY.search(first["text"]).group("query"))
     if by_llm:

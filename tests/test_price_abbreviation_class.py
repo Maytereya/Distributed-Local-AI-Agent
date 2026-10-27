@@ -11,6 +11,9 @@ Test-срез 20.10 под on: «ЛГ стоимость» (g0850) и «Цена
 - сокращение с заглавной («ЛГ», «аТ ТГ», «ФСГ», «СРБ») — названная услуга: не уточнение названия, а её строка;
 - синоним МИС внутри названной услуги — её строка в списке LLM, первой (слово клиники сильнее букв правил);
 - выбирает LLM: показывается только выбранная строка.
+
+Разметка хода (`turn_spans_llm = on`, прод с 24.10) — оракул `tests/spans_oracle.py` с услугой, которую назвал пациент: при
+лежащей целиком LLM цена — только реплике-названию (`price_by_parse = on`), и до выбора строки ход не доходит.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.policies import CLARIFY_TEXT_MAP
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура модуля
 
 _PRICE_MARK = "ответить пациенту на вопрос о цене"
@@ -58,7 +62,11 @@ class _PickLLM:
         return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
 
-def _turn(world_dir, monkeypatch, question: str, *, mode: str, llm: _PickLLM, synonyms: dict[str, str] | None = None) -> dict:
+def _turn(
+    world_dir, monkeypatch, question: str, *, mode: str, llm: _PickLLM, phrases: tuple[str, ...] = (), synonyms: dict[str, str] | None = None
+) -> dict:
+    """Ход цены; разметка — оракул с фразами `phrases` (услуги, которые назвал пациент), выбор строки — `llm`."""
+
     from messengers_router.runtime_config import config as cfg
     from messengers_router.services import _biomaterial as bio
 
@@ -75,23 +83,24 @@ def _turn(world_dir, monkeypatch, question: str, *, mode: str, llm: _PickLLM, sy
 
         monkeypatch.setattr(bio, "_vocabularies", with_synonyms)
     with ev_world.FrozenWorld(world_dir, "day"):
-        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(phrases, inner=llm))
+        keep_llm_breaker_closed(monkeypatch)
         [turn] = run_dialog([question], f"abbr-{mode}-{abs(hash(question))}")
     return turn
 
 
 ABBREVIATIONS = [
-    ("ЛГ стоимость", "ЛГ (LH) Лютеинизирующий гормон"),  # g0850
-    ("Цена аТ ТГ", "АТ - ТГ (Anti-Tg) антитела к тиреоглобулину"),  # g0794
-    ("ФСГ цена", "ФСГ (FSH) Фолликулостимулирующий гормон"),
-    ("СРБ сколько стоит", "Высокочувствительный С-реактивный белок (кардио), (СРБ высокочувствительный, high sensitivity CRP, hs-CRP)"),
+    ("ЛГ стоимость", "ЛГ", "ЛГ (LH) Лютеинизирующий гормон"),  # g0850
+    ("Цена аТ ТГ", "аТ ТГ", "АТ - ТГ (Anti-Tg) антитела к тиреоглобулину"),  # g0794
+    ("ФСГ цена", "ФСГ", "ФСГ (FSH) Фолликулостимулирующий гормон"),
+    ("СРБ сколько стоит", "СРБ", "Высокочувствительный С-реактивный белок (кардио), (СРБ высокочувствительный, high sensitivity CRP, hs-CRP)"),
 ]
 
 
-@pytest.mark.parametrize(("question", "row"), ABBREVIATIONS)
-def test_capitalised_abbreviation_gets_its_row_not_a_request_for_the_name(question, row, mini_prod_world, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize(("question", "phrase", "row"), ABBREVIATIONS)
+def test_capitalised_abbreviation_gets_its_row_not_a_request_for_the_name(question, phrase, row, mini_prod_world, monkeypatch):  # noqa: F811
     llm = _PickLLM(row)
-    turn = _turn(mini_prod_world, monkeypatch, question, mode="on", llm=llm)
+    turn = _turn(mini_prod_world, monkeypatch, question, mode="on", llm=llm, phrases=(phrase,))
     assert turn["text"] != _ASK_NAME
     assert any(row in offered for offered in llm.offered), "строка сокращения не дошла до выбора LLM"
     assert row in turn["text"] and "руб" in turn["text"]
@@ -108,7 +117,13 @@ def test_bare_price_question_still_asks_for_the_name(mini_prod_world, monkeypatc
 def test_mis_synonym_inside_the_named_service_offers_its_row_first(mini_prod_world, monkeypatch):  # noqa: F811
     llm = _PickLLM("Эхокардиография")
     turn = _turn(
-        mini_prod_world, monkeypatch, "Сколько стоит ЭхоКГ узи сердца?", mode="on", llm=llm, synonyms={"эхокг": "Эхокардиография"}
+        mini_prod_world,
+        monkeypatch,
+        "Сколько стоит ЭхоКГ узи сердца?",
+        mode="on",
+        llm=llm,
+        phrases=("ЭхоКГ узи сердца",),
+        synonyms={"эхокг": "Эхокардиография"},
     )
     assert llm.offered and llm.offered[0][0] == "Эхокардиография"
     assert "Эхокардиография —" in turn["text"] and "скрининг" not in turn["text"]

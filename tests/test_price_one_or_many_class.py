@@ -47,6 +47,8 @@ from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
+from messengers_router.text_templates import PRICE_CLARIFY_NAME_TEXT
+from tests.spans_oracle import is_spans, spans_response
 from tests.test_price_turns_golden import FIXTURE, run_dialog
 
 # Наборы деплоя 14.10 и `default` — исторические. «Контекст = показанное», фраза журнала из упоминания хода, выбор
@@ -64,6 +66,10 @@ _DEFAULT = {
     "MR_CHOOSE_READINESS": "off",
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
+    # Семья (iv) переворота 27.10 (STEP-2026-10-27-DEFAULTS-PROD): прежние умолчания; набор уходит со снятием `turn_spans_llm`.
+    "MR_TURN_SPANS_LLM": "off",
+    "MR_PRICE_BY_PARSE": "off",
+    "MR_TURN_UNDERSTANDING_ONE": "off",
 }
 # Набор выключателей → значения поверх конфига гейта. Разбор реплики (`turn_parse = on`) — единственный режим
 # (T7 шаг 3б, 16.10): `deploy` — прод; `deploy_parse` — прежнее имя того же набора для файлов, которые его зовут.
@@ -171,14 +177,8 @@ CASES: dict[str, Case] = {
         "list",
         {"оак": _OAK, "оам": ("Общий анализ мочи",), "ферритин": ("Ферритин",), "глюкоза": ("Глюкоза",)},
         strong=frozenset({"ферритин", "глюкоза"}),
-        xfail={
-            **{("default", m): "понимание хода в тени: список сведён к одной услуге (ОАК), ферритин и глюкоза без цены" for m in LLMS},
-            ("deploy", "down"): (
-                "LLM недоступна, сплошной текст: в промежутке между сильными окнами — слова вне прайса («ОАК ОАМ» без "
-                "синонимов МИС в мини-проде), без LLM неотличимые от условия П2 («по омс») — реплика целиком, ферритин и "
-                "глюкоза без цены (T7 шаг 3, П2 строже покрытия); с синонимами МИС (прод) — разрез данными"
-            ),
-        },
+        # (deploy, down) — не xfail с 27.10: путь прода без LLM отвечает «Уточните…» (`test_one_service_or_several`).
+        xfail={("default", m): "понимание хода в тени: список сведён к одной услуге (ОАК), ферритин и глюкоза без цены" for m in LLMS},
     ),
 }
 
@@ -210,8 +210,8 @@ class _OracleLLM:
 
     Корзина — по позиции: строка выбирается, только если «позиция» — услуга из разметки и строка — её;
     обрывок фразы («мазок на») — не услуга, для него ничего. Цена и срок — любая строка разметки. Выбор
-    фраз реплики (L-15b) — ровно фразы разреза случая (`cut`; не задан — «недоступна»). Прочие места —
-    «недоступна», как в мире гейта.
+    фраз реплики (L-15b) — ровно фразы разреза случая (`cut`; не задан — «недоступна»): и старым промптом выбора фраз, и
+    разметкой слов `turn_spans` (прод с деплоя 17; `tests/spans_oracle.py`). Прочие места — «недоступна», как в мире гейта.
     """
 
     def __init__(self, case: Case, cut: tuple[str, ...] = ()) -> None:
@@ -223,6 +223,9 @@ class _OracleLLM:
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
+        if self.cut and is_spans(prompt):
+            self.calls.append("phrases")
+            return spans_response(prompt, sorted(self.cut, key=lambda text: -len(text.split())))
         if self.cut and _PHRASES_MARK in seen:
             self.calls.append("phrases")
             lines = (line.partition(". ") for line in prompt.splitlines())
@@ -270,6 +273,17 @@ def _priced_sections(text: str) -> list[list[str]]:
         if match:
             sections[-1].append(_norm(match.group("name")))
     return [section for section in sections if section]
+
+
+_UNNUMBERED_PRICED = re.compile(r"^(?!\s*\d+[.)])(?=.+ — \d[\d\s]* руб)", re.M)
+
+
+def _numbered(text: str) -> str:
+    """Ответ пути прода (`price_by_parse = on`) на сильное совпадение одной услуги — строка «Название — N руб.» без номера (путь
+    off писал «1) Розничная цена: …»). Общий разборщик `_priced_sections` читает только нумерованные строки — номер дописан,
+    проверки инвариантов прежние."""
+
+    return _UNNUMBERED_PRICED.sub("1. ", text)
 
 
 def _violations(case: Case, text: str, llm: str, picked: frozenset[str] | set[str] = frozenset()) -> list[str]:
@@ -364,14 +378,21 @@ def _class_turn(name: str, config: str, llm: str, world_dir, monkeypatch) -> tup
 @pytest.mark.parametrize(("name", "config", "llm"), list(_params()))
 def test_one_service_or_several(name, config, llm, mini_prod_world, monkeypatch):
     turn, _row, oracle = _class_turn(name, config, llm, mini_prod_world, monkeypatch)
-    violations = _violations(CASES[name], turn["text"], llm, oracle.picked)
+    if config == "deploy" and llm == "down" and CASES[name].kind != "readiness":
+        # Путь прода без LLM (`price_by_parse = on`, решения владельца 22.10 и 27.10): цена — только реплике, которая сама
+        # целиком — дословное название или код клиники; название внутри вопроса («сколько стоит <название>») и список —
+        # «Уточните…». Было (путь off): цена дословного названия и сильных позиций списка по буквам. Пациент видит просьбу
+        # уточнить вместо цены — нейтрально по принципам (без LLM не угадываем; чужой цены нет ни там, ни там).
+        assert turn["text"] == PRICE_CLARIFY_NAME_TEXT
+        return
+    violations = _violations(CASES[name], _numbered(turn["text"]), llm, oracle.picked)
     assert not violations, "\n".join([*violations, "--- ответ:", turn["text"]])
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_parse_on_spends_at_most_two_decisions(name, mini_prod_world, monkeypatch):
-    """Под `turn_parse = on` (живая LLM, оракул выбирает верно) решений поиска не больше двух: выбор фраз — первое, выбор
-    строк корзины, строки цены или срока — второе; бюджет хода не исчерпан. Лимит хода с 19.10 — 3 решения (третье —
+    """Под `turn_parse = on` (живая LLM, оракул выбирает верно) решений поиска не больше двух: разметка слов (`turn_spans`, прод с
+    деплоя 17) — первое, выбор строк корзины, строки цены или срока — второе; бюджет хода не исчерпан. Лимит хода с 19.10 — 3 решения (третье —
     второй круг поиска цены после «ни одна»); обычный ход его не тратит. Итог корзины (`basket_total`, `basket_calc = on` —
     прод с 26.10) — третье решение хода корзины, не больше одного (runbook деплоя 18: «ход корзины с итогом тратит все 3»)."""
 
@@ -379,7 +400,7 @@ def test_parse_on_spends_at_most_two_decisions(name, mini_prod_world, monkeypatc
     decisions = [(entry["task"], entry["status"]) for entry in row.get("choose") or [] if not entry.get("shadow")]
     search = [decision for decision in decisions if decision[0] != "basket_total"]
     assert len(search) <= 2 and len(decisions) - len(search) <= 1, decisions
-    assert "phrases" not in oracle.calls or decisions[0] == ("turn_phrases", "picked"), decisions
+    assert "phrases" not in oracle.calls or decisions[0] == ("turn_spans", "picked"), decisions
     assert not [call for call in row.get("llm") or [] if call.get("outcome") == "budget"], row.get("llm")
 
 
@@ -401,11 +422,11 @@ def test_oracle_answers_the_selection_it_was_asked(mini_prod_world, monkeypatch)
 
     _configure(monkeypatch, "deploy")
     case = CASES["list_true_three"]
-    oracle = _OracleLLM(case)
+    oracle = _OracleLLM(case, TRUE_CUT["list_true_three"])  # путь прода: сначала разметка слов, без неё до корзины не дойти
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         [turn] = run_dialog([case.text], "one-or-many-oracle")
-    assert oracle.calls == ["basket"]
+    assert oracle.calls == ["phrases", "basket"]
     assert "Антитела к рецепторам ТТГ" not in turn["text"] and "регулярно" not in turn["text"]
     assert "ТТГ (TSH) тиреотропный гормон — 400" in turn["text"]
 
