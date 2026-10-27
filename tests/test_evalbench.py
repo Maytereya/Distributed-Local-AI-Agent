@@ -55,7 +55,7 @@ def test_unknown_prompt_is_not_silently_assigned():
     assert index.site_of(ev_llm.WARM_UP_PROMPT) == "warm_up"
 
 
-@pytest.mark.parametrize("key", sorted(p.stem for p in PROMPTS.glob("*.txt") if p.stem not in DEAD_PROMPTS))
+@pytest.mark.parametrize("key", sorted(p.stem for p in PROMPTS.glob("*.txt") if p.stem not in DEAD_PROMPTS | ev_llm.PROMPT_FRAGMENTS))
 def test_adversary_has_parsable_answer_for_every_live_site(key):
     text = _filled(_templates()[key])
     answer = ev_llm.adversary_answer(key, text)
@@ -954,3 +954,16 @@ def test_replay_with_hang_answers_late_or_is_cut_by_the_call_site(tmp_path):
         asyncio.run(call(cut, 0.05))
     assert [c.outcome for c in cut.take_turn_calls()] == ["cancelled"]
     assert asyncio.run(call(client(0), 5))[1] < 0.05
+
+
+def test_compact_classifier_prompt_is_the_classifier_site(monkeypatch):
+    """Фрагмент промпта (`classifier_compact_note`) — не место вызова: собранный под `classifier_compact = on` промпт
+    классификатора стенд узнаёт как `classifier_patient` (шаг 5 BUG-2026-10-27-LLM-QUEUE-GIVES-UP)."""
+
+    from messengers_router import classifier
+    from messengers_router.runtime_config import config as cfg
+
+    index = ev_llm.SiteIndex.from_code_root(ROOT)
+    assert "classifier_compact_note" not in index.segments
+    monkeypatch.setattr(cfg, "MR_CLASSIFIER_COMPACT", "on", raising=False)
+    assert index.site_of(classifier._build_classify_prompt("когда принимает кардиолог", {})) == "classifier_patient"

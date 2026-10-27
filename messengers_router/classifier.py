@@ -644,9 +644,20 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
     return {k: last_entities[k] for k in keep if k in last_entities}
 
 
+def _classifier_compact() -> bool:
+    """`[MESSENGER_ROUTER] classifier_compact = on`: в ответе классификатора — только найденные поля сущностей (шаг 5
+    BUG-2026-10-27-LLM-QUEUE-GIVES-UP); иное — off (как было)."""
+
+    return str(getattr(c, "MR_CLASSIFIER_COMPACT", "off") or "").strip().lower() == "on"
+
+
 def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
     allowed = ", ".join(PATIENT_LABEL_PRIORITY)
     tmpl = load_prompt_text("classifier_patient")
+    if _classifier_compact():
+        # Строка промпта `classifier_compact_note` — сразу после «верни только JSON»: короче ответ, меньше секунд в слоте LLM.
+        head, sep, rest = tmpl.partition("\n\n")
+        tmpl = f"{head}\n{load_prompt_text('classifier_compact_note').strip()}{sep}{rest}"
     return (
         tmpl.replace("<<ALLOWED_LABELS>>", allowed)
         .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))

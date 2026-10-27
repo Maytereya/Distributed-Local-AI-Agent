@@ -45,6 +45,12 @@ _SITE_THRESHOLD = 0.6
 # --------------------------------------------------------------------------- места вызова
 
 
+# Фрагменты промптов — строки, которые код вставляет в другой промпт (`classifier_compact_note` → `classifier_patient` под
+# `classifier_compact`): сами в LLM не уходят, местом вызова не считаются (иначе вставка, целиком входящая в собранный промпт,
+# перетянула бы вызов на себя).
+PROMPT_FRAGMENTS = frozenset({"classifier_compact_note"})
+
+
 @dataclass(frozen=True)
 class SiteIndex:
     """Отпечатки шаблонов: для каждого ключа — литеральные куски длиной от 25 символов."""
@@ -70,7 +76,7 @@ class SiteIndex:
 
         from messengers_router import prompt_registry
 
-        keys = sorted(p.stem for p in (code_root / "messengers_router" / "prompts").glob("*.txt"))
+        keys = sorted(p.stem for p in (code_root / "messengers_router" / "prompts").glob("*.txt") if p.stem not in PROMPT_FRAGMENTS)
         return cls.from_templates({key: prompt_registry.load_prompt_text(key) for key in keys})
 
     def scores(self, prompt: str) -> dict[str, float]:

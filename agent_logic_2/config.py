@@ -198,6 +198,7 @@ class MessengerRouterConfig:
     classifier_timeout_s: int
     llm_turn_deadline_s: int
     llm_fail_offer: str
+    classifier_compact: str
     choose_cache_ttl_s: int
     choose_symptom: str
     choose_readiness: str
@@ -502,6 +503,12 @@ settings = Settings(
         # правила ≤ 3 переводов на 1 чужую цену, решение владельца по карточке. Пусто (по умолчанию) — как было.
         # [MESSENGER_ROUTER] llm_fail_offer
         llm_fail_offer=_get_str("MESSENGER_ROUTER", "llm_fail_offer", default=""),
+        # Короче ответ LLM-классификатора темы (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 5): строка промпта
+        # `classifier_compact_note` (две локации) — в `entities` только найденные поля. Половина ответов на проде печатала все
+        # ~30 полей шаблона с null (≈ 227 токенов, ≈ 11,6 с против ≈ 70 токенов и 3,4 с). Следствие: правило дарит сущность,
+        # которой LLM не назвала (`nlu_pipeline._merge`: ключ с null дарение блокировал) — как уже у коротких ответов.
+        # off — как было. [MESSENGER_ROUTER] classifier_compact
+        classifier_compact=_get_enum("MESSENGER_ROUTER", "classifier_compact", default="off", allowed={"off", "on"}),
         # Кэш внятных ответов модуля выбора (ход (в), L-12): секунд жизни; сбой и мусор не кэшируются.
         # Коротко — ошибка модели не становится ответом всем на часы; 0 — без кэша (стенд меряет без него).
         choose_cache_ttl_s=_get_int("MESSENGER_ROUTER", "choose_cache_ttl_s", 1800, min_value=0, max_value=86400),
@@ -921,6 +928,7 @@ MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_
 MR_CLASSIFIER_TIMEOUT_S = settings.messenger_router.classifier_timeout_s
 MR_LLM_TURN_DEADLINE_S = settings.messenger_router.llm_turn_deadline_s
 MR_LLM_FAIL_OFFER = settings.messenger_router.llm_fail_offer
+MR_CLASSIFIER_COMPACT = settings.messenger_router.classifier_compact
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
