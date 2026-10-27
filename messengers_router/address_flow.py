@@ -13,6 +13,8 @@
   биоматериал («кал в 15:00?», «ХГЧ вечером?») — пункты забора (`analysis`) с их графиком (BUG-2026-10-26-ADDRESS-FOLLOWUP-HOURS).
   Чего в данных нет (праздники, дети, конкретная услуга, кроме анализов / УЗИ / ЭКГ) — честно и оффер оператора (принцип 3).
   Общий вопрос, другая тема, сбой LLM — общий путь, как было; решение тогда лимит хода не тратит.
+* `address_named_street` (BUG-2026-10-26-ADDRESS-FOLLOWUP-NAMED-BRANCH-HOURS) — там же: улица, на которой несколько филиалов
+  («Победы»), называет их, и выбор LLM получает их карточки, а не вычеркивается как «слово, общее для многих адресов».
 
 Метка адресной кнопки: нажатый лист адресов режима `pass` и возраст в ходах — на нажатии 0, на следующей реплике 1; другое
 нажатие или второй ход после — метки нет. Метка хода — переменная хода; между ходами — `_address_button` в состоянии (пишет конец
@@ -47,6 +49,12 @@ def followup_on() -> bool:
     """`[MESSENGER_ROUTER] address_followup_llm = on`."""
 
     return str(getattr(_cfg, "MR_ADDRESS_FOLLOWUP_LLM", "off") or "").strip().lower() == "on"
+
+
+def named_street_on() -> bool:
+    """`[MESSENGER_ROUTER] address_named_street = on`."""
+
+    return str(getattr(_cfg, "MR_ADDRESS_NAMED_STREET", "off") or "").strip().lower() == "on"
 
 
 def tracks_address_button() -> bool:
@@ -179,7 +187,9 @@ async def followup(text: str, branches: list[dict[str, Any]]) -> Followup | None
         choice = None
     outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
     picks = tuple(rows[int(i) - 1] for i in (choice.ids if choice is not None else ()) if str(i).isdigit() and 1 <= int(i) <= len(rows))
-    common = _common_words([str(b["address"]) for b in rows])
+    # Под `address_named_street` слово адреса не называет филиал, только когда филиалов с ним больше, чем карточек в ответе: улица
+    # с тремя филиалами («Победы») называет все три (смоук деплоя 18: выбор LLM вычеркивался, и печатался список всех пунктов).
+    common = _common_words([str(b["address"]) for b in rows], more_than=FOLLOWUP_TASK.max_picks if named_street_on() else 2)
     named = tuple(b for b in picks if named_in(text, str(b["address"]), common=common | frozenset(_address_words(str(b.get("city") or "")))))
     if len(named) < len(picks):
         turn_telemetry.note(address_followup_vetoed=len(picks) - len(named))  # филиал выбран, но в реплике не назван
@@ -204,15 +214,15 @@ def _address_words(address: str) -> list[str]:
     return [w[:5] for w in flat.split() if w.isalpha() and len(w) >= 4]
 
 
-def _common_words(addresses: list[str]) -> frozenset[str]:
-    """Основы, которые есть в адресах нескольких филиалов («проспект», «шоссе»), — по ним филиал не назван (по данным, без
-    списка); город филиала (`city` его данных) — тоже, его вызывающий добавляет к этим основам."""
+def _common_words(addresses: list[str], *, more_than: int = 2) -> frozenset[str]:
+    """Основы, которые есть в адресах больше чем `more_than` филиалов («проспект», «шоссе»), — по ним филиал не назван (по
+    данным, без списка); город филиала (`city` его данных) — тоже, его вызывающий добавляет к этим основам."""
 
     counts: dict[str, int] = {}
     for address in addresses:
         for stem in set(_address_words(address)):
             counts[stem] = counts.get(stem, 0) + 1
-    return frozenset(stem for stem, n in counts.items() if n > 2)
+    return frozenset(stem for stem, n in counts.items() if n > more_than)
 
 
 def named_in(text: str, address: str, *, common: frozenset[str] = frozenset()) -> bool:

@@ -215,6 +215,7 @@ class MessengerRouterConfig:
     button_price_scope: str
     address_branch_flags: str
     address_followup_llm: str
+    address_named_street: str
     turn_understanding_one: str
     service_answer_from_data: str
     test_assist_from_data: str
@@ -681,6 +682,11 @@ settings = Settings(
         # [MESSENGER_ROUTER] address_followup_llm
         # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
         address_followup_llm=_get_enum("MESSENGER_ROUTER", "address_followup_llm", default="on", allowed={"off", "on"}),
+        # Там же: улица, на которой несколько филиалов («Победы» — три), называет их — выбор LLM не вычёркивается правилом «слово
+        # есть в адресах больше чем двух филиалов»; не называет только слово, общее для большего числа филиалов, чем карточек в
+        # ответе (смоук деплоя 18: «а на Победы до скольки?» → часы всех пунктов забора). off — как было.
+        # [MESSENGER_ROUTER] address_named_street
+        address_named_street=_get_enum("MESSENGER_ROUTER", "address_named_street", default="off", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
@@ -907,6 +913,7 @@ MR_BUTTON_TOPIC_HINT = settings.messenger_router.button_topic_hint
 MR_BUTTON_PRICE_SCOPE = settings.messenger_router.button_price_scope
 MR_ADDRESS_BRANCH_FLAGS = settings.messenger_router.address_branch_flags
 MR_ADDRESS_FOLLOWUP_LLM = settings.messenger_router.address_followup_llm
+MR_ADDRESS_NAMED_STREET = settings.messenger_router.address_named_street
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
