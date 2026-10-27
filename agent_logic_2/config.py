@@ -214,6 +214,7 @@ class MessengerRouterConfig:
     button_answer_topic: str
     button_topic_hint: str
     button_reply_judge: str
+    button_side_answer: str
     button_price_scope: str
     address_branch_flags: str
     address_followup_llm: str
@@ -675,6 +676,11 @@ settings = Settings(
         # крови?» на «Цене анализа») — ответ, а не «другая тема» (карточка 25.10: на «Цене анализа» 214 из 343 вопросов по теме
         # судья звал другой темой). Нужен `pending_buttons = on`. off — как было. [MESSENGER_ROUTER] button_reply_judge
         button_reply_judge=_get_enum("MESSENGER_ROUTER", "button_reply_judge", default="off", allowed={"off", "on"}),
+        # Уточняющий вопрос о вопросе кнопки результатов («Где на бланке код?», «Как узнать сам результат?» после «Ввести
+        # данные»): судья решил «вопрос о вопросе бота» — ответ, где код и номер и как посмотреть результат, и тот же вопрос
+        # дальше, а не повтор инструкции и оффер оператора (класс К3 карты провалов деплоя 18). Нужен `pending_buttons = on`.
+        # off — как было. [MESSENGER_ROUTER] button_side_answer
+        button_side_answer=_get_enum("MESSENGER_ROUTER", "button_side_answer", default="off", allowed={"off", "on"}),
         # Область цены кнопки второго уровня (ТЗ 17.08, «сужение поиска по теме»): ответ на вопрос «Цена приёма врача» ищется
         # среди услуг без срока готовности (не анализов, данные прайса МИС), «Цена анализа» / «Сколько стоит анализ» — среди
         # анализов (со сроком готовности); в области нет кандидата на фразу — весь прайс, как без кнопки. `doctor` — только
@@ -923,6 +929,7 @@ MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
 MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic
 MR_BUTTON_TOPIC_HINT = settings.messenger_router.button_topic_hint
 MR_BUTTON_REPLY_JUDGE = settings.messenger_router.button_reply_judge
+MR_BUTTON_SIDE_ANSWER = settings.messenger_router.button_side_answer
 MR_BUTTON_PRICE_SCOPE = settings.messenger_router.button_price_scope
 MR_ADDRESS_BRANCH_FLAGS = settings.messenger_router.address_branch_flags
 MR_ADDRESS_FOLLOWUP_LLM = settings.messenger_router.address_followup_llm
