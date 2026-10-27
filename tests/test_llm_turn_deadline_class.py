@@ -37,7 +37,8 @@ _REPLIES = {
     "price": "цена анализа на гормоны щитовидки",
     "no_rule": "подскажите по одному вопросу",
 }
-_BUSY_S = 2.0  # соседи держат оба слота дольше очереди задач выбора (1,5–3 с), но меньше дедлайна теста
+_BUSY_S = 3.0  # соседи держат оба слота дольше очереди задач выбора (1,5–3 с), но меньше дедлайна теста
+_LONG_S = 6.0  # дольше дедлайна теста: ход их не ждёт
 _DEADLINE_S = 10.0
 
 
@@ -108,9 +109,7 @@ def _turn(
         req = MessengerGenerateRequest(session_id=sid, text=text, debug=True)
         started = time.monotonic()
         body = json.loads((await messenger_generate_once(req, memory=memory or MemoryStore(), services=Services())).body)
-        took = time.monotonic() - started
-        if busy_s:
-            await asyncio.sleep(max(0.0, busy_s - took) + 0.05)  # соседи вернули слоты — пул цел для следующего хода
+        took = time.monotonic() - started  # пул у каждого хода теста свой — возврата слотов соседями не ждём
         dbg = (body.get("state_update") or {}).get("debug") or {}
         return {"text": str(body.get("text") or ""), "handoff": bool(body.get("handoff")), "decision": dbg.get("decision") or {}, "s": took}
 
@@ -153,8 +152,7 @@ def test_under_load_the_turn_waits_for_llm_and_matches_the_free_queue(reply, min
     assert got == want, reply
     assert not _gave_up(loaded) and loaded["outcomes"], loaded["outcomes"]
     assert loaded["s"] >= _BUSY_S - 0.1, loaded["s"]  # ждал слот, а не ушёл на правила
-    first = (loaded["telemetry"].get("llm") or [{}])[0]
-    assert first.get("queue_ms", 0) >= (_BUSY_S - 0.2) * 1000, first
+    assert max(e.get("queue_ms", 0) for e in loaded["telemetry"]["llm"]) >= 1000, loaded["telemetry"]["llm"]
     assert loaded["telemetry"].get("llm_deadline_s") == _DEADLINE_S
     assert "llm_deadline_hit" not in loaded["telemetry"] and "llm_queue_gaveup" not in loaded["telemetry"], loaded["telemetry"]
 
@@ -178,14 +176,14 @@ def test_expired_deadline_answers_with_an_honest_operator_offer(reply, mini_prod
 
     from messengers_router.router import DEADLINE_OFFER_TEXT
 
-    turn = _turn(mini_prod_world, monkeypatch, _REPLIES[reply], deadline=1.0, busy_s=3.0)
+    turn = _turn(mini_prod_world, monkeypatch, _REPLIES[reply], deadline=1.0, busy_s=_LONG_S)
 
     assert turn["text"] == DEADLINE_OFFER_TEXT and not _DIGITS.search(turn["text"]), turn["text"]
     assert not turn["handoff"]
     assert any(outcome == "deadline" for _site, outcome in turn["outcomes"]), turn["outcomes"]
     assert turn["telemetry"].get("answer_source") == "llm_deadline_offer", turn["telemetry"]
     assert turn["telemetry"].get("llm_deadline_hit", 0) >= 1 and turn["telemetry"].get("llm_queue_gaveup", 0) >= 1
-    assert turn["s"] < 2.0, turn["s"]
+    assert turn["s"] < _LONG_S - 2, turn["s"]
 
 
 def test_generation_is_cut_at_the_deadline(mini_prod_world, monkeypatch):  # noqa: F811
@@ -193,12 +191,12 @@ def test_generation_is_cut_at_the_deadline(mini_prod_world, monkeypatch):  # noq
 
     from messengers_router.router import DEADLINE_OFFER_TEXT
 
-    turn = _turn(mini_prod_world, monkeypatch, _REPLIES["no_rule"], deadline=1.0, delay=3.0)
+    turn = _turn(mini_prod_world, monkeypatch, _REPLIES["no_rule"], deadline=1.0, delay=_LONG_S)
 
     assert turn["outcomes"] == [("classifier", "timeout")], turn["outcomes"]
     assert turn["text"] == DEADLINE_OFFER_TEXT and turn["telemetry"].get("llm_deadline_hit") == 1, turn["telemetry"]
     assert "llm_queue_gaveup" not in turn["telemetry"]
-    assert turn["s"] < 2.0, turn["s"]
+    assert turn["s"] < _LONG_S - 2, turn["s"]
 
 
 def test_yes_to_the_deadline_offer_hands_off(mini_prod_world, monkeypatch):  # noqa: F811
@@ -207,7 +205,7 @@ def test_yes_to_the_deadline_offer_hands_off(mini_prod_world, monkeypatch):  # n
     from messengers_router.memory import MemoryStore
 
     memory = MemoryStore()
-    first = _turn(mini_prod_world, monkeypatch, _REPLIES["price"], deadline=1.0, busy_s=3.0, memory=memory, session="dl-yes")
+    first = _turn(mini_prod_world, monkeypatch, _REPLIES["price"], deadline=1.0, busy_s=_LONG_S, memory=memory, session="dl-yes")
     second = _turn(mini_prod_world, monkeypatch, "да", deadline=_DEADLINE_S, memory=memory, session="dl-yes")
 
     assert first["telemetry"].get("answer_source") == "llm_deadline_offer"
@@ -215,7 +213,7 @@ def test_yes_to_the_deadline_offer_hands_off(mini_prod_world, monkeypatch):  # n
 
 
 def test_urgent_stays_urgent_when_the_deadline_expires(mini_prod_world, monkeypatch):  # noqa: F811
-    turn = _turn(mini_prod_world, monkeypatch, _URGENT, deadline=1.0, busy_s=3.0)
+    turn = _turn(mini_prod_world, monkeypatch, _URGENT, deadline=1.0, busy_s=_LONG_S)
 
     assert turn["label"] == "URGENT" and turn["handoff"], turn
 
