@@ -120,7 +120,7 @@ from .services._existing_appointment_validator import is_own_existing_appointmen
 from .services._doctors_helpers import _extract_specialties_from_text, _is_consultation_service_query, _service_name_allows_specialty
 from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, consult_price_phrase, price_reply_names_own_service
 from .services._readiness_select import readiness_by_choice, readiness_from_catalog, readiness_mode
-from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
+from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT, RESULTS_PORTAL_URL
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
 from .services._samara_perimeter import (
@@ -2701,6 +2701,14 @@ TEST_RESULT_DATA_HINT_TEXT = (
     "Номер анализа указан в чеке или в договоре, которые выдают при сдаче анализов. "
     "Если их нет под рукой, поможет оператор. Перевести на оператора?"
 )
+# Уточняющий вопрос о вопросе кнопки результатов («где на бланке код?», «как узнать сам результат?», `button_side_answer`):
+# где реквизиты и как посмотреть результат — словами подсказок бота (выше и `lab_tests`), вопрос о реквизитах висит дальше.
+TEST_RESULT_SIDE_TEXT = (
+    "Код и номер анализа указаны в чеке или в договоре, которые выдают при сдаче анализов. "
+    f"Посмотреть результат можно на сайте {RESULTS_PORTAL_URL} — вкладка «Результаты анализов» (вверху слева на сайте) — "
+    "или здесь: напишите фамилию, год рождения, код анализа и номер анализа, например: «Иванов, 1989, Бг, 123». "
+    "Если чека и договора нет под рукой, поможет оператор."
+)
 
 
 async def _handle_slot_value_pending(
@@ -4247,10 +4255,16 @@ async def patient_routing_stream(
             spent = llm_runtime.turn_decisions_spent()
             # Вопрос кнопки меню под `button_answer_topic` / `button_topic_hint`: значение, найденное правилами, LLM проверяет на
             # «другую тему» — правила находят его и в реплике о другом («ЭКГ как подготовиться?» на «Цену анализа»).
+            # Судья под `button_reply_judge` видит и кнопку с её темой: полный вопрос в теме кнопки — ответ, не «другая тема».
+            pending = memory.get_pending(state)
             answered = await pending_answer.answer(
-                *expected, user_text, filled=filled, confirm_topic=button_flow.judged_by_llm(memory.get_pending(state))
+                *expected,
+                user_text,
+                filled=filled,
+                confirm_topic=button_flow.judged_by_llm(pending),
+                button=button_flow.judge_context(pending, expected[1]),
             )
-            button_flow.refund_topic_judge(answered, memory.get_pending(state), spent)
+            button_flow.refund_topic_judge(answered, pending, spent)
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
@@ -4316,6 +4330,26 @@ async def patient_routing_stream(
             update_summary(state, reason="normal")
             yield side
             return
+
+    # Уточняющий вопрос о вопросе кнопки результатов (`button_side_answer`, класс К3): где код и номер и как посмотреть
+    # результат — вместо повтора инструкции; вопрос о реквизитах висит дальше, счёт переспросов прежний.
+    if button_flow.result_side_question(answered, memory.get_pending(state)):
+        turn_telemetry.note(button_side_answer="test_result")
+        expects.keep_asking()
+        side = ResponseEnvelope(
+            text=TEST_RESULT_SIDE_TEXT,
+            attachments=[],
+            handoff=False,
+            state_update=_early_debug_state_update(
+                debug, label="TEST_RESULT", handoff=False, flags={"button_side_answer"}, context_action="continue"
+            ),
+        )
+        expects.finish_turn(state, side)
+        memory.append_turn(state, role="user", text=said)
+        memory.append_turn(state, role="assistant", text=side.text)
+        update_summary(state, reason="normal")
+        yield side
+        return
 
     precheck = run_appointment_precheck(
         user_text=user_text,

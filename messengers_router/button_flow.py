@@ -23,6 +23,15 @@
   («Сколько стоит анализ» на «Цена анализа»), — не подсказка: ход идёт как без выключателя. Ничего не подошло, сбой LLM —
   общий путь, как было; это решение лимит решений хода не тратит (как «другая тема» одной функции, Q5 18.10). Ложная
   подсказка безопаснее неверного ответа, но её долю меряет карточка (`button_hint` в журнале хода).
+* `button_reply_judge` (BUG-2026-10-27-BUTTON-REPLY-JUDGE-FOREIGN) — судья ответа на вопрос кнопки видит нажатую кнопку и её
+  тему (`judge_context`, задача `pending_answer.FREE_BUTTON_TASK`, промпт `choose_pending_free_reply_button`): полный вопрос в
+  теме кнопки («Сколько стоит общий анализ крови?» на «Цене анализа») — ответ на её вопрос. Прежний судья видел только вопрос
+  бота («Какой анализ интересует?») и почти любой полный вопрос звал «другой темой» (карточка 25.10: на «Цене анализа» 214 из
+  343 вопросов по теме), а тему снова решали правила общего пути.
+* `button_side_answer` (BUG-2026-10-27-RESULT-BUTTON-SIDE-QUESTION) — на уточняющий вопрос о вопросе кнопки результатов («Где
+  на бланке код?», «Как узнать сам результат?» после «Ввести данные») бот отвечает, где код и номер и как посмотреть
+  результат, и ждёт реквизиты дальше (`result_side_question`), а не повторяет инструкцию с оффером оператора. Что реплика —
+  вопрос о вопросе бота, решает судья одной функции (исход «ничего из этого», правило 3 промпта).
 * `button_price_scope` (BUG-2026-10-25-BUTTON-PRICE-SCOPE; ТЗ 17.08, «сужение поиска по теме») — ответ на вопрос кнопки цены
   ищется в её области прайса по данным МИС (`price_scope`): «Цена приёма врача» — услуги без срока готовности (не анализы),
   «Цена анализа» и «Сколько стоит анализ» — анализы (со сроком). Режим `doctor` сужает только «Цену приёма врача»: на «Цену
@@ -72,6 +81,18 @@ def hint_on() -> bool:
     return _on("MR_BUTTON_TOPIC_HINT")
 
 
+def reply_judge_on() -> bool:
+    """`[MESSENGER_ROUTER] button_reply_judge = on`: судья ответа на вопрос кнопки видит нажатую кнопку и её тему."""
+
+    return _on("MR_BUTTON_REPLY_JUDGE")
+
+
+def side_answer_on() -> bool:
+    """`[MESSENGER_ROUTER] button_side_answer = on`: уточняющий вопрос о вопросе кнопки результатов — ответ, не повтор."""
+
+    return _on("MR_BUTTON_SIDE_ANSWER")
+
+
 def price_scope_mode() -> str:
     """`[MESSENGER_ROUTER] button_price_scope = off | doctor | all`: какие кнопки цены сужают поиск своей областью прайса."""
 
@@ -82,7 +103,7 @@ def price_scope_mode() -> str:
 def marks_questions() -> bool:
     """Висящий вопрос кнопки помечается её листом — только когда пометку кто-то читает (off — состояние как было)."""
 
-    return answer_topic_on() or hint_on() or price_scope_mode() != "off"
+    return answer_topic_on() or hint_on() or reply_judge_on() or side_answer_on() or price_scope_mode() != "off"
 
 
 def price_scope(pending: Any) -> str:
@@ -134,6 +155,32 @@ def judged_by_llm(pending: Any) -> bool:
     назвать» — 32 ответа из 89 стали оффером оператора вместо инструкции)."""
 
     return (answer_topic_on() or hint_on()) and bool(question_button(pending))
+
+
+def judge_context(pending: Any, question: str) -> str:
+    """Нажатая кнопка, её тема и вопрос бота — данные судьи ответа (`button_reply_judge`): полный вопрос в теме кнопки — ответ.
+    Выключатель off или вопрос задала не кнопка — пусто: судит прежний судья по одному вопросу бота."""
+
+    action = button_menu.action_for(question_button(pending)) if reply_judge_on() else None
+    if action is None or not action.title:
+        return ""
+    return f"кнопка «{action.title}»{_where(action)} — вопросы про {action.about}; вопрос бота: «{question}»"
+
+
+def result_side_question(answered: pending_answer.Answer | None, pending: Any) -> bool:
+    """Пациент спросил о самом вопросе кнопки результатов («где на бланке код?», «как узнать сам результат?»): судья одной
+    функции решил «ничего из этого» (правило 3 промпта — вопрос о вопросе бота), без хвоста; под `button_side_answer`."""
+
+    action = button_menu.action_for(question_button(pending)) if side_answer_on() else None
+    return (
+        action is not None
+        and action.label == "TEST_RESULT"
+        and answered is not None
+        and answered.type == Question.SLOT_VALUE.value
+        and answered.source is pending_answer.Source.LLM
+        and answered.outcome is pending_answer.Outcome.NONE
+        and not answered.rest
+    )
 
 
 def answer_topic(pending: Any) -> str:

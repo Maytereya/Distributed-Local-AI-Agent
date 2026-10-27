@@ -142,6 +142,9 @@ _SLOT_VALUE_MAX = 80
 
 # Свободный ответ на вопрос-слот: вариантов нет, исход «ответ» — свой (у вопроса «да/нет» «да» — согласие, здесь — нет).
 FREE_TASK = Task(name="pending_free_reply", outcomes=("answer", "no", "pause", "new_topic"), timeout_s=8, queue_timeout_ms=3000)
+# Тот же ответ на вопрос кнопки меню (`button_flow.judge_context`, `button_reply_judge`): судья видит нажатую кнопку и её тему —
+# полный вопрос в теме кнопки — ответ, а не «другая тема».
+FREE_BUTTON_TASK = Task(name="pending_free_reply_button", outcomes=FREE_TASK.outcomes, timeout_s=8, queue_timeout_ms=3000)
 # Выбор, где можно взять несколько пунктов («обе»): те же исходы, что у `pending_reply.PENDING_TASK`, пунктов — до N.
 MANY_TASK = Task(name="pending_reply_many", outcomes=("yes", "no", "pause", "new_topic"), timeout_s=8, queue_timeout_ms=3000)
 
@@ -417,7 +420,14 @@ def _remember(found: Answer) -> Answer:
 
 
 async def answer(
-    question_type: str, question: str, options: tuple[str, ...], text: str, *, filled: bool = False, confirm_topic: bool = False
+    question_type: str,
+    question: str,
+    options: tuple[str, ...],
+    text: str,
+    *,
+    filled: bool = False,
+    confirm_topic: bool = False,
+    button: str = "",
 ) -> Answer | None:
     """Ответ пациента на висящий вопрос этого типа — одно решение на ход (см. модуль).
 
@@ -428,6 +438,8 @@ async def answer(
     :param filled: вопрос-слот — правила уже разобрали в реплике значение слота (сужение без LLM)
     :param confirm_topic: вопрос кнопки меню (`button_flow.judged_by_llm`): значение, найденное правилами, LLM проверяет только
         на «другую тему» — правила находят значение и в реплике о другом; прочие её исходы — сужение правил, как было
+    :param button: нажатая кнопка, её тема и вопрос бота (`button_flow.judge_context`) — вопрос-слот судит `FREE_BUTTON_TASK`;
+        пусто — прежний судья по одному вопросу бота
     :return: решение (оно же — `current()` до конца хода); тип не из таблицы или пустая реплика — None
     """
 
@@ -436,7 +448,7 @@ async def answer(
     if policy is None or not reply or (question_type in _BUTTON_TYPES and not buttons_on()):
         return None
     if policy.polarity is Polarity.FREE:
-        return await _free_answer(question_type, question, reply, filled=filled, confirm_topic=confirm_topic)
+        return await _free_answer(question_type, question, reply, filled=filled, confirm_topic=confirm_topic, button=button)
     many = policy.many and buttons_on()
 
     if question_type == Question.SHOW_ALL.value and number(reply) is not None:
@@ -488,15 +500,17 @@ def _refunded(found: Answer) -> Answer:
     return found
 
 
-async def _free_answer(question_type: str, question: str, reply: str, *, filled: bool, confirm_topic: bool = False) -> Answer:
+async def _free_answer(question_type: str, question: str, reply: str, *, filled: bool, confirm_topic: bool = False, button: str = "") -> Answer:
     """Свободный ответ на вопрос-слот: голый отказ — «не могу ответить»; правила разобрали значение — ответ (у вопроса кнопки
-    — если LLM не сказала «другая тема», `confirm_topic`); иначе LLM (`FREE_TASK`); сбой — запасной путь (как было)."""
+    — если LLM не сказала «другая тема», `confirm_topic`); иначе LLM (`FREE_TASK`, у вопроса кнопки под `button_reply_judge` —
+    `FREE_BUTTON_TASK` с кнопкой и её темой); сбой — запасной путь (как было)."""
 
+    task, asked = (FREE_BUTTON_TASK, button) if button else (FREE_TASK, question)
     if _anchor(_normalize_confirmation_text(reply)) is Outcome.NO:
         return _remember(Answer(question_type, Outcome.NO, source=Source.FAST, text=reply))  # «нет» — не фамилия
     if filled and confirm_topic:
         try:
-            choice = await choose(FREE_TASK, reply, [], asked=question)
+            choice = await choose(task, reply, [], asked=asked)
         except Exception:  # новый слой: его сбой не ломает ход — сужение правил, как было
             logger.warning("pending_answer_failed", exc_info=True)
             choice = None
@@ -506,7 +520,7 @@ async def _free_answer(question_type: str, question: str, reply: str, *, filled:
     if filled:
         return _remember(Answer(question_type, Outcome.ANSWER, source=Source.FAST, text=reply))
     try:
-        choice = await choose(FREE_TASK, reply, [], asked=question)
+        choice = await choose(task, reply, [], asked=asked)
     except Exception:  # новый слой: его сбой не ломает ход — решают прежние правила
         logger.warning("pending_answer_failed", exc_info=True)
         choice = None

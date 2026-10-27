@@ -235,6 +235,8 @@ tests/test_names_paths_characterization.py
 tests/test_book_button_reply_class.py
 tests/test_button_answer_topic_class.py
 tests/test_button_topic_hint_class.py
+tests/test_button_reply_judge_class.py
+tests/test_button_side_answer_class.py
 tests/test_button_price_scope_class.py
 tests/test_address_branch_flags_class.py
 tests/test_address_followup_class.py
