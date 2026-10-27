@@ -11,7 +11,10 @@
 - `replay` — только кэш; промах — отказ соединения и счётчик промахов;
 - `adversary` — уверенно-неверный, но разбираемый ответ для каждого места;
 - `down` — отказ соединения (как упавший ollama); `down_timeout` — тайм-аут: сразу или, с `hang_s`, после «зависания» на
-  столько секунд (время хода при зависшей LLM: вызов обрывает тайм-аут места вызова, исход — `cancelled`).
+  столько секунд (время хода при зависшей LLM: вызов обрывает тайм-аут места вызова, исход — `cancelled`);
+- `replay` с `hang_s` — «медленная, но отвечающая» LLM: ответ кэша через `hang_s` секунд, если место вызова дождётся (иначе его
+  тайм-аут — `cancelled`). Вместе с `--llm-slots` (слотов меньше, чем ходов) — очередь к LLM под нагрузкой (стенд разбора 27.10,
+  BUG-2026-10-27-LLM-QUEUE-GIVES-UP).
 
 Место вызова (site) определяется отпечатком шаблона промпта: прод читает шаблоны через
 `prompt_registry.load_prompt_text`, стенд берёт их оттуда же в том дереве кода, которое
@@ -327,13 +330,13 @@ class HarnessClient:
         if self.mode == "down":
             record("down")
             raise ConnectionError("стенд: LLM недоступна")
+        if self.hang_s and self.mode in ("down_timeout", "replay"):
+            try:
+                await asyncio.sleep(self.hang_s)
+            except asyncio.CancelledError:
+                record("cancelled")
+                raise
         if self.mode == "down_timeout":
-            if self.hang_s:
-                try:
-                    await asyncio.sleep(self.hang_s)
-                except asyncio.CancelledError:
-                    record("cancelled")
-                    raise
             record("timeout")
             raise asyncio.TimeoutError()
         if self.mode == "adversary":

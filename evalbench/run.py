@@ -308,7 +308,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--llm-mode", default="hybrid", help="llm_mode запроса (шлюз прода шлёт hybrid)")
     ap.add_argument("--cache", type=Path, default=PRIVATE_ROOT / "llm_cache.jsonl", help="запись ответов настоящей LLM")
     ap.add_argument("--live-pause", type=float, default=1.0, help="пауза между вызовами настоящей LLM, с")
-    ap.add_argument("--hang-s", type=float, default=0.0, help="режим down_timeout: модель «висит» столько секунд до тайм-аута (0 — тайм-аут сразу)")
+    ap.add_argument(
+        "--hang-s",
+        type=float,
+        default=0.0,
+        help="down_timeout: модель «висит» столько секунд до тайм-аута (0 — сразу); replay: ответ кэша через столько секунд",
+    )
+    ap.add_argument("--llm-slots", type=int, default=0, help="слотов LLM бота (прод = 2); 0 — как в config.ini")
     ap.add_argument("--max-live-calls", type=int, help="потолок вызовов настоящей LLM на прогон")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--concurrency", type=int, default=1, help="ход (е): столько ходов разных сессий одновременно (нагрузка); >1 — без вызовов LLM по ходам")
@@ -364,6 +370,10 @@ def main(argv: list[str] | None = None) -> int:
     cfg_applied = {key: {"value": value, "known": hasattr(bot_config, key)} for key, value in overrides.items()}
     for key, value in overrides.items():
         setattr(bot_config, key, value)
+    if args.llm_slots:
+        # Слотов меньше, чем ходов разом, — очередь к LLM (пул бота; в дереве кода до пула — семафор).
+        pool = getattr(llm_runtime, "_SlotPool", None)
+        llm_runtime._SEMAPHORE = pool(args.llm_slots) if pool is not None else asyncio.Semaphore(args.llm_slots)
 
     live = args.mode in ("real", "cached")
     allow = (host_of(bot_config.ollama_url),) if live else ()
@@ -428,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
                     "mode": args.mode,
                     "llm_mode": args.llm_mode,
                     "hang_s": args.hang_s,
+                    "llm_slots": args.llm_slots or getattr(llm_runtime, "_MAX_CONCURRENCY", None),
                     "cfg": cfg_applied,
                     "model": LLMName.get(),
                     "world": facts.__dict__,
