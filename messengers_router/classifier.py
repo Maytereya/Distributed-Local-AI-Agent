@@ -12,14 +12,17 @@ from __future__ import annotations
 # не зависит от PYTHONPATH
 # не конфликтует с чужими пакетами
 
+import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, cast
 
 from .llm_mode_policy import RuntimeOptions
-from . import turn_names
-from .llm_runtime import generate_text
+from . import turn_names, turn_telemetry
+from .llm_runtime import LLMQueueTimeoutError, generate_text
+from .runtime_config import config as c
 from .doctor_name_port import cached_doctor_fios, resolve_cached_doctor_name_candidate
 from .russian_nlu import normalize_ru, ENTITY_WHITELIST
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction, CONFIDENCE
@@ -237,17 +240,40 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _classify_deadline_s() -> float:
+    """`[MESSENGER_ROUTER] classifier_timeout_s` — потолок вызова классификатора, очередь и генерация вместе; 0 — выключен."""
+
+    try:
+        return max(0.0, float(getattr(c, "MR_CLASSIFIER_TIMEOUT_S", 0) or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000) -> tuple[str, dict[str, Any]]:
-    """Возвращает исходный текст модели и санитизированный JSON классификатора."""
+    """Возвращает исходный текст модели и санитизированный JSON классификатора.
+
+    Под `classifier_timeout_s` вызов, не уложившийся в потолок, — тот же сбой `ollama_timeout`, что и упавшая LLM: тему решает
+    правило, если сработало, иначе путь «LLM недоступна» (BUG-2026-10-27-CLASSIFIER-NO-TIMEOUT). В журнале хода —
+    `nlu_timeout_s`, потолок, на котором вызов оборван."""
+
+    deadline_s = _classify_deadline_s()
+    # Выключатель off — вызов прежний, без нового параметра.
+    guard: dict[str, Any] = {"deadline_s": deadline_s} if deadline_s else {}
+    started = time.monotonic()
     try:
         raw = await generate_text(
             prompt,
             timeout_s=_CLASSIFY_TIMEOUT,
             queue_timeout_ms=queue_timeout_ms,
             fmt="json",
+            **guard,
         )
-    except Exception:
+    except Exception as exc:
         log.warning("ollama_classify_failed", exc_info=True)
+        # Оборвал потолок, а не сбой раньше него (клиент LLM сам бросил тайм-аут сразу): прошло не меньше потолка; 0,05 с —
+        # округление часов цикла событий.
+        if guard and isinstance(exc, (asyncio.TimeoutError, LLMQueueTimeoutError)) and time.monotonic() - started >= deadline_s - 0.05:
+            turn_telemetry.note(nlu_timeout_s=deadline_s)
         return "", sanitize_classifier_json(
             {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_timeout"]}
         )
@@ -443,28 +469,6 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
     return candidate
 
 
-def _extract_schedule_specialty(text: str) -> str | None:
-    """
-    Извлекает специальность для запросов расписания.
-
-    :param text: текст запроса
-    :return: специальность или None
-    """
-    spec = extract_specialty(text or "")
-    if spec:
-        return spec
-    if re.search(
-        r"\b(фгдс|фдгс|фгс|егдс|эгдс|фкс|эндоскоп\w*|гастроскоп\w*|колоноскоп\w*|"
-        r"ректороманоскоп\w*|эзофагогастродуоденоскоп\w*)\b",
-        text or "",
-        re.I,
-    ):
-        return "эндоскопист"
-    if re.search(r"\bузи\b", text or "", re.I):
-        return "узи"
-    return None
-
-
 def _is_procedure_doctor_info_query(text: str, service_name: str | None) -> bool:
     """
     Определяет запрос "какой врач делает конкретную процедуру".
@@ -640,11 +644,9 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
 def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
     allowed = ", ".join(PATIENT_LABEL_PRIORITY)
     tmpl = load_prompt_text("classifier_patient")
-    hints = _collect_rule_intent_hints(text, seeded)
     return (
         tmpl.replace("<<ALLOWED_LABELS>>", allowed)
         .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))
-        .replace("<<RULE_HINTS>>", json.dumps(hints, ensure_ascii=False))
         .replace("<<TEXT>>", text)
     ).strip()
 
@@ -1408,7 +1410,7 @@ async def deterministic_rule_decision(
         )
     elif detect_schedule_intent(text):
         entities: dict[str, Any] = {}
-        specialty = _extract_schedule_specialty(text)
+        specialty = extract_specialty(text)
         doctor_name = _extract_doctor_name(text, mode="schedule")
         if doctor_name:
             entities["doctor_name"] = doctor_name

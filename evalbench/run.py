@@ -308,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--llm-mode", default="hybrid", help="llm_mode запроса (шлюз прода шлёт hybrid)")
     ap.add_argument("--cache", type=Path, default=PRIVATE_ROOT / "llm_cache.jsonl", help="запись ответов настоящей LLM")
     ap.add_argument("--live-pause", type=float, default=1.0, help="пауза между вызовами настоящей LLM, с")
+    ap.add_argument("--hang-s", type=float, default=0.0, help="режим down_timeout: модель «висит» столько секунд до тайм-аута (0 — тайм-аут сразу)")
     ap.add_argument("--max-live-calls", type=int, help="потолок вызовов настоящей LLM на прогон")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--concurrency", type=int, default=1, help="ход (е): столько ходов разных сессий одновременно (нагрузка); >1 — без вызовов LLM по ходам")
@@ -389,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
                     real=llm_runtime._OLLAMA_CLIENT if live else None,
                     cache=ResponseCache(args.cache) if args.mode in ("real", "cached", "replay") else None,
                     live_pause_s=args.live_pause,
+                    hang_s=args.hang_s,
                     max_live_calls=args.max_live_calls,
                     default_options=ollama_settings.options_set().model_dump(exclude_none=True),
                 )
@@ -425,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
                     "wall_s": stats.get("wall_s") or round(time.time() - started, 1),
                     "mode": args.mode,
                     "llm_mode": args.llm_mode,
+                    "hang_s": args.hang_s,
                     "cfg": cfg_applied,
                     "model": LLMName.get(),
                     "world": facts.__dict__,
