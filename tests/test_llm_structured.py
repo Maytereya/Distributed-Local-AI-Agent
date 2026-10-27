@@ -256,7 +256,7 @@ def test_queue_timeout_does_not_open_the_breaker(monkeypatch, limits):
     # Очередь к LLM заняли соседи (колл-центр, FreeTalk): это сигнал, а не сбой модели — иначе
     # качество бота зависит от чужой нагрузки (L-11).
     @asynccontextmanager
-    async def full_queue(_queue_timeout_ms):
+    async def full_queue(_queue_timeout_ms, **_slot):  # запас p95 и тень (дедлайн хода) — ключами
         raise llm_runtime.LLMQueueTimeoutError("llm_queue_timeout")
         yield  # pragma: no cover
 

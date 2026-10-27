@@ -55,7 +55,7 @@ def test_unknown_prompt_is_not_silently_assigned():
     assert index.site_of(ev_llm.WARM_UP_PROMPT) == "warm_up"
 
 
-@pytest.mark.parametrize("key", sorted(p.stem for p in PROMPTS.glob("*.txt") if p.stem not in DEAD_PROMPTS))
+@pytest.mark.parametrize("key", sorted(p.stem for p in PROMPTS.glob("*.txt") if p.stem not in DEAD_PROMPTS | ev_llm.PROMPT_FRAGMENTS))
 def test_adversary_has_parsable_answer_for_every_live_site(key):
     text = _filled(_templates()[key])
     answer = ev_llm.adversary_answer(key, text)
@@ -929,3 +929,43 @@ def test_price_pairs_see_the_overview_card_format():
         "«Общий анализ крови»:\nСправка: 500 руб."
     )
     assert [(p.status, p.service_id) for p in pairs] == [("matched", 3), ("unattributed", None), ("unattributed", None)]
+
+
+def test_replay_with_hang_answers_late_or_is_cut_by_the_call_site(tmp_path):
+    """`replay` с `hang_s` — «медленная, но отвечающая» LLM (стенд нагрузки, BUG-2026-10-27-LLM-QUEUE-GIVES-UP): ответ кэша через
+    `hang_s`, если место вызова дождётся; не дождалось — исход `cancelled`; `hang_s = 0` — сразу, как было."""
+
+    index = ev_llm.SiteIndex.from_templates({"service_normalizer": _templates()["service_normalizer"]})
+    prompt = _filled(_templates()["service_normalizer"])
+    cache = ev_llm.ResponseCache(tmp_path / "cache.jsonl")
+    cache.put(ev_llm.ResponseCache.key("m", prompt, None, False), "глюкоза", "service_normalizer")
+
+    def client(hang_s: float) -> ev_llm.HarnessClient:
+        return ev_llm.HarnessClient(mode="replay", sites=index, cache=ev_llm.ResponseCache(tmp_path / "cache.jsonl"), hang_s=hang_s)
+
+    async def call(harness: ev_llm.HarnessClient, site_timeout: float) -> tuple[str, float]:
+        started = time.monotonic()
+        res = await asyncio.wait_for(harness.generate(model="m", prompt=prompt), site_timeout)
+        return res.response, time.monotonic() - started
+
+    slow = client(0.05)
+    text, took = asyncio.run(call(slow, 5))
+    assert text == "глюкоза" and took >= 0.05
+    cut = client(10)
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(call(cut, 0.05))
+    assert [c.outcome for c in cut.take_turn_calls()] == ["cancelled"]
+    assert asyncio.run(call(client(0), 5))[1] < 0.05
+
+
+def test_compact_classifier_prompt_is_the_classifier_site(monkeypatch):
+    """Фрагмент промпта (`classifier_compact_note`) — не место вызова: собранный под `classifier_compact = on` промпт
+    классификатора стенд узнаёт как `classifier_patient` (шаг 5 BUG-2026-10-27-LLM-QUEUE-GIVES-UP)."""
+
+    from messengers_router import classifier
+    from messengers_router.runtime_config import config as cfg
+
+    index = ev_llm.SiteIndex.from_code_root(ROOT)
+    assert "classifier_compact_note" not in index.segments
+    monkeypatch.setattr(cfg, "MR_CLASSIFIER_COMPACT", "on", raising=False)
+    assert index.site_of(classifier._build_classify_prompt("когда принимает кардиолог", {})) == "classifier_patient"

@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import errno as _errno
+import heapq as _heapq
+import itertools as _itertools
 import json as _json
 import os as _os
 import sys as _sys
@@ -34,7 +36,54 @@ try:
     _MAX_CONCURRENCY = int(str(c.MR_LLM_MAX_CONCURRENCY).strip() or _DEFAULT_MAX_CONCURRENCY)
 except Exception:
     _MAX_CONCURRENCY = _DEFAULT_MAX_CONCURRENCY
-_SEMAPHORE = asyncio.Semaphore(max(1, _MAX_CONCURRENCY))
+
+
+class _SlotPool:
+    """Слоты LLM (= `OLLAMA_NUM_PARALLEL` сервера): семафор, у которого очередь — по ключу, а не по приходу.
+
+    `acquire()` — как у `asyncio.Semaphore`: ключ — время прихода, очередь FIFO (без дедлайна хода — как было).
+    `acquire_by(key)` — ключ задаёт вызывающий: под дедлайном хода — время начала хода, слот получает ход, начатый раньше
+    (BUG-2026-10-27-LLM-QUEUE-GIVES-UP: начатые ходы добегают, классификатор нового хода ждёт). Освободившийся слот
+    передаётся ждущему с меньшим ключом сразу, мимо счётчика: пришедший позже не перехватит его у очереди.
+    """
+
+    def __init__(self, slots: int):
+        self._free = max(1, int(slots))
+        self._waiters: list[tuple[float, int, asyncio.Future[None]]] = []
+        self._seq = _itertools.count()
+
+    def locked(self) -> bool:
+        return self._free <= 0
+
+    async def acquire(self) -> bool:
+        await self.acquire_by(_time.monotonic())
+        return True
+
+    async def acquire_by(self, key: float) -> None:
+        while self._waiters and self._waiters[0][2].done():  # ушедшие по тайм-ауту — не очередь
+            _heapq.heappop(self._waiters)
+        if self._free > 0 and not self._waiters:
+            self._free -= 1
+            return
+        fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        _heapq.heappush(self._waiters, (float(key), next(self._seq), fut))
+        try:
+            await fut
+        except BaseException:
+            if fut.done() and not fut.cancelled():
+                self.release()  # слот уже передан, а ждущий ушёл (тайм-аут в тот же миг) — передать дальше
+            raise
+
+    def release(self) -> None:
+        while self._waiters:
+            _key, _seq, fut = _heapq.heappop(self._waiters)
+            if not fut.done():
+                fut.set_result(None)
+                return
+        self._free += 1
+
+
+_SEMAPHORE: Any = _SlotPool(_MAX_CONCURRENCY)
 
 # Параметры коротких решений (валидаторы, различители: ответ — одно слово). Явно на месте
 # вызова, а не из общих настроек Gradio: одинаковый вопрос — одинаковое решение, ответ не
@@ -95,6 +144,13 @@ class LLMQueueTimeoutError(RuntimeError):
     pass
 
 
+class LLMDeadlineError(LLMQueueTimeoutError):
+    """Дедлайн хода (`llm_turn_deadline_s`) не оставил вызову времени: слот не освободился до «остаток − p95 задачи».
+
+    Наследник отказа очереди: политики сбоя мест вызова те же; в журнале хода — исход `deadline`, а ответ хода — честный
+    оффер оператора (`router`), не правило."""
+
+
 class LLMBudgetExhaustedError(RuntimeError):
     """Бюджет LLM-решений хода исчерпан (L-11) — вызова не было."""
 
@@ -141,6 +197,8 @@ def _caller_site() -> str:
 
 
 def _outcome(exc: BaseException) -> str:
+    if isinstance(exc, LLMDeadlineError):
+        return "deadline"
     if isinstance(exc, LLMQueueTimeoutError):
         return "queue_timeout"
     if isinstance(exc, asyncio.TimeoutError):
@@ -242,7 +300,11 @@ async def generate_text_with_usage(
     deadline_s: float | None = None,
 ) -> tuple[str, dict[str, int]]:
     """`deadline_s` — потолок всего вызова, очередь и генерация вместе (предохранитель классификатора); исход сбоя —
-    прежний `queue_timeout` или `timeout`. None — как было: очередь и генерация ограничены каждая своим."""
+    прежний `queue_timeout` или `timeout`. None — как было: очередь и генерация ограничены каждая своим.
+
+    Под дедлайном хода (`llm_turn_deadline_s`) `deadline_s` — потолок генерации (времени в слоте): ожидание слота держит
+    дедлайн хода, иначе классификатор под нагрузкой сдавался бы по своему потолку и ход уходил на правила
+    (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 2); от зависшей модели потолок защищает по-прежнему."""
 
     model = llm or LLMName.get()
     resolved_think = ollama_settings.resolve_think(think)
@@ -262,14 +324,19 @@ async def generate_text_with_usage(
         )
     site = _caller_site()
     queue_ms = 0
+    cut = False
+    in_turn = _deadline_turn() is not None
+    generation_cap: float = max(5, int(timeout_s)) if deadline_s is None else min(max(5, int(timeout_s)), deadline_s)
     if deadline_s is not None:
         queue_timeout_ms = min(queue_timeout_ms, int(deadline_s * 1000))
     try:
-        async with llm_slot(queue_timeout_ms):
-            queue_ms = int((_time.monotonic() - started_at) * 1000)
+        async with llm_slot(queue_timeout_ms, reserve_s=_reserve_s(site, generation_cap), ceiling_s=None if in_turn else deadline_s):
+            slot_at = _time.monotonic()
+            queue_ms = int((slot_at - started_at) * 1000)
             generation_s: float = max(5, int(timeout_s))
             if deadline_s is not None:
-                generation_s = min(generation_s, max(0.0, deadline_s - (_time.monotonic() - started_at)))
+                generation_s = min(generation_s, max(0.0, deadline_s - (_time.monotonic() - (slot_at if in_turn else started_at))))
+            generation_s, cut = _deadline_cap(generation_s)
             res = await asyncio.wait_for(
                 _OLLAMA_CLIENT.generate(
                     model=model,
@@ -282,6 +349,7 @@ async def generate_text_with_usage(
                 timeout=generation_s,
             )
     except BaseException as exc:
+        _note_deadline_cut(exc, cut)
         err = error_detail(exc)
         turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=err)
         if isinstance(exc, asyncio.TimeoutError):
@@ -333,18 +401,35 @@ class _TurnBudget:
 
     calls: int = 0
     spent_s: float = 0.0
+    # Дедлайн хода (`llm_turn_deadline_s`, BUG-2026-10-27-LLM-QUEUE-GIVES-UP): 0 — нет (как было); время — `time.monotonic()`.
+    started_at: float = 0.0
+    deadline_at: float = 0.0
+    deadline_hits: int = 0  # вызовов, которым не хватило дедлайна (очередь или генерация)
+    queue_gaveup: int = 0  # вызовов, не дождавшихся слота (`queue_timeout` / `deadline`) — ход ушёл на путь сбоя
 
 
 _TURN_BUDGET: contextvars.ContextVar[_TurnBudget | None] = contextvars.ContextVar("mr_llm_turn_budget", default=None)
 
 
+def _turn_deadline_s() -> float:
+    """`[MESSENGER_ROUTER] llm_turn_deadline_s` — секунды хода на LLM от его начала; 0 — дедлайна нет."""
+
+    try:
+        return max(0.0, float(getattr(c, "MR_LLM_TURN_DEADLINE_S", 0) or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def begin_turn_budget() -> contextvars.Token:
     """Открыть бюджет решений хода — в эндпоинте рядом с телеметрией; токен — в `end_turn_budget`.
 
-    Вне хода (скрипты, тесты сервисов) бюджета нет: ограничение — свойство хода пациента.
+    Вне хода (скрипты, тесты сервисов) бюджета нет: ограничение — свойство хода пациента. Дедлайн хода — тоже: он
+    отсчитывается отсюда (после замка сессии), фоновые задачи хода видят его через контекст.
     """
 
-    return _TURN_BUDGET.set(_TurnBudget())
+    now = _time.monotonic()
+    deadline_s = _turn_deadline_s()
+    return _TURN_BUDGET.set(_TurnBudget(started_at=now, deadline_at=now + deadline_s if deadline_s else 0.0))
 
 
 def end_turn_budget(token: contextvars.Token) -> None:
@@ -352,6 +437,72 @@ def end_turn_budget(token: contextvars.Token) -> None:
         _TURN_BUDGET.reset(token)
     except ValueError:  # закрыт в другом контексте (поток ответа оборван) — бюджет уйдёт вместе с ним
         pass
+
+
+def _deadline_turn() -> _TurnBudget | None:
+    budget = _TURN_BUDGET.get()
+    return budget if budget is not None and budget.deadline_at else None
+
+
+def turn_deadline_left() -> float | None:
+    """Сколько секунд дедлайна хода осталось (не меньше 0); None — дедлайна нет (выключатель off или вне хода)."""
+
+    budget = _deadline_turn()
+    return None if budget is None else max(0.0, budget.deadline_at - _time.monotonic())
+
+
+def turn_deadline_hit() -> bool:
+    """Дедлайн хода не оставил времени хотя бы одному вызову LLM этого хода: ответ хода собран без LLM там, где она
+    была нужна, — `router` отвечает честным оффером оператора, а не правилом."""
+
+    budget = _deadline_turn()
+    return bool(budget is not None and budget.deadline_hits)
+
+
+def turn_load_note() -> dict[str, Any]:
+    """Поля журнала хода о нагрузке LLM: `llm_deadline_s` — дедлайн хода (под выключателем), `llm_deadline_hit` — вызовов,
+    которым не хватило дедлайна, `llm_queue_gaveup` — вызовов, не дождавшихся слота (`queue_timeout` → правила). Нули не
+    пишутся."""
+
+    budget = _TURN_BUDGET.get()
+    if budget is None:
+        return {}
+    out: dict[str, Any] = {}
+    if budget.deadline_at:
+        out["llm_deadline_s"] = round(budget.deadline_at - budget.started_at, 1)
+    if budget.deadline_hits:
+        out["llm_deadline_hit"] = budget.deadline_hits
+    if budget.queue_gaveup:
+        out["llm_queue_gaveup"] = budget.queue_gaveup
+    return out
+
+
+# p95 вызова без очереди — запас, который дедлайн оставляет задаче на ответ: ждать слот можно до «остаток − запас». Журнал
+# хода прода 14–23.10 (вызовы `ok`, без очереди): классификатор темы — p95 12,3 с (233 вызова; ответ ≈ 220 токенов при
+# ~19 ток/с), текст ответа — 8,8 с (14); прочие места (`choose_*`, нормализатор, валидаторы) — не больше 3,5 с. Больше
+# тайм-аута генерации места вызова запас не бывает.
+_P95_S: dict[str, float] = {"classifier": 12.5, "renderer": 9.0}
+_P95_DEFAULT_S = 4.0
+
+
+def _reserve_s(site: str, generation_s: float) -> float:
+    return min(float(generation_s), _P95_S.get(site, _P95_DEFAULT_S))
+
+
+def _deadline_cap(generation_s: float, *, shadow: bool = False) -> tuple[float, bool]:
+    """Тайм-аут генерации под дедлайном хода: не дольше остатка. (тайм-аут, обрезан ли дедлайном)."""
+
+    budget = None if shadow else _deadline_turn()
+    if budget is None:
+        return generation_s, False
+    left = max(0.0, budget.deadline_at - _time.monotonic())
+    return (left, True) if left < generation_s else (generation_s, False)
+
+
+def _note_deadline_cut(exc: BaseException, cut: bool) -> None:
+    budget = _deadline_turn()
+    if cut and budget is not None and isinstance(exc, asyncio.TimeoutError):
+        budget.deadline_hits += 1
 
 
 def turn_decisions_spent() -> int:
@@ -496,26 +647,37 @@ async def generate_structured(
     if _prompt_log_enabled():
         _log_prompt_event("prompt_request", {"site": site, "fmt": schema, "system": system, "prompt": user})
     started_at = _time.monotonic()
+    slot_at: float | None = None
     queue_ms = 0
+    cut = False
     try:
-        async with llm_slot(queue_timeout_ms):
-            queue_ms = int((_time.monotonic() - started_at) * 1000)
-            res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=timeout)
+        async with llm_slot(queue_timeout_ms, reserve_s=_reserve_s(site, timeout), shadow=shadow):
+            slot_at = _time.monotonic()
+            queue_ms = int((slot_at - started_at) * 1000)
+            generation_s, cut = _deadline_cap(timeout, shadow=shadow)
+            res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=generation_s)
     except BaseException as exc:
+        _note_deadline_cut(exc, cut)
         if budget is not None and isinstance(exc, Exception):
             # Модель не ответила — решение не потрачено, секунды тратятся (`finally`): при лежащей LLM лимит хода не
             # «исчерпан», и путь цены отвечает правилами, а не «не нашёл» (решение владельца 26.10).
             budget.calls -= 1
         err = error_detail(exc)
         turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=err, shadow=shadow)
-        if isinstance(exc, _GENERATION_FAILURES) and not shadow:
+        if isinstance(exc, _GENERATION_FAILURES) and not shadow and not cut:
+            # Генерацию оборвал дедлайн хода — это нагрузка (поздно получен слот), а не лежащая модель.
             _BREAKER.failure(_time.monotonic(), breaker_failures, breaker_open_s)
         if isinstance(exc, Exception) and _prompt_log_enabled():
             _log_prompt_event("prompt_error", {"site": site, "error_type": type(exc).__name__, "err": err})
         raise
     finally:
         if budget is not None:
-            budget.spent_s += _time.monotonic() - started_at
+            # Под дедлайном хода ожидание слота секунды решений не тратит: время хода держит дедлайн (решение владельца 27.10 —
+            # отдельные потолки не нужны), секунды решений — время самой модели. Без дедлайна — как было, с очередью.
+            if not budget.deadline_at:
+                budget.spent_s += _time.monotonic() - started_at
+            elif slot_at is not None:
+                budget.spent_s += _time.monotonic() - slot_at
     if not shadow:
         _BREAKER.success()
     text = _extract_response_text(res)
@@ -527,16 +689,47 @@ async def generate_structured(
 
 
 @asynccontextmanager
-async def llm_slot(queue_timeout_ms: int) -> AsyncGenerator[None, None]:
-    timeout_s = max(1.0, float(queue_timeout_ms) / 1000.0)
-    try:
-        await asyncio.wait_for(_SEMAPHORE.acquire(), timeout=timeout_s)
-    except asyncio.TimeoutError as e:
-        raise LLMQueueTimeoutError("llm_queue_timeout") from e
+async def llm_slot(
+    queue_timeout_ms: int, *, reserve_s: float = 0.0, ceiling_s: float | None = None, shadow: bool = False
+) -> AsyncGenerator[None, None]:
+    """Слот LLM на время вызова.
+
+    Без дедлайна хода — как было: очередь по приходу, ждать не дольше `queue_timeout_ms` места вызова (не меньше 1 с).
+    Под дедлайном (`llm_turn_deadline_s`; вызов хода, не тень) `queue_timeout_ms` не читается: ждать можно до «остаток
+    дедлайна − `reserve_s`» (p95 задачи — столько нужно, чтобы успеть ответить), слот — ходу, начатому раньше; не дождался
+    или времени уже нет — `LLMDeadlineError`. `ceiling_s` — свой потолок вызова целиком (классификатор): ждать не дольше него,
+    не дождался — прежний отказ очереди.
+    """
+
+    sem = _SEMAPHORE
+    budget = None if shadow else _TURN_BUDGET.get()
+    if budget is None or not budget.deadline_at:
+        timeout_s = max(1.0, float(queue_timeout_ms) / 1000.0)
+        try:
+            await asyncio.wait_for(sem.acquire(), timeout=timeout_s)
+        except asyncio.TimeoutError as e:
+            if budget is not None:
+                budget.queue_gaveup += 1
+            raise LLMQueueTimeoutError("llm_queue_timeout") from e
+    else:
+        wait_s = budget.deadline_at - _time.monotonic() - max(0.0, reserve_s)
+        if wait_s <= 0:
+            budget.deadline_hits += 1
+            raise LLMDeadlineError("llm_turn_deadline")
+        by_ceiling = ceiling_s is not None and ceiling_s < wait_s
+        acquire = sem.acquire_by(budget.started_at) if hasattr(sem, "acquire_by") else sem.acquire()
+        try:
+            await asyncio.wait_for(acquire, timeout=ceiling_s if by_ceiling else wait_s)
+        except asyncio.TimeoutError as e:
+            budget.queue_gaveup += 1
+            if by_ceiling:
+                raise LLMQueueTimeoutError("llm_queue_timeout") from e
+            budget.deadline_hits += 1
+            raise LLMDeadlineError("llm_turn_deadline") from e
     try:
         yield
     finally:
-        _SEMAPHORE.release()
+        sem.release()
 
 
 async def generate_text(
@@ -577,9 +770,11 @@ async def generate_stream_text(
     started_at = _time.monotonic()
     queue_ms = 0
     usage: dict[str, int] = {}
+    cut = False
     try:
-        async with llm_slot(queue_timeout_ms):
+        async with llm_slot(queue_timeout_ms, reserve_s=_reserve_s(site, max(5, int(timeout_s)))):
             queue_ms = int((_time.monotonic() - started_at) * 1000)
+            generation_s, cut = _deadline_cap(float(max(5, int(timeout_s))))
             stream = await asyncio.wait_for(
                 _OLLAMA_CLIENT.generate(
                     model=model,
@@ -589,7 +784,7 @@ async def generate_stream_text(
                     keep_alive=-1,
                     think=resolved_think,
                 ),
-                timeout=max(5, int(timeout_s)),
+                timeout=generation_s,
             )
             async for chunk in stream:
                 text = _extract_response_text(chunk)
@@ -599,6 +794,7 @@ async def generate_stream_text(
                     yield text
     except BaseException as exc:
         # GeneratorExit — потребитель закрыл поток (бюджет рендера): это не сбой модели.
+        _note_deadline_cut(exc, cut)
         outcome = "closed" if isinstance(exc, GeneratorExit) else _outcome(exc)
         turn_telemetry.note_llm(site, outcome, int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=error_detail(exc))
         raise

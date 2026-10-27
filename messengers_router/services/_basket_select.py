@@ -163,13 +163,21 @@ def _position(fragment: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"service_name": name, "prices": _annotate_price_rows_with_care_context(list(rows)), "fragment": fragment}
 
 
-def _variants(fragment: str, candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
-    """Слабая позиция без выбора LLM (политика сбоя под `turn_parse = on`): (строки с ценой, название без цены).
+def fail_unpriced() -> bool:
+    """`[MESSENGER_ROUTER] basket_fail_unpriced = on`: слабые позиции без выбора LLM — названия без цен и оффер, итога нет
+    (решение владельца 27.10); иное — off (как было)."""
 
-    Кандидаты кода без непрошеных cito/капиллярной/на дому — по одной строке на название, до `variants_max()`:
-    два названия и больше — варианты с полными названиями и ценами; одно — его название без цены (вариант
-    B L-13: одна найденная строка — не «та самая цена»); ни одного — («», «») — «Не распознал».
-    """
+    return str(getattr(_cfg, "MR_BASKET_FAIL_UNPRICED", "off") or "").strip().lower() == "on"
+
+
+def failed_unpriced(positions: Sequence[dict[str, Any]]) -> bool:
+    """Корзина ответила без выбора LLM под `basket_fail_unpriced`: есть позиция с вариантами-названиями (`unpriced` — список)."""
+
+    return any(isinstance(position.get("unpriced"), list) for position in positions)
+
+
+def _variant_rows(fragment: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Кандидаты кода без непрошеных cito/капиллярной/на дому — по одной строке на название, до `variants_max()`."""
 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -179,6 +187,18 @@ def _variants(fragment: str, candidates: list[dict[str, Any]]) -> tuple[list[dic
         if key and key not in seen and len(rows) < limit:
             seen.add(key)
             rows.append(row)
+    return rows
+
+
+def _variants(fragment: str, candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """Слабая позиция без выбора LLM (политика сбоя под `turn_parse = on`): (строки с ценой, название без цены).
+
+    Кандидаты кода без непрошеных cito/капиллярной/на дому — по одной строке на название, до `variants_max()`:
+    два названия и больше — варианты с полными названиями и ценами; одно — его название без цены (вариант
+    B L-13: одна найденная строка — не «та самая цена»); ни одного — («», «») — «Не распознал».
+    """
+
+    rows = _variant_rows(fragment, candidates)
     if len(rows) >= 2:
         return rows, ""
     return [], _row_name(rows[0]) if rows else ""
@@ -297,7 +317,7 @@ def _not_found_label(item: dict[str, Any], fragment: str) -> str:
 
 
 def _positions(
-    items: list[dict[str, Any]], chosen: dict[int, list[dict[str, Any]]], unpriced: dict[int, str] | None = None
+    items: list[dict[str, Any]], chosen: dict[int, list[dict[str, Any]]], unpriced: dict[int, str | list[str]] | None = None
 ) -> tuple[list[dict[str, Any]], list[str]]:
     positions: list[dict[str, Any]] = []
     not_found: list[str] = []
@@ -354,10 +374,23 @@ def _without_repeats(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _settle_weak_as_variants(
     weak: list[tuple[int, str, list[dict[str, Any]]]], chosen: dict[int, list[dict[str, Any]]]
-) -> dict[int, str]:
-    """Политика сбоя под `on`: слабые позиции — варианты кода (`_variants`); названия без цены — по номеру позиции."""
+) -> dict[int, str | list[str]]:
+    """Политика сбоя под `on`: слабые позиции — варианты кода (`_variants`); названия без цены — по номеру позиции.
 
-    unpriced: dict[int, str] = {}
+    Под `basket_fail_unpriced` все варианты — названиями без цен (список: и одно название), строк с ценой у слабой позиции нет:
+    угаданная кодом строка с ценой — дезинформация ценой, а итог по угаданным — вдвойне (решение владельца 27.10; при занятой
+    очереди «Са общий» печатал «Общий белок 190 / Общий анализ мочи 280» и «Итого 1 170–1 500»).
+    """
+
+    unpriced: dict[int, str | list[str]] = {}
+    if fail_unpriced():
+        for index, _fragment, candidates in weak:
+            names = [_row_name(row) for row in _variant_rows(_fragment, candidates)]
+            if names:
+                unpriced[index] = names
+        if unpriced:
+            turn_telemetry.note(basket_fail="unpriced")
+        return unpriced
     for index, fragment, candidates in weak:
         rows, name = _variants(fragment, candidates)
         if rows:

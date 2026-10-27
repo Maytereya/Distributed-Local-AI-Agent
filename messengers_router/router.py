@@ -60,7 +60,7 @@ from .appointment_flow_guard import (
     should_keep_appointment_flow_override,
 )
 from .nlu_pipeline import analyze_with_candidates
-from .llm_mode_policy import RuntimeOptions
+from .llm_mode_policy import RuntimeOptions, fail_offer
 from .planner import build_plan as planner_build_plan, price_of as planner_price_of
 from .executor import execute_plan as executor_execute_plan
 from .response_builder import (
@@ -173,7 +173,8 @@ def _unsupported_catalog_kind(flags: set[str]) -> str | None:
     :return: тип unavailable-кейса или None
     """
 
-    for kind in ("topic_other_offer", "role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist", "unsupported_document_service"):
+    refusals = ("topic_other_offer", "role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist")
+    for kind in (*refusals, "unsupported_document_service", "llm_fail_offer", "role_fail_offer"):  # сбой LLM в узле — последним
         if kind in flags:
             return kind
     return None
@@ -642,6 +643,30 @@ def _maybe_offer_operator_on_reask_limit(
     mark_operator_offer_pending(state, memory)
     turn_telemetry.override(answer_source="reask_limit")
     return ResponseEnvelope(text=expects.reask_limit_text(limited), handoff=False, state_update=response.state_update)
+
+
+# Дедлайн хода истёк (`llm_turn_deadline_s`): LLM не успела там, где была нужна, — честно, без ответа правил с фактом.
+DEADLINE_OFFER_TEXT = "Не успел подготовить точный ответ — чтобы не ошибиться, его даст оператор. Перевести на оператора?"
+
+
+def _offer_operator_on_deadline(response: ResponseEnvelope, state: SessionState, memory: MemoryStore) -> ResponseEnvelope:
+    """Дедлайн хода не оставил времени вызову LLM — ответ хода честный оффер оператора, а не ответ правил
+    (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, решение владельца 27.10: «истёк дедлайн — уточню у оператора, не правило с ценой»).
+
+    Под выключателем `llm_turn_deadline_s` (0 — дедлайна нет, ответ тот же). Перевод на оператора остаётся переводом.
+    Вопросы, которые задал бы заменённый ответ, снимаются — как у предела переспросов: «да» следующего хода — ответ на оффер.
+    """
+
+    if response.handoff or not llm_runtime.turn_deadline_hit():
+        return response
+    from .response_builder import PREPARE_VARIANT_PENDING_KEY
+
+    reset_appointment_runtime_state(state)
+    _clear_catalog_confirm_pending(state, memory)
+    state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+    mark_operator_offer_pending(state, memory)
+    turn_telemetry.override(answer_source="llm_deadline_offer")
+    return ResponseEnvelope(text=DEADLINE_OFFER_TEXT, handoff=False, state_update=response.state_update)
 
 
 def _get_catalog_confirm_pending(state: SessionState) -> dict[str, Any] | None:
@@ -1967,6 +1992,10 @@ def _relabel_test_assist_catalog_hit_as_price(
         return _copy_decision(decision, flags=flags | {"p1_availability_kept"})
     if facet == "where_when":
         return _relabel(decision, "p1_where_when", label="ADDRESS", flags=flags | {"p1_where_when"}, source="guardrail_post")
+    if not facet and "topic_by_llm" in flags and fail_offer("facet"):
+        # Сбой LLM свойства вопроса — не цена «как было» («есть ли ПЦР на аскаридоз?» → цены антител): честный оффер
+        # (`llm_fail_offer` с узлом `facet`; BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4).
+        return _relabel(decision, "p1_facet_fail_offer", label="OTHER", flags=flags | {"llm_fail_offer"})
     if facet == "none" and _p1_facet_none_offer():
         # «Ни одно» от LLM — спрашивают об услуге не цену («со скольки лет берут кровь из вены?», g0577): данных хода на такой
         # вопрос нет — честный оффер оператора тем же путём, что OTHER от LLM, а не цена чужой строки
@@ -4410,6 +4439,7 @@ async def patient_routing_stream(
         )
 
     _note_decision(decision, evidence, ctx.stage_timings)
+    response = _offer_operator_on_deadline(response, state, memory)
     # Предел переспросов (D2.4, под `reask_limit = on`) — раньше анти-залипа: тот не трогает ответ с оффером.
     response = _maybe_offer_operator_on_reask_limit(response, state, memory)
     offered = _maybe_offer_operator_on_repeat(response, state, memory, user_text)

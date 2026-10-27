@@ -21,7 +21,7 @@ from typing import Any, cast
 
 from .llm_mode_policy import RuntimeOptions
 from . import turn_names, turn_telemetry
-from .llm_runtime import LLMQueueTimeoutError, generate_text
+from .llm_runtime import LLMDeadlineError, LLMQueueTimeoutError, generate_text, turn_deadline_left
 from .runtime_config import config as c
 from .doctor_name_port import cached_doctor_fios, resolve_cached_doctor_name_candidate
 from .russian_nlu import normalize_ru, ENTITY_WHITELIST
@@ -272,7 +272,10 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
         log.warning("ollama_classify_failed", exc_info=True)
         # Оборвал потолок, а не сбой раньше него (клиент LLM сам бросил тайм-аут сразу): прошло не меньше потолка; 0,05 с —
         # округление часов цикла событий.
-        if guard and isinstance(exc, (asyncio.TimeoutError, LLMQueueTimeoutError)) and time.monotonic() - started >= deadline_s - 0.05:
+        # Под дедлайном хода потолок — на генерацию; вызов, которому не хватило дедлайна хода, — не срабатывание потолка.
+        left = turn_deadline_left()
+        by_turn = isinstance(exc, LLMDeadlineError) or (left is not None and left <= 0.05)
+        if guard and isinstance(exc, (asyncio.TimeoutError, LLMQueueTimeoutError)) and not by_turn and time.monotonic() - started >= deadline_s - 0.05:
             turn_telemetry.note(nlu_timeout_s=deadline_s)
         return "", sanitize_classifier_json(
             {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_timeout"]}
@@ -641,9 +644,20 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
     return {k: last_entities[k] for k in keep if k in last_entities}
 
 
+def _classifier_compact() -> bool:
+    """`[MESSENGER_ROUTER] classifier_compact = on`: в ответе классификатора — только найденные поля сущностей (шаг 5
+    BUG-2026-10-27-LLM-QUEUE-GIVES-UP); иное — off (как было)."""
+
+    return str(getattr(c, "MR_CLASSIFIER_COMPACT", "off") or "").strip().lower() == "on"
+
+
 def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
     allowed = ", ".join(PATIENT_LABEL_PRIORITY)
     tmpl = load_prompt_text("classifier_patient")
+    if _classifier_compact():
+        # Строка промпта `classifier_compact_note` — сразу после «верни только JSON»: короче ответ, меньше секунд в слоте LLM.
+        head, sep, rest = tmpl.partition("\n\n")
+        tmpl = f"{head}\n{load_prompt_text('classifier_compact_note').strip()}{sep}{rest}"
     return (
         tmpl.replace("<<ALLOWED_LABELS>>", allowed)
         .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))

@@ -196,6 +196,9 @@ class MessengerRouterConfig:
     llm_decision_breaker_failures: int
     llm_decision_breaker_open_s: int
     classifier_timeout_s: int
+    llm_turn_deadline_s: int
+    llm_fail_offer: str
+    classifier_compact: str
     choose_cache_ttl_s: int
     choose_symptom: str
     choose_readiness: str
@@ -209,6 +212,7 @@ class MessengerRouterConfig:
     prepare_by_parse: str
     price_by_parse: str
     strong_family_letter: str
+    basket_fail_unpriced: str
     topic_by_llm: str
     booking_target_slot_llm: str
     button_answer_topic: str
@@ -489,6 +493,24 @@ settings = Settings(
         # генерация — не дольше S секунд; не успел — тот же путь, что при сбое LLM (правило или «LLM недоступна»).
         # 0 (по умолчанию) — как было: генерация до 45 с плюс очередь до 30 с.
         classifier_timeout_s=_get_int("MESSENGER_ROUTER", "classifier_timeout_s", 0, min_value=0, max_value=45),
+        # Дедлайн хода для LLM (решение владельца 27.10: «лучше подождать LLM, чем правила», BUG-2026-10-27-LLM-QUEUE-GIVES-UP):
+        # вызов LLM ждёт слот до «остаток дедлайна − p95 задачи» вместо своих 1,5–3 с очереди, генерация — не дольше остатка;
+        # слоты — начатым ходам первыми; не успел — исход `deadline`, ответ хода — честный оффер оператора, не правило.
+        # Секунды от начала хода (шлюз режет на 60 с). 0 (по умолчанию) — как было. [MESSENGER_ROUTER] llm_turn_deadline_s
+        llm_turn_deadline_s=_get_int("MESSENGER_ROUTER", "llm_turn_deadline_s", 0, min_value=0, max_value=58),
+        # Узлы, где сбой LLM даёт честный оффер оператора, а не ответ правил «как было» (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4;
+        # проверка ответов без LLM 27.10, таблица узлов), через запятую: `address_followup` — реплика после адресного листа (весь
+        # список / «без записи» во всех пунктах); `topic` — ветка `topic_by_llm` (тема правила); `facet` — свойство вопроса П1
+        # (переклейка в цену); `role_pick` — выбор роли врача («есть запись к X», список врачей по слову) — отдельно, на грани
+        # правила ≤ 3 переводов на 1 чужую цену, решение владельца по карточке. Пусто (по умолчанию) — как было.
+        # [MESSENGER_ROUTER] llm_fail_offer
+        llm_fail_offer=_get_str("MESSENGER_ROUTER", "llm_fail_offer", default=""),
+        # Короче ответ LLM-классификатора темы (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 5): строка промпта
+        # `classifier_compact_note` (две локации) — в `entities` только найденные поля. Половина ответов на проде печатала все
+        # ~30 полей шаблона с null (≈ 227 токенов, ≈ 11,6 с против ≈ 70 токенов и 3,4 с). Следствие: правило дарит сущность,
+        # которой LLM не назвала (`nlu_pipeline._merge`: ключ с null дарение блокировал) — как уже у коротких ответов.
+        # off — как было. [MESSENGER_ROUTER] classifier_compact
+        classifier_compact=_get_enum("MESSENGER_ROUTER", "classifier_compact", default="off", allowed={"off", "on"}),
         # Кэш внятных ответов модуля выбора (ход (в), L-12): секунд жизни; сбой и мусор не кэшируются.
         # Коротко — ошибка модели не становится ответом всем на часы; 0 — без кэша (стенд меряет без него).
         choose_cache_ttl_s=_get_int("MESSENGER_ROUTER", "choose_cache_ttl_s", 1800, min_value=0, max_value=86400),
@@ -651,6 +673,10 @@ settings = Settings(
         # названная другой буквой того же семейства, не сильная — её выбирает LLM. Семейства — из названий прайса.
         # off — как было. [MESSENGER_ROUTER] strong_family_letter
         strong_family_letter=_get_enum("MESSENGER_ROUTER", "strong_family_letter", default="off", allowed={"off", "on"}),
+        # Корзина при сбое выбора LLM (решение владельца 27.10, узел 7 проверки ответов без LLM; BUG-2026-10-27-LLM-QUEUE-GIVES-UP,
+        # шаг 3): слабые позиции — варианты кода **названиями без цен** и оффер оператора, «Итого» нет; сильные (по данным) — с
+        # ценой, как были. off — как было: два варианта и больше — с ценами и в итоге. [MESSENGER_ROUTER] basket_fail_unpriced
+        basket_fail_unpriced=_get_enum("MESSENGER_ROUTER", "basket_fail_unpriced", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -914,6 +940,9 @@ MR_LLM_DECISION_TURN_SECONDS = settings.messenger_router.llm_decision_turn_secon
 MR_LLM_DECISION_BREAKER_FAILURES = settings.messenger_router.llm_decision_breaker_failures
 MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_open_s
 MR_CLASSIFIER_TIMEOUT_S = settings.messenger_router.classifier_timeout_s
+MR_LLM_TURN_DEADLINE_S = settings.messenger_router.llm_turn_deadline_s
+MR_LLM_FAIL_OFFER = settings.messenger_router.llm_fail_offer
+MR_CLASSIFIER_COMPACT = settings.messenger_router.classifier_compact
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
@@ -927,6 +956,7 @@ MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_STRONG_FAMILY_LETTER = settings.messenger_router.strong_family_letter
+MR_BASKET_FAIL_UNPRICED = settings.messenger_router.basket_fail_unpriced
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
 MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic

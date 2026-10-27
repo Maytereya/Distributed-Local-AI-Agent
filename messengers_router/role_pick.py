@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import llm_runtime, turn_telemetry
 from .choice import Option, Status, Task, choose
+from .llm_mode_policy import fail_offer
 from .services._role_catalog import RoleCatalog, _hit, _stem, _tokens, build_role_catalog
 from .services._symptom_specialists import in_region, region_doctors
 
@@ -151,6 +152,11 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
     elif llm == "qualifier":
         flags |= {"role_qualifier"}
         acted = "qualifier"
+    elif llm in (Status.UNAVAILABLE.value, Status.INVALID.value) and fail_offer("role_pick"):
+        # Сбой LLM — не «как было» («есть запись к X», список врачей по слову при «по ДМС», «ребёнку 12 лет»): подобрать врача
+        # поможет администратор (`llm_fail_offer` с узлом `role_pick`; BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4).
+        flags |= {"role_fail_offer"}
+        acted = "fail_offer"
     turn_telemetry.note(**fields, role_acted=acted or "none")
     if not acted:
         # Решение роли ход не изменило — лимит решений хода оно не тратит (как висящий вопрос, решение владельца Q5 18.10):
