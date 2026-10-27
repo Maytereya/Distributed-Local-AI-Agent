@@ -20,6 +20,7 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import is_spans
 from tests.test_price_one_or_many_class import _DEPLOY, CASES, _OracleLLM
 from tests.test_price_turns_golden import DIALOGS, mini_prod_world, run_dialog  # noqa: F401 — фикстура модуля
 from tests.test_turn_phrases import TRUE_CUT
@@ -47,7 +48,9 @@ class _PhrasesOracle(_OracleLLM):
         self.phrase_calls = 0
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
-        if _PHRASES_MARK not in (system or ""):
+        if is_spans(prompt):
+            self.phrase_calls += 1  # разметка слов `turn_spans` (прод с деплоя 17) — те же фразы разреза
+        if _PHRASES_MARK not in (system or "") or is_spans(prompt):
             return await super().generate(prompt=prompt, system=system, **kwargs)
         self.phrase_calls += 1
         lines = (line.partition(". ") for line in prompt.splitlines())
@@ -84,16 +87,18 @@ def test_parse_writes_fields_without_patient_text(mini_prod_world, monkeypatch):
     _deploy(monkeypatch)
     _turn, row, oracle = _class_turn("list_caps_run_on_priced", mini_prod_world, monkeypatch)
     assert oracle.phrase_calls == 1
+    # Разметка слов `turn_spans` (прод с деплоя 17): варианты разбора — слова реплики («сколько стоит ФЕРРИТИН ГЛЮКОЗА
+    # ХОЛЕСТЕРОЛ» — 5), а не окна генератора (было 4).
     assert {key: row[key] for key in _PARSE_FIELDS if key != "tu_parse_ms"} == {
         "tu_parse_status": "picked",
         "tu_parse_src": "llm",
         "tu_parse_n": 3,
-        "tu_parse_cands": 4,
+        "tu_parse_cands": 5,
     }
     assert isinstance(row["tu_parse_ms"], int)
-    [entry] = [entry for entry in row["choose"] if entry["task"] == "turn_phrases"]
-    assert (entry["status"], entry["options"], bool(entry.get("shadow"))) == ("picked", 4, False)
-    assert not any(call.get("shadow") for call in row["llm"] if call["site"] == "choose_turn_phrases")
+    [entry] = [entry for entry in row["choose"] if entry["task"] == "turn_spans"]
+    assert (entry["status"], entry["options"], bool(entry.get("shadow"))) == ("picked", 5, False)
+    assert not any(call.get("shadow") for call in row["llm"] if call["site"] == "turn_spans")
     dumped = json.dumps(row, ensure_ascii=False).lower()
     assert not any(word in dumped for word in ("ферритин", "глюкоза", "холестерол"))
 
@@ -128,5 +133,5 @@ def test_spends_at_most_two_decisions(name, mini_prod_world, monkeypatch):  # no
     search = [decision for decision in acting if decision[0] != "basket_total"]
     assert len(search) <= 2 and len(acting) - len(search) <= 1, acting
     if oracle.phrase_calls:
-        assert acting[0] == ("turn_phrases", "picked")  # выбор фраз — первое решение хода, из его бюджета
+        assert acting[0] == ("turn_spans", "picked")  # разметка фраз — первое решение хода, из его бюджета
     assert not any(entry.get("shadow") for entry in row.get("choose") or [])

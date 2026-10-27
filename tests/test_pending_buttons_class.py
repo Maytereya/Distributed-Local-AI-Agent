@@ -24,6 +24,7 @@ from evalbench import world as ev_world
 from messengers_router import choice, expects, llm_runtime, pending_answer
 from messengers_router.policies import handoff_message
 from messengers_router.router import TEST_RESULT_DATA_HINT_TEXT
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_booking_slots_by_meaning import _LLM, booking_world  # noqa: F401 — booking_world — фикстура
 from tests.test_price_turns_golden import mini_prod_world, synonym_fork  # noqa: F401 — фикстуры
 
@@ -115,11 +116,15 @@ def test_slot_question_of_a_button_is_a_free_answer_expectation(button, mini_pro
 
 @pytest.mark.parametrize("reply", ["колоноскопия с наркозом", "колоноскопия во сне", "колоноскопию под наркозом"])
 def test_procedure_with_modifier_gets_the_memo_variant_at_once(reply, memo_services, monkeypatch):
+    """Подготовка читает разбор реплики (`prepare_by_parse = on`, прод с деплоя 17): без LLM разметки — «Уточните название».
+    Разметка — как у живой модели: уточнение «с наркозом» / «во сне» — часть названия услуги (правило 3 промпта `turn_spans`)."""
+
     from tests.test_prepare_kb_memo_variants import _WITH, _WITHOUT
 
+    keep_llm_breaker_closed(monkeypatch)  # подделка отвечает не на все места: на проде LLM либо отвечает, либо лежит целиком
     llm = _LLM({_FREE_MARK: _free("answer")})
-    on = _dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, reply], switches=_ON, llm=llm)[-1]
-    off = _dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, reply], switches=_OFF, llm=_LLM({}))[-1]
+    on = _dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, reply], switches=_ON, llm=SpansOracle((reply,), inner=llm))[-1]
+    off = _dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, reply], switches=_OFF, llm=SpansOracle((reply,), inner=_LLM({})))[-1]
 
     assert off["text"].startswith(_PREPARE_REASK), off  # как было: переспрос
     assert llm.calls == [_FREE_MARK]

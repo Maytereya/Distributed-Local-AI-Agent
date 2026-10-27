@@ -31,6 +31,7 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import is_spans, spans_response
 from tests.test_price_one_or_many_class import _priced_sections
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
@@ -41,8 +42,9 @@ _FOLLOW_UPS = ("а сколько?", "да", "2")
 
 
 class _Oracle:
-    """Выбор фраз — ровно `phrases`; выбор строк (корзина, цена) — строки, чьё название начинается с одного из
-    `rows`; прочие места — «недоступна»."""
+    """Выбор фраз — ровно `phrases` (и старым промптом выбора фраз, и разметкой слов `turn_spans` — прод с деплоя 17,
+    `tests/spans_oracle.py`); выбор строк (корзина, цена) — строки, чьё название начинается с одного из `rows`; прочие
+    места — «недоступна»."""
 
     def __init__(self, phrases: tuple[str, ...], rows: tuple[str, ...] = ()) -> None:
         self.phrases = {_normalise_catalog_text(text) for text in phrases}
@@ -53,6 +55,9 @@ class _Oracle:
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
         options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        if is_spans(prompt):
+            self.asked.append("phrases")
+            return spans_response(prompt, sorted(self.phrases, key=lambda text: -len(text.split())))
         if _PHRASES_MARK in seen:
             self.asked.append("phrases")
             picks = [n for n, text in options if _normalise_catalog_text(text.strip("«»")) in self.phrases]
@@ -95,6 +100,10 @@ def _assert_follow_up_stays_on_what_was_shown(first: dict, second: dict) -> None
 
 # --------------------------------------------------------------------------- п. 1: гард П2 — остаток после резолвера
 
+# При лежащей LLM (`down`) разметки нет: цена — только реплике-названию, иначе «Уточните название» (`price_by_parse = on`, прод с
+# 26.10; решение 22.10 (а), политика 27.10) — цены ферритина и железа по буквам ушли: нейтрально по принципам, хуже по пользе.
+_CLARIFY = "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость."
+
 _RESOLVED = "сколько стоит ферритин, лактозная непереносимость и сывороточное железо"
 _RESOLVED_ORACLE = (("ферритин", "лактозная непереносимость", "сывороточное железо"), ("Непереносимость лактозы", "Железо в сыворотке"))
 
@@ -108,6 +117,9 @@ def test_weak_phrase_the_resolver_knows_gets_candidates(llm, mini_prod_world, mo
     oracle = _Oracle(*_RESOLVED_ORACLE) if llm == "oracle" else None
     [turn], [row] = _dialog([_RESOLVED], mini_prod_world, monkeypatch, f"t3-p2-resolved-{llm}", oracle)
     assert row["tu_parse_status"] == ("picked" if llm == "oracle" else "unavailable")
+    if llm == "down":
+        assert turn["text"] == _CLARIFY
+        return
     assert "Не распознал" not in turn["text"], turn["text"]
     assert "Ферритин — 530" in turn["text"] and "Железо в сыворотке — 240" in turn["text"]
     assert "Непереносимость лактозы" in turn["text"]
@@ -122,6 +134,9 @@ def test_phrase_with_a_qualifier_the_price_lacks_stays_unrecognized(llm, mini_pr
 
     oracle = _Oracle(("ферритин", "приём терапевта по ОМС"), ("Прием",)) if llm == "oracle" else None
     [turn], [row] = _dialog(["сколько стоит ферритин и приём терапевта по ОМС"], mini_prod_world, monkeypatch, f"t3-p2-oms-{llm}", oracle)
+    if llm == "down":
+        assert turn["text"] == _CLARIFY  # без цены вовсе — и платных приёмов тоже нет
+        return
     assert "Ферритин — 530" in turn["text"] and "Не распознал: приём терапевта по ОМС" in turn["text"]
     assert "врача-терапевта —" not in turn["text"]
 
@@ -199,44 +214,16 @@ _SINGLE = "Сколько стоит и когда готов результат
 _URINE = "Посев мочи с идентификацией культур — 1 050"
 
 
-def _slot(parse, call, monkeypatch):
-    from tests.test_turn_parse_readers import _run_with
-
-    _deploy(monkeypatch)
-    return _run_with(monkeypatch, parse, call)
-
-
-def _picked_one(reply: str, text: str):
-    from messengers_router import turn_parse
-    from messengers_router.choice import Strength
-
-    start = reply.index(text)
-    phrase = turn_parse.ParsedPhrase(text=text, start=start, end=start + len(text), strength=Strength.WEAK)
-    return turn_parse.PhraseParse(reply=reply, status="picked", source="llm", items=(phrase,))
-
-
 @pytest.mark.xfail(strict=True, reason="T3 п. 4 отменён: путь одной услуги ищет по реплике; слова вопроса топят фразу («Уточните название») — класс g0609 открыт")
 def test_one_weak_phrase_in_a_question_is_found(mini_prod_world, monkeypatch):  # noqa: F811
     [turn], _rows = _dialog([_SINGLE], mini_prod_world, monkeypatch, "t3-single-phrase", _Oracle(("посева мочи",)))
     assert _URINE in turn["text"], turn["text"]
 
 
-@pytest.mark.parametrize("reader", ["price_info", "service_bundle_info"])
-def test_a_too_short_phrase_does_not_replace_what_the_reply_finds(reader, mini_prod_world, monkeypatch):  # noqa: F811
-    """Инвариант, ради которого п. 4 отменён: выбранная LLM фраза короче услуги («посев» из «посев мочи с
-    идентификацией культур»; g0512 — «удаление» из «удаление паховой грыжи») не уводит путь одной услуги к
-    чужим строкам (посев на хламидии, удаление зуба)."""
-
-    from messengers_router.services import Services
-
-    reply = "Сколько стоит у вас посев мочи с идентификацией культур"
-    entities = {"__price_question": True, "__runtime_llm_mode": "hybrid"}
-    with ev_world.FrozenWorld(mini_prod_world, "day"):
-        services = Services()
-        out = _slot(_picked_one(reply, "посев"), lambda: getattr(services, reader)(reply, dict(entities)), monkeypatch)
-    rows = out.get("prices") or out.get("retail_prices") or out.get("family_variants") or []
-    names = {row["serviceName"] for row in rows}
-    assert "Посев мочи с идентификацией культур" in names and "Посев на хламидии" not in names, out
+# Тест «короткая фраза LLM не заменяет того, что находит реплика» (п. 4: путь одной услуги ищет по реплике) удалён при
+# перевороте умолчаний на прод (STEP-2026-10-27-DEFAULTS-PROD): под `price_by_parse = on` (деплой 18; дизайн
+# DESIGN-2026-10-25-PRICE-STAGE2, «Ф») резолвер и кандидат розницы ищут по фразе разбора, не по реплике. Риск короткой фразы
+# держит выбор строки: LLM видит всё сообщение пациента; без неё — названия без цен.
 
 
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
@@ -265,7 +252,9 @@ def test_unrecognized_still_names_a_service_the_price_lacks(mini_prod_world, mon
     «Не распознал» (S3: не замалчиваем)."""
 
     reply = "Стоимость анализов: ферритин, глюкоза, спирометрия"
-    [turn], _rows = _dialog([reply], mini_prod_world, monkeypatch, "t3-wrapper-kept", _Oracle(("ферритин", "глюкоза")))
+    # Разметка прода (`turn_spans`): услугу размечает LLM — «спирометрия» фразой; фрагмент по разделителям вне разметки (генератор
+    # пути off) «Не распознал» больше не даёт — что LLM не отметила, то она сочла не услугой.
+    [turn], _rows = _dialog([reply], mini_prod_world, monkeypatch, "t3-wrapper-kept", _Oracle(("ферритин", "глюкоза", "спирометрия")))
     assert "Ферритин — 530" in turn["text"] and "Не распознал: спирометрия." in turn["text"], turn["text"]
 
 

@@ -24,6 +24,11 @@
 Ходы — через обработчик эндпоинта (`messenger_generate_once`) в мире стенда на мини-проде (`FrozenWorld`: день, сеть
 закрыта, LLM гейта недоступна), диалоги из двух-трёх ходов; наборы выключателей `default` и `deploy`, для бага 2 —
 ещё `next` (как в `test_l14_two_turn_consumers.py`).
+
+Баг 2 — на пути прода (переворот умолчаний 27.10, STEP-2026-10-27-DEFAULTS-PROD: `turn_spans_llm`, `price_by_parse`,
+`turn_understanding_one` = on). Без LLM цена там — «Уточните название» (решение 22.10, политика 27.10), и до списка с
+подсказкой «все» диалог не доходил: фикс L-14 и BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD гейт на пути прода не проверял. Первому
+ходу — LLM пути прода (`_ProdLLM`): разметка называет услугу, выбор строки признаёт строки этой услуги, как живая модель.
 """
 
 from __future__ import annotations
@@ -36,10 +41,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from ollama import GenerateResponse
 
 from evalbench import world as ev_world
-from messengers_router import expects
-from messengers_router import shown_context
+from messengers_router import expects, llm_runtime, shown_context
+from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import is_spans, keep_llm_breaker_closed, spans_response
 from tests.test_l14_two_turn_consumers import _SETS as _L14_SETS
 from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
@@ -49,8 +56,57 @@ _SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
 _ALL_SETS = {**_SETS, "next": _L14_SETS["next"]}
 
 
-def _play(turns: list[str], config: str, monkeypatch, world_dir: Path, session: str) -> list[dict[str, Any]]:
-    """Диалог через обработчик эндпоинта в одной сессии; после хода — ответ, решение и состояние сессии."""
+_PRICE_MARK = "ответить пациенту на вопрос о цене"
+
+
+class _ProdLLM:
+    """LLM пути прода для диалога о цене: разметка реплики (`turn_spans`) — фразы-услуги `phrases` (`tests/spans_oracle.py`:
+    фразы, которой в реплике нет, разметка не отмечает — «все», «а как подготовиться?», «1» услуг не называют); выбор строки
+    цены — строки этой услуги, как выбрала бы живая модель: `rows_of` — строка (её слова есть в названии) или набор точных
+    названий; прочие места — `inner` (None — «недоступна», как в мире гейта).
+
+    Так на проде получается список с подсказкой «все» (прогоны `d18p2_*`: ОАК g0022, g0031): модель признаёт строки ОАК,
+    базовые варианты (`_prefer_base_variants`: без Cito и капиллярной) совпадают с видимыми строками правил — остаётся ответ
+    правил, две строки и «найдено ещё N вариантов». `calls` — места, куда пришли запросы.
+    """
+
+    def __init__(self, phrases: tuple[str, ...], rows_of: str | frozenset[str], inner: Any = None) -> None:
+        self.phrases, self.inner = tuple(phrases), inner
+        self.rows_of = _normalise_catalog_text(rows_of) if isinstance(rows_of, str) else frozenset(map(_normalise_catalog_text, rows_of))
+        self.calls: list[str] = []
+
+    def _is_row(self, name: str) -> bool:
+        norm = _normalise_catalog_text(name)
+        return self.rows_of in norm if isinstance(self.rows_of, str) else norm in self.rows_of
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        if is_spans(prompt):
+            self.calls.append("spans")
+            return spans_response(prompt, self.phrases)
+        if _PRICE_MARK in f"{system}\n\n{prompt}":
+            self.calls.append("price")
+            lines = (line.partition(". ") for line in prompt.splitlines())
+            options = [(int(head), rest) for head, dot, rest in lines if dot and head.isdigit()]
+            picks = [n for n, text in options if self._is_row(text.rsplit(" — ", 1)[0])]
+            if system is None:
+                answer: dict[str, Any] = {"match": picks, "search_terms": []}
+            else:
+                answer = {"picks": picks, "reason": "none" if picks else "other_service", "search_terms": []}
+            return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
+        if self.inner is None:
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        self.calls.append("inner")
+        return await self.inner.generate(prompt=prompt, system=system, **kwargs)
+
+
+def _play(
+    turns: list[str], config: str, monkeypatch, world_dir: Path, session: str, llm: Any = None
+) -> list[dict[str, Any]]:
+    """Диалог через обработчик эндпоинта в одной сессии; после хода — ответ, решение и состояние сессии.
+
+    :param llm: подделка LLM на весь диалог (None — LLM гейта недоступна); с ней предохранитель LLM не размыкается — подделка
+        отвечает не на все места, а на проде LLM либо отвечает, либо лежит целиком
+    """
 
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
@@ -59,6 +115,10 @@ def _play(turns: list[str], config: str, monkeypatch, world_dir: Path, session: 
 
     for key, value in _ALL_SETS[config].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
+    if llm is not None:
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+        monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)  # решения не делятся между ходами, как на стенде
+        keep_llm_breaker_closed(monkeypatch)
 
     with ev_world.FrozenWorld(world_dir, "day") as world:
 
@@ -152,11 +212,24 @@ def test_cancel_existing_goes_to_operator(phrase, pick, config, mini_prod_world,
 # --------------------------------------------------------------------------- 2. «все» как услуга каталога
 
 _FAMILY_QUESTION = "сколько стоит общий анализ крови"
+_FAMILY_PHRASE = "общий анализ крови"  # услуга, которую называет реплика, — и слова в названии каждой её строки прайса
 _PREPARE = "а как подготовиться?"
 _QUERY = re.compile(r"По запросу «(?P<query>[^»]+)»")
 _NUMBERED = re.compile(r"^\d+\. (?P<name>.+?) — \d[\d\s]* руб", re.M)
 _HINT = re.compile(r"Чтобы показать их, напишите: \"(?P<word>[^\"]+)\"")
 _LEAKED = "УЗИ периферических лимфоузлов комплексно - все зоны (детское)"
+
+
+def _family_llm(inner: Any = None) -> _ProdLLM:
+    """LLM пути прода для диалога о семействе ОАК: разметка называет «общий анализ крови», выбор строки признаёт строки ОАК."""
+
+    return _ProdLLM((_FAMILY_PHRASE,), _FAMILY_PHRASE, inner)
+
+
+def _same_service(names: list[str] | set[str]) -> bool:
+    """Все строки — той же услуги, что спросил пациент (решение владельца 26.10: полный список — только строки той же услуги)."""
+
+    return all(_FAMILY_PHRASE in _normalise_catalog_text(name) for name in names)
 
 
 def _show_all_dialog(
@@ -168,13 +241,15 @@ def _show_all_dialog(
     """
 
     turns = [_FAMILY_QUESTION, reply, *last]
-    record = _play(turns, config, monkeypatch, world_dir, f"show-all-{config}-{abs(hash(tuple(turns)))}")
+    record = _play(turns, config, monkeypatch, world_dir, f"show-all-{config}-{abs(hash(tuple(turns)))}", llm=_family_llm())
     first, second = record[:2]
     hint = _HINT.search(first["text"])
     assert hint and hint.group("word") == "все", first["text"]
     shown = {m.group("name") for m in _NUMBERED.finditer(first["text"])} | {m.group("name") for m in _NUMBERED.finditer(second["text"])}
     assert second["label"] == "PRICE" and "rule_price_family_show_all" in second["flags"]
-    assert len(_NUMBERED.findall(second["text"])) > len(_NUMBERED.findall(first["text"]))  # раскрыт весь список
+    expanded = _NUMBERED.findall(second["text"])
+    assert len(expanded) > len(_NUMBERED.findall(first["text"]))  # раскрыт весь список
+    assert _same_service(expanded), expanded  # раскрыта только показанная услуга, чужих строк нет
     return record, shown, _QUERY.search(first["text"]).group("query")
 
 

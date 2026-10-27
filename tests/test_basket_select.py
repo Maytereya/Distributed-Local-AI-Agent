@@ -10,6 +10,10 @@
   показываются; позиция без выбора — честное «Не распознал», а не цена по буквам;
 - сбой LLM: сильные позиции — их строки по данным, слабые — строки корзины правил; сильных нет —
   корзина правил целиком; off — прежняя корзина правил.
+
+Разметка хода (`turn_spans_llm = on`, прод с 24.10) — оракул `tests/spans_oracle.py` с позициями, которые назвал пациент: при
+лежащей целиком LLM список внутри вопроса — «Уточните название» (`price_by_parse = on`, политика 27.10), до корзины ход не доходит;
+тогда ответ — общий эталон (`test_default_is_the_golden_basket`).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_price_turns_golden import FIXTURE, _golden, run_dialog
 
 _BASKET_MARK = "ответить на вопрос о ценах нескольких услуг"
@@ -53,9 +58,12 @@ class _BasketLLM:
         return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)
 
 
-def _basket(monkeypatch, llm: _BasketLLM | None = None) -> None:
+def _basket(monkeypatch, llm: _BasketLLM | None = None, phrases: tuple[str, ...] = ()) -> None:
+    """Разметка — позиции `phrases`, выбор строк корзины — `llm`."""
+
     if llm is not None:
-        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(phrases, inner=llm))
+        keep_llm_breaker_closed(monkeypatch)
 
 
 def _ask(question: str, session: str, world_root) -> str:
@@ -66,7 +74,7 @@ def _ask(question: str, session: str, world_root) -> str:
 
 def test_strong_positions_show_only_their_rows_without_llm(mini_prod_world, monkeypatch):
     llm = _BasketLLM()
-    _basket(monkeypatch, llm)
+    _basket(monkeypatch, llm, ("ферритин", "глюкоза"))
     text = _ask("сколько стоит ферритин и глюкоза", "basket-strong", mini_prod_world)
     assert "Ферритин — 530" in text and "Глюкоза — 190" in text
     assert "в моче" not in text
@@ -75,7 +83,7 @@ def test_strong_positions_show_only_their_rows_without_llm(mini_prod_world, monk
 
 def test_weak_position_shows_only_the_rows_the_model_picked(mini_prod_world, monkeypatch):
     llm = _BasketLLM(wanted=("ТТГ (TSH)",))
-    _basket(monkeypatch, llm)
+    _basket(monkeypatch, llm, ("ттг", "ферритин"))
     text = _ask("сколько стоит ттг и ферритин", "basket-weak", mini_prod_world)
     assert "ТТГ (TSH) тиреотропный гормон — 400" in text and "Ферритин — 530" in text
     assert "Антитела к рецепторам ТТГ" not in text
@@ -83,7 +91,7 @@ def test_weak_position_shows_only_the_rows_the_model_picked(mini_prod_world, mon
 
 
 def test_position_the_model_rejected_is_named_not_priced_by_letters(mini_prod_world, monkeypatch):
-    _basket(monkeypatch, _BasketLLM(wanted=()))
+    _basket(monkeypatch, _BasketLLM(wanted=()), ("ттг", "ферритин"))
     text = _ask("сколько стоит ттг и ферритин", "basket-reject", mini_prod_world)
     assert "Ферритин — 530" in text
     assert "ТТГ (TSH) тиреотропный гормон — 400" not in text and "Не распознал: ттг" in text
@@ -92,7 +100,7 @@ def test_position_the_model_rejected_is_named_not_priced_by_letters(mini_prod_wo
 def test_llm_failure_keeps_strong_positions_by_data(mini_prod_world, monkeypatch):
     # Разбор реплики — единственный режим (T7 шаг 3б): при сбое LLM сильная позиция — её строки по данным; прежней
     # корзины правил со второй строкой «на всякий случай» («Глюкоза в моче») нет.
-    _basket(monkeypatch, _BasketLLM(fail=True))
+    _basket(monkeypatch, _BasketLLM(fail=True), ("ттг", "глюкоза"))
     after = _ask("сколько стоит ттг и глюкоза", "basket-fail2", mini_prod_world)
     assert "Глюкоза — 190" in after and "Глюкоза в моче" not in after
     assert "ТТГ (TSH) тиреотропный гормон — 400" in after  # слабая позиция — варианты кода

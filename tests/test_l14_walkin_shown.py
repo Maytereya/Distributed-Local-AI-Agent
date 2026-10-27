@@ -26,7 +26,7 @@ import asyncio
 import pytest
 
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_l14_two_turn_consumers import SHOWN_CONFIGS, _QUOTED, _SETS, _play, _priced
+from tests.test_l14_two_turn_consumers import SHOWN_CONFIGS, _QUOTED, _SETS, _PickRows, _play, _priced, _use_llm
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 _HBA1C = "Гликированный гемоглобин  (HbA1C, Glycated Hemoglobin)"
@@ -45,7 +45,9 @@ def _no_class_or_question_words(text: str) -> bool:
 
 # (ответ X, показанная услуга, наборы). Слабые для данных фразы («гликированный гемоглобин», «ттг») строку получают только
 # выбором LLM (политика L-13 и одно определение сильного — единственные с 16.10, T7 шаги 1–2), а LLM гейта недоступна:
-# ответ X услуги не показывает, и вопросу walk-in не о чем быть — пары строятся на сильных по данным МИС услугах.
+# ответ X услуги не показывает, и вопросу walk-in не о чем быть — пары строятся на сильных по данным МИС услугах. Путь прода
+# (`turn_spans_llm`, `price_by_parse` — on с 24–26.10): фраза услуги — разметка LLM (`_play(spans=…)`); без неё «сколько стоит
+# ферритин» — «Уточните…» (название внутри вопроса без LLM не угадываем, решения владельца 22.10 (а) и 27.10).
 _ONE_SHOWN = (
     ("сколько стоит ферритин", "Ферритин", SHOWN_CONFIGS),  # цена: одна строка
     ("сколько готовится ферритин", "Ферритин", SHOWN_CONFIGS),  # срок из МИС называет одну услугу
@@ -64,7 +66,7 @@ def test_walkin_question_keeps_the_one_shown_service(first, service, ask, config
     """Два хода и третий через эндпоинт: после вопроса walk-in в контексте — показанная услуга, а не класс;
     «сколько стоит?» следом — её цена, без «анализы» и слов вопроса в заголовке."""
 
-    shown, walkin, again = _play([first, ask, "сколько стоит?"], f"walkin-one-{first}-{ask}", mini_prod_world, monkeypatch, config)
+    shown, walkin, again = _play([first, ask, "сколько стоит?"], f"walkin-one-{first}-{ask}", mini_prod_world, monkeypatch, config, spans=("ферритин",))
     assert shown.shown == [service] and shown.service_name == service  # прошлый ответ назвал одну услугу
     assert walkin.label == "ADDRESS"
     assert (walkin.service_name, walkin.shown) == (service, [service]), walkin.text
@@ -75,18 +77,25 @@ def test_walkin_question_keeps_the_one_shown_service(first, service, ask, config
 # --------------------------------------------------------------------------- несколько показанных строк
 
 
+# (ответ X, фраза разметки, слово строк, которые выбирает LLM). Путь прода: слабая фраза получает строки только выбором LLM;
+# подделка выбора берёт строки со словом — те же, что прежде показывали правила (два варианта ОАК и «ещё 3»; обе строки «ТТГ»).
+_SEVERAL = {"сколько стоит оак": ("оак", "Общий анализ крови"), "сколько стоит ТТГ": ("ТТГ", "ТТГ")}
+
+
 @pytest.mark.parametrize(
     ("first", "config"),
     [
         # «витамин b12» с 16.10 — сильное по данным (одна строка «Витамин B12»), не семейный список правил (T7 шаг 2).
-        *((first, config) for first in ("сколько стоит оак", "сколько стоит ТТГ") for config in SHOWN_CONFIGS),
+        *((first, config) for first in _SEVERAL for config in SHOWN_CONFIGS),
     ],
 )
 def test_walkin_question_after_several_shown_rows_keeps_them(first, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Показано несколько строк: класс в `service_name` не подставляется (остаётся услуга контекста до хода — она
     среди показанных), показанное сохраняется; «сколько стоит?» — те же строки под прежним названием, не «анализы»."""
 
-    price, walkin, again = _play([first, "а где сдать?", "сколько стоит?"], f"walkin-several-{first}", mini_prod_world, monkeypatch, config)
+    phrase, word = _SEVERAL[first]
+    turns = [first, "а где сдать?", "сколько стоит?"]
+    price, walkin, again = _play(turns, f"walkin-several-{first}", mini_prod_world, monkeypatch, config, llm=_PickRows(word), spans=(phrase,))
     assert len(price.shown) >= 2 and price.service_name in price.shown
     assert walkin.label == "ADDRESS"
     assert (walkin.service_name, walkin.shown) == (price.service_name, price.shown), walkin.text
@@ -97,7 +106,7 @@ def test_walkin_question_after_several_shown_rows_keeps_them(first, config, mini
 # --------------------------------------------------------------------------- ответ адреса и граница выключателя
 
 
-def _gate_world_dialog(turns: list[str], config: str, monkeypatch) -> list[tuple[str, dict]]:
+def _gate_world_dialog(turns: list[str], config: str, monkeypatch, spans: tuple[str, ...] | None = None) -> list[tuple[str, dict]]:
     """Диалог в мире гейта по умолчанию: `/regions` пуст, филиалы — из среза/seed, поэтому ответ адреса — настоящий
     («Анализы выполняются без записи…» и пункты сдачи), а не «Не нашёл филиалы» мини-прода."""
 
@@ -109,6 +118,7 @@ def _gate_world_dialog(turns: list[str], config: str, monkeypatch) -> list[tuple
 
     for key, value in _SETS[config].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
+    _use_llm(monkeypatch, None, spans)  # путь прода: фразы-услуги — разметка LLM
     services = Services()
     services.ensure_background_refresh_started = lambda: None
     state, memory = SessionState(session_id=f"walkin-shown-gate-{config}"), MemoryStore()
@@ -128,7 +138,7 @@ def test_walk_in_answer_with_branches_is_unchanged_and_the_context_is_shown(monk
     контекст после него — показанная услуга, а не класс."""
 
     turns = ["сколько стоит ферритин", "а где сдать?"]
-    (_, on_price), (on_text, on_state) = _gate_world_dialog(turns, "deploy", monkeypatch)
+    (_, on_price), (on_text, on_state) = _gate_world_dialog(turns, "deploy", monkeypatch, spans=("ферритин",))
     assert "без записи" in on_text
     assert on_price.get("_shown_services") and on_state.get("service_name") == on_price.get("service_name")
     assert on_state.get("_shown_services") == on_price.get("_shown_services")
@@ -145,6 +155,7 @@ def test_menu_button_class_is_left_as_is(mini_prod_world, monkeypatch):  # noqa:
 
     for key, value in _SETS["deploy"].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
+    _use_llm(monkeypatch, None, ("ферритин",))  # путь прода: фраза первого хода — разметка LLM
     button = ("menu.tests.booking_needed", GATEWAY_V1_TITLES["menu.tests.booking_needed"])
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         price, pressed = run_dialog(["сколько стоит ферритин", button], "walkin-button-shown")
@@ -160,19 +171,19 @@ _UZI = "Ультразвуковое исследование органов б�
 
 @pytest.mark.parametrize("config", SHOWN_CONFIGS)
 @pytest.mark.parametrize(
-    ("ask", "own"),
+    ("ask", "own", "phrase"),
     [
-        ("а где сделать экг?", "ЭКГ"),  # правило адреса: процедура названа в реплике
-        ("где сделать узи брюшной полости?", _UZI),  # то же, услугу нашёл каталог
-        ("а на ттг нужна запись?", _TTG),  # walk-in со своей услугой-анализом (каталог МИС)
+        ("а где сделать экг?", "ЭКГ", "экг"),  # правило адреса: процедура названа в реплике
+        ("где сделать узи брюшной полости?", _UZI, "узи брюшной полости"),  # то же, услугу нашёл каталог
+        ("а на ттг нужна запись?", _TTG, "ттг"),  # walk-in со своей услугой-анализом (каталог МИС)
     ],
 )
-def test_address_with_its_own_service_ends_the_shown_context(ask, own, config, mini_prod_world, monkeypatch):  # noqa: F811
+def test_address_with_its_own_service_ends_the_shown_context(ask, own, phrase, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Три хода: реплика адреса назвала свою услугу — показанное прошлым ответом («Ферритин») снимается, контекст —
     своя услуга, и «сколько стоит?» не отвечает ценой ферритина (было до фикса находки 3)."""
 
     turns = ["сколько стоит ферритин", ask, "сколько стоит?"]
-    after = _play(turns, f"own-{config}", mini_prod_world, monkeypatch, config)
+    after = _play(turns, f"own-{config}", mini_prod_world, monkeypatch, config, spans=("ферритин", phrase))
     assert (after[1].service_name, after[1].shown) == (own, None), after[1].text
     assert "ферритин" not in _priced(after[2].text), after[2].text
 
@@ -182,7 +193,7 @@ def test_address_with_its_own_service_ends_the_shown_context(ask, own, config, m
 def test_address_without_its_own_service_keeps_the_shown(ask, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Адрес без своей услуги (или со словом-классом «анализы») показанное не снимает: «сколько стоит?» — ферритин."""
 
-    _, address, again = _play(["сколько стоит ферритин", ask, "сколько стоит?"], f"keep-{ask}", mini_prod_world, monkeypatch, config)
+    _, address, again = _play(["сколько стоит ферритин", ask, "сколько стоит?"], f"keep-{ask}", mini_prod_world, monkeypatch, config, spans=("ферритин",))
     assert (address.label, address.service_name, address.shown) == ("ADDRESS", "Ферритин", ["Ферритин"])
     assert _priced(again.text) == ["ферритин"], again.text
 

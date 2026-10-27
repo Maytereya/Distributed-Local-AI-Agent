@@ -7,7 +7,9 @@
 ДД.ММ.» (вариант «Б»); старше 7 дней — перевод `service_error_prices`. Под `off` — как было.
 
 Инвариант класса: цена из устаревшего среза не выдаётся пациенту за актуальную.
-Проверка — через эндпоинт, два хода, мир мини-прода (срез 08.10), «сегодня» загрузчиков сдвинуто стендом сбоев.
+Проверка — через эндпоинт, два хода, мир мини-прода (срез 08.10), «сегодня» загрузчиков сдвинуто стендом сбоев. Разметка хода
+(`turn_spans_llm = on`, прод с 24.10) — оракул `tests/spans_oracle.py` с фразой «ферритин»: при лежащей целиком LLM цену получает
+только реплика-название (`price_by_parse = on`), и «сколько стоит ферритин» — «Уточните название», до давности прайса не доходит.
 """
 
 from __future__ import annotations
@@ -16,8 +18,9 @@ import pytest
 
 from evalbench import faults
 from evalbench import world as ev_world
-from messengers_router import renderer
+from messengers_router import llm_runtime, renderer
 from messengers_router.policies import handoff_message
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 
 _DIALOG = ["сколько стоит ферритин", "а цена?"]
@@ -28,6 +31,8 @@ def _play(world_dir, monkeypatch, honest: str, stale_days: int):
     from messengers_router.runtime_config import config as cfg
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
+        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("ферритин",)))  # фраза услуги первого хода; у «а цена?» — нет
+        keep_llm_breaker_closed(patch)
         patch.setattr(cfg, "MR_MIS_HONEST_DEGRADATION", honest, raising=False)
         patch.setattr(snapshots, "_last", {})
         if stale_days:

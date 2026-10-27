@@ -151,10 +151,17 @@ def test_side_price_question_without_the_model_decision_is_as_before(target, sid
 
 
 def test_side_price_question_naming_its_own_service_is_searched_by_its_words(side_price_world, monkeypatch):
-    """Своя услуга в реплике — путь цены по её словам, как раньше: «приём гинеколога» внутри записи к урологу."""
+    """Своя услуга в реплике — путь цены по её словам, как раньше: «приём гинеколога» внутри записи к урологу.
+
+    Разметка хода (`turn_spans_llm = on`, прод с 24.10) — оракул с фразой «приём гинеколога»: без LLM разметки цена — только
+    реплике-названию (`price_by_parse = on`), и вопрос с названием внутри — «Уточните название» до поиска по словам."""
+
+    from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 
     book = "хочу записаться к урологу"
-    side = _in_world(side_price_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_ON, llm=_llm(book))[-1]
+    keep_llm_breaker_closed(monkeypatch)
+    llm = SpansOracle(("приём гинеколога",), inner=_llm(book))
+    side = _in_world(side_price_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_ON, llm=llm)[-1]
 
     assert "appointment_branch_side_question" in side["flags"], side
     assert "гинеколог" in side["text"].lower() and not _foreign(side["text"], "гинеколог"), side["text"]

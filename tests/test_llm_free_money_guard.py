@@ -170,7 +170,12 @@ def test_free_llm_answer_without_money_passes_verbatim(monkeypatch, world, llm_t
 def test_prebuilt_price_answer_keeps_sums(monkeypatch, world):
     """Встречный: цену из прайса печатает код — эту ветку guard не трогает."""
 
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _FakeOllama("Приём стоит 1515 рублей."))
+    from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
+
+    # Разметка хода (`turn_spans_llm = on`, прод с 24.10) — оракул: фраза «ферритин»; подделка рендера на неё отвечала бы «{}»
+    # (разбор не по контракту), и ход уходил бы в «Нашёл похожую услугу: «Ферритин»…» без цены — до суммы кода не доходил бы.
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("ферритин",), inner=_FakeOllama("Приём стоит 1515 рублей.")))
+    keep_llm_breaker_closed(monkeypatch)
 
     # Дословное название — сильное совпадение по данным МИС: строку печатает код без выбора LLM (L-13 — единственная
     # политика с 16.10; «общий анализ крови» — слабое, у подделки LLM выбора строки нет).

@@ -17,6 +17,9 @@
 - `on` ничего не меняет, где окна сильные или дополнять нечем;
 - через эндпоинт с оракулом LLM — цена «Взятие крови из вены»; два хода: короткий вопрос после ответа не получает цену
   того, чего пациент не видел.
+
+Окна-кандидаты строит генератор пути `turn_spans_llm = off`; на пути прода (деплой 17) LLM размечает слова реплики — проверки
+кандидатов здесь модульные, через эндпоинт — только цена и второй ход.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from evalbench import world as ev_world
 from messengers_router.services import _turn_phrases as TP
 from messengers_router.services._common import _normalise_catalog_text
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
-from tests.test_turn_parse_t3 import _FOLLOW_UPS, _PHRASES_MARK, _Oracle, _assert_follow_up_stays_on_what_was_shown, _dialog
+from tests.test_turn_parse_t3 import _FOLLOW_UPS, _Oracle, _assert_follow_up_stays_on_what_was_shown, _dialog
 
 _REPLY = "Сколько стоит ОАК взятие крови из вены"
 _FULL = "взятие крови из вены"
@@ -115,32 +118,14 @@ def test_on_keeps_the_decision_without_llm(mini_prod_world, monkeypatch):  # noq
 
 
 class _Seeing(_Oracle):
-    """Оракул, который запоминает фразы, предложенные LLM разбора."""
+    """Оракул разбора: фразы «ОАК» и полное название, строки — по началу названия."""
 
     def __init__(self) -> None:
         super().__init__(("ОАК", _FULL), ("Общий анализ крови (Le", "Взятие крови из вены"))
-        self.offered: list[str] = []
-
-    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
-        if _PHRASES_MARK in (f"{system}\n\n{prompt}" if system else prompt):
-            lines = (line.partition(". ") for line in prompt.splitlines())
-            self.offered += [_normalise_catalog_text(rest.strip("«»")) for head, dot, rest in lines if dot and head.isdigit()]
-        return await super().generate(prompt=prompt, system=system, **kwargs)
 
 
-@pytest.mark.parametrize("mode", ["off", "on"])
-def test_the_model_sees_the_full_name_only_when_on(mode, mini_prod_world, monkeypatch):  # noqa: F811
-    """Через эндпоинт: под off LLM разбора видит обрывок «взятие крови из» и не видит названия целиком; под on —
-    видит, выбирает, и пациент получает цену «Взятие крови из вены». (Под off в мини-проде цену находят правила пути
-    одной услуги; в проде g0724 LLM отвечала `none_fit`, и ответ был «Уточните».)"""
-
-    _mode(monkeypatch, mode)
-    oracle = _Seeing()
-    [turn], _rows = _dialog([_REPLY], mini_prod_world, monkeypatch, f"complete-{mode}", oracle)
-    assert "взятие крови из" in oracle.offered, oracle.offered
-    assert (_FULL in oracle.offered) is (mode == "on"), oracle.offered
-    if mode == "on":
-        assert _VEIN in turn["text"], turn["text"]
+# Тест «LLM разбора видит полное название только под on» (окна-кандидаты генератора) удалён при перевороте умолчаний на
+# прод (STEP-2026-10-27-DEFAULTS-PROD): на пути прода (`turn_spans_llm = on`) LLM размечает слова реплики, окон нет.
 
 
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)

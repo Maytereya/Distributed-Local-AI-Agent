@@ -9,7 +9,12 @@
 
 Инвариант класса: короткий ответ после нумерованного списка цен не показывает цен строк, которых пациент не видел, кроме явной
 просьбы показать все («все», «покажи все», «да» на подсказку), — и тогда только строк той же услуги; номер N — ровно N-я строка
-показанного (и раскрытого) списка. Мир — мини-прод, LLM недоступна (путь правил, как в мире гейта): номер решается без LLM.
+показанного (и раскрытого) списка. Мир — мини-прод, путь прода (переворот 27.10: `turn_spans_llm`, `price_by_parse` = on).
+
+Без LLM цена на пути прода — «Уточните название» (решение 22.10, политика 27.10): до списка с подсказкой тест не доходил. LLM
+диалога — пути прода (`test_open_bugs_2026_10_14._ProdLLM`): разметка называет услугу, выбор строки признаёт её строки, как
+живая модель (ОАК: строки ОАК — их базовые варианты и есть две видимые строки правил, ответ правил с подсказкой «все»;
+семейство правил — видимые строки правил, модель подтверждает ответ правил). Номер, «все» и «да» решаются без выбора строки LLM.
 """
 
 from __future__ import annotations
@@ -23,12 +28,20 @@ import pytest
 from messengers_router import pending_answer, renderer
 from messengers_router.services import _prices_helpers as H
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_l14_two_turn_consumers import _play, _priced
+from tests.test_open_bugs_2026_10_14 import _ProdLLM, _play
 from tests.test_price_turns_golden import FIXTURE, mini_prod_world  # noqa: F401 — фикстура
 
 _OAK = "сколько стоит оак"
 _ROW = re.compile(r"^(\d+)\. (.+?) — \d[\d\s]* руб", re.M)
+_PRICED = re.compile(r"^\s*(?:\d+[.)]\s*|-\s*)?(?:Розничная цена:\s*)?(?P<name>.+?) — \d[\d\s]* руб", re.M)
 _OAK_WORDS = "общий анализ крови"
+# Реплика первого хода → (фраза услуги для разметки, строки, которые признаёт выбор строки LLM: слова в названии).
+_FIRST = {
+    _OAK: ("оак", _OAK_WORDS),
+    "сколько стоит гепатит": ("гепатит", "гепатит"),
+    "сколько стоит тестостерон": ("тестостерон", "тестостерон"),
+    "сколько стоит мазок": ("мазок", "мазок"),
+}
 
 
 def _rows(text: str) -> list[str]:
@@ -37,19 +50,33 @@ def _rows(text: str) -> list[str]:
     return [name for _number, name in _ROW.findall(text)]
 
 
-def _dialog(turns: list[str], name: str, world, monkeypatch) -> list[str]:
-    return [turn.text for turn in _play(turns, f"hint-{name}", world, monkeypatch, "deploy")]
+def _priced(text: str) -> list[str]:
+    """Строки с ценой в ответе (нумерованные, списком или одной строкой) — нормализованные названия."""
+
+    return [_normalise_catalog_text(match.group("name")) for match in _PRICED.finditer(text)]
 
 
-@pytest.mark.parametrize("first", [_OAK, "сколько стоит гепатит", "сколько стоит тестостерон", "сколько стоит мазок"])
+def _dialog(turns: list[str], name: str, world, monkeypatch, llm: _ProdLLM | None = None) -> list[str]:
+    """Диалог на пути прода; LLM — `llm` (по умолчанию — по первой реплике из `_FIRST`)."""
+
+    if llm is None:
+        phrase, rows_of = _FIRST[turns[0]]
+        llm = _ProdLLM((phrase,), rows_of)
+    return [turn["text"] for turn in _play(turns, "deploy", monkeypatch, world, f"hint-{name}", llm=llm)]
+
+
+@pytest.mark.parametrize("first", sorted(_FIRST))
 def test_number_answers_that_row_of_the_shown_list(first, mini_prod_world, monkeypatch):  # noqa: F811
-    """«N» после нумерованного списка — ровно N-я показанная строка (её цена, без чужих)."""
+    """«N» после нумерованного списка — ровно N-я показанная строка (её цена, без чужих); выбор строки LLM номер не решает."""
 
     shown = _rows(_dialog([first], first, mini_prod_world, monkeypatch)[0])
     assert len(shown) >= 2, shown
     for number, name in enumerate(shown, 1):
-        reply = _dialog([first, str(number)], f"{first}-{number}", mini_prod_world, monkeypatch)[1]
+        phrase, rows_of = _FIRST[first]
+        llm = _ProdLLM((phrase,), rows_of)
+        reply = _dialog([first, str(number)], f"{first}-{number}", mini_prod_world, monkeypatch, llm)[1]
         assert _priced(reply) == [_normalise_catalog_text(name)], (number, reply)
+        assert llm.calls.count("price") == 1, llm.calls  # выбор строки — только у первого хода
 
 
 @pytest.mark.parametrize("reply", ["3", "9", "15"])
@@ -79,7 +106,12 @@ def test_show_all_of_a_rules_family_keeps_every_word_of_the_service(first, words
     """Семейство правил: хвост за «все» — строки, где есть каждое слово услуги; расширение по одному корню тянуло чужие
     («глюкозотолерантный тест» → «Экспресс-тест для определения гепатита С», «исследование кала» → гистология)."""
 
-    shown, expanded = (_rows(text) for text in _dialog([first, "все"], f"rules-{first}", mini_prod_world, monkeypatch))
+    # Модель подтверждает ответ правил — его видимые строки (по фразе разбора, как ищет путь цены под `price_by_parse = on`).
+    phrase = first.removeprefix("сколько стоит ")
+    family = H._build_price_family_payload(phrase, _fixture_rows(), show_all=False, visible_limit=10)
+    visible = frozenset(str(row["serviceName"]) for row in family["family_variants"][: family["visible_limit"]])
+    llm = _ProdLLM((phrase,), visible)
+    shown, expanded = (_rows(text) for text in _dialog([first, "все"], f"rules-{first}", mini_prod_world, monkeypatch, llm))
     new = [name for name in expanded if name not in shown]  # в группах формата оказания хвост встаёт в свою группу
     # у «глюкозотолерантного теста» весь хвост был чужим — подсказки «все» больше нет, «все» новых строк не добавляет
     assert len(shown) >= 2 and set(shown) <= set(expanded), expanded

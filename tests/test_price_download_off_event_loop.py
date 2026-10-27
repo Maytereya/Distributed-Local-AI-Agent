@@ -21,7 +21,10 @@ from pathlib import Path
 from evalbench import world as ev_world
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 
-_DIALOG = ["сколько стоит ферритин", "а цена?"]
+# Первый ход — голое название: зонд проверяет срезы, а не разбор реплики. Мир гейта — LLM недоступна, и под `price_by_parse = on`
+# (прод с 26.10) цену без LLM получает только реплика-название (решение 22.10 (а)); «сколько стоит ферритин» — «Уточните название»,
+# до прайса ход не доходит (до 27.10 тут было «сколько стоит ферритин»).
+_DIALOG = ["ферритин", "а цена?"]
 
 
 def _play(world_dir: Path, monkeypatch, session: str, *, shift_to: str | None):

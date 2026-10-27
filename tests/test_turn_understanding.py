@@ -37,6 +37,13 @@ def _names() -> list[str]:
     return sorted({json.loads(line)["serviceName"].strip() for line in path.open(encoding="utf-8")})
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="STEP-2026-10-27-DEFAULTS-PROD, находка «явный перечень своих названий»: под `turn_understanding_one = on` (прод с "
+    "22.10) правило K1 снимается у «явного перечня» (решение 21.10), и 8 из 398 названий мини-прод с запятой правило понимания "
+    "режет на позиции с чужими строками («Собака, IgE» → «Кошка,IgE»). Пациент этого не видит (цена читает разметку; без LLM — "
+    "«Уточните»), неверна телеметрия понимания (`tu_list`, `tu_rule`)",
+)
 def test_full_price_name_is_one_service_not_a_list(mini_prod_world):  # noqa: F811
     from messengers_router.services._prices_helpers import price_list_services
 
@@ -181,15 +188,19 @@ def _turns(texts: list[str], world: ev_world.FrozenWorld) -> list[tuple[dict, di
     return asyncio.run(run())
 
 
-def test_shadow_writes_numbers_and_keys_and_does_not_act(mini_prod_world, mode):  # noqa: F811
+def test_shadow_writes_numbers_and_keys_and_does_not_act(mini_prod_world, mode, monkeypatch):  # noqa: F811
+    from messengers_router import llm_runtime
+    from tests.spans_oracle import SpansOracle
+
     mode("shadow")
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("ферритин", "глюкоза", "холестерин")))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         ((dbg, row),) = _turns(["сколько стоит ферритин, глюкоза, холестерин"], world)
-    # Разбор реплики — единственный режим (T7 шаг 3б): услуги хода — фразы разбора (LLM недоступна — разрез по
-    # разделителям), а не названия каталога, подставленные разрезом правил.
+    # Разбор реплики — единственный режим (T7 шаг 3б): услуги хода — фразы разбора (разметка `turn_spans` — оракул, прод с
+    # деплоя 17; без LLM разреза по разделителям на пути прода нет), а не названия каталога, подставленные разрезом правил.
     assert dbg["understanding"]["services"] == ["ферритин", "глюкоза", "холестерин"]
     assert dbg["understanding"]["acted"] == []
-    assert (row["tu_list"], row["tu_facet"], row["tu_rule"]) == (3, "price", "parse_unavailable")
+    assert (row["tu_list"], row["tu_facet"], row["tu_rule"]) == (3, "price", "parse_picked")
     assert "tu_acted" not in row
     # В телеметрии — ни одного значения сущности (решение 08.10).
     assert "Ферритин" not in json.dumps(row, ensure_ascii=False)

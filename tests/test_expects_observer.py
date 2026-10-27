@@ -15,6 +15,9 @@
 Ходы — через обработчик эндпоинта (`messenger_generate_once`) в мире стенда на мини-проде (сеть закрыта, LLM гейта
 недоступна), диалоги из двух ходов и больше. Запись в мини-проде без врачей не собрать — её состояние задаётся явно,
 как в `test_appointment_confirm_refusal.py`.
+
+Путь прода (переворот 27.10: `turn_spans_llm`, `price_by_parse` = on): вопрос о цене без LLM — «Уточните название»; ходам о цене
+нужна LLM пути прода (`_price_llm`: разметка называет услугу, выбор строки признаёт её строки, как живая модель).
 """
 
 from __future__ import annotations
@@ -29,9 +32,11 @@ from typing import Any, Callable
 import pytest
 
 from evalbench import world as ev_world
-from messengers_router import expects
+from messengers_router import expects, llm_runtime
 from messengers_router.mess_types import AppointmentPhase, DialogState, ResponseEnvelope, SessionState
+from tests.spans_oracle import keep_llm_breaker_closed
 from tests.test_button_actions import GATEWAY_V1_TITLES
+from tests.test_open_bugs_2026_10_14 import _ProdLLM
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 _OFFER_CHECK = "Проверить мою запись"
@@ -88,6 +93,14 @@ def _play(
         result = asyncio.run(run())
         assert list(world.net.attempts) == []
     return result
+
+
+def _price_llm(monkeypatch, phrase: str) -> None:
+    """LLM пути прода на диалог: разметка называет услугу `phrase`, выбор строки цены признаёт строки с этими словами; прочие
+    места — «недоступна», предохранитель LLM не размыкается (подделка отвечает не на все места)."""
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _ProdLLM((phrase,), phrase))
+    keep_llm_breaker_closed(monkeypatch)
 
 
 def _seed_collecting(state: SessionState, memory: Any) -> None:
@@ -227,7 +240,8 @@ def test_operator_offer_is_the_expectation_and_the_answer_clears_it(reply, hando
     assert second.handoff is handoff and second.expects is None
 
 
-def test_another_question_instead_of_an_answer_drops_the_offer(mini_prod_world):  # noqa: F811
+def test_another_question_instead_of_an_answer_drops_the_offer(mini_prod_world, monkeypatch):  # noqa: F811
+    _price_llm(monkeypatch, "ферритин")
     first, second = _play([_OFFER_CHECK, "сколько стоит ферритин"], mini_prod_world)
     assert first.expects["type"] == "operator_offer"
     assert "Ферритин" in second.text
@@ -390,9 +404,10 @@ def test_compound_price_question_is_a_pick_of_the_listed_services(mini_prod_worl
     assert second.expects is None
 
 
-def test_secondary_offer_is_recorded_though_the_patient_does_not_see_it(mini_prod_world):  # noqa: F811
+def test_secondary_offer_is_recorded_though_the_patient_does_not_see_it(mini_prod_world, monkeypatch):  # noqa: F811
     """Вторичный оффер ждёт «да» молча (текст оффера не выводится с fec9770): в поле — ответ, который видел пациент."""
 
+    _price_llm(monkeypatch, "ферритин")
     first, second = _play(["сколько стоит ферритин", "а как подготовиться?"], mini_prod_world)
     assert first.expects == _expected("yes_no", "secondary_offer", first.text, 1)
     assert "Также" not in first.text  # вопроса о второй теме пациент не видел

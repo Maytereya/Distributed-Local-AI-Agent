@@ -17,6 +17,7 @@ import pytest
 
 from messengers_router import turn_parse
 from messengers_router.services import _biomaterial as bio
+from messengers_router.services import _price_by_parse
 from messengers_router.services import _strong_match as sm
 from messengers_router.services import _turn_phrases as tp
 from messengers_router.services._common import _normalise_catalog_text
@@ -39,15 +40,24 @@ def mis_synonyms(monkeypatch):
 
 
 def _reference(phrase: str, catalog, *, pool=None, verbatim: bool = False) -> list[dict[str, Any]]:
-    """Прежний `strong_rows` (до шага 6) — проход по всему срезу; эталон эквивалентности."""
+    """Прежний `strong_rows` (до шага 6) — проход по всему срезу; эталон эквивалентности.
 
-    key = _normalise_catalog_text(_extract_price_service_from_query(phrase) or phrase)
-    names = {key, _normalise_catalog_text(phrase)} if verbatim else {key}
+    Ключ — тем же определением, что у `strong_rows` (эталон проверяет индекс, а не ключ): под `price_by_parse = on` (прод с 26.10,
+    Ш1) — фраза как есть, без вырезателя правил, число — код, если не номер из показанного; off — фраза вырезателя (как было)."""
+
+    if _price_by_parse.enabled():
+        key = _normalise_catalog_text(phrase)
+        names = {key}
+        code = key.isdigit() and not _price_by_parse.number_is_choice(key)
+    else:
+        key = _normalise_catalog_text(_extract_price_service_from_query(phrase) or phrase)
+        names = {key, _normalise_catalog_text(phrase)} if verbatim else {key}
+        code = key.isdigit()
     names.discard("")
     if not names:
         return []
     synonyms = set(bio.mis_synonym_candidates(phrase))
-    by_code = [row for row in catalog if key.isdigit() and str(row.get("serviceHomecode") or "").strip() == key]
+    by_code = [row for row in catalog if code and str(row.get("serviceHomecode") or "").strip() == key]
     out: list[dict[str, Any]] = []
     for row in [*(catalog if pool is None else pool), *by_code]:
         name = sm._name(row)

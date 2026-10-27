@@ -25,6 +25,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_price_turns_golden import FIXTURE, run_dialog
 from tests.test_readiness_select import _ReadinessLLM
 
@@ -85,7 +86,11 @@ def _names(found) -> list[str]:
     ("phrase", "expected"),
     [
         ("ферритин", ["Ферритин"]),  # дословное название
-        ("сколько стоит ферритин?", ["Ферритин"]),  # слова вопроса и пунктуация не мешают
+        ("ферритин?", ["Ферритин"]),  # пунктуация не мешает
+        # Слова вопроса — не услуга: под `price_by_parse = on` (прод с 26.10, Ш1) ключ — фраза как есть, без вырезателя правил,
+        # и реплика сильна, только если она сама — название (решение 22.10 (а)); фразу услуги из вопроса выделяет разбор хода.
+        # До 27.10 тут было ["Ферритин"] (путь off, вырезатель). Пациент без LLM видит «Уточните название» — нейтрально (политика 27.10).
+        ("сколько стоит ферритин?", []),
         ("общий анализ крови le er hb соэ", [_OAK_LE]),  # название со скобками и запятыми, набранное без них
         ("липидограмма", ["Липидограмма"]),  # дословное название сильное, хотя слово есть и в словаре кода
         ("фгдс", ["Эзофагогастродуоденоскопия (ФГДС)"]),  # синоним МИС
@@ -173,21 +178,27 @@ def _ask(question: str, session: str, world_root) -> dict:
     return turn
 
 
-def _deploy(monkeypatch, llm: _ReadinessLLM) -> None:
+def _deploy(monkeypatch, llm: _ReadinessLLM, phrases: tuple[str, ...]) -> None:
+    """Набор деплоя; разметка хода — оракул с фразой услуги `phrases` (LLM разметки работает), выбор срока — `llm`.
+
+    Разбор реплики — LLM разметки (`turn_spans_llm = on`, прод с 24.10): без неё вопрос о сроке — перевод до выбора, и тест
+    не дошёл бы до своего предмета (сильное по данным / выбор модели)."""
+
     from messengers_router.runtime_config import config as cfg
 
     for key, value in _DEPLOY.items():
         monkeypatch.setattr(cfg, key, value, raising=False)
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(phrases, inner=llm))
+    keep_llm_breaker_closed(monkeypatch)
 
 
 @pytest.mark.parametrize("question", ["сколько готовится ттг", "сколько готовится оак", "сколько готовится общий анализ крови"])
 def test_data_prints_no_deadline_by_letters_without_the_model(question, mini_prod_world, monkeypatch):
-    """Слабое совпадение без LLM — честный перевод, а не срок строки, которую угадали буквы (снятое определение
+    """Слабое совпадение без LLM выбора — честный перевод, а не срок строки, которую угадали буквы (снятое определение
     `legacy` печатало срок без LLM: «до скобок», словарь кода)."""
 
     llm = _ReadinessLLM(fail=True)
-    _deploy(monkeypatch, llm)
+    _deploy(monkeypatch, llm, (question.removeprefix("сколько готовится "),))
     turn = _ask(question, f"strong-data-{question}", mini_prod_world)
     assert (turn["text"], turn["handoff"]) == (RESULT_TIMING_OPERATOR_TEXT, True)
     assert len(llm.prompts) == 1  # спросили модель; она недоступна
@@ -195,23 +206,23 @@ def test_data_prints_no_deadline_by_letters_without_the_model(question, mini_pro
 
 def test_data_weak_match_prints_the_deadline_of_the_row_the_model_picked(mini_prod_world, monkeypatch):
     llm = _ReadinessLLM(wanted=(_TSH,))
-    _deploy(monkeypatch, llm)
+    _deploy(monkeypatch, llm, ("ттг",))
     turn = _ask("сколько готовится ттг", "strong-data-pick", mini_prod_world)
     assert turn["text"] == f"Срок готовности «{_TSH}» — 1–2 дня."
     assert len(llm.prompts) == 1 and "1-2" not in llm.prompts[0]  # срок модели не показывается
 
 
 @pytest.mark.parametrize(
-    ("question", "name"),
+    ("question", "phrase", "name"),
     [
-        ("сколько готовится ферритин", "Ферритин"),  # дословное название
-        ("сколько готовится анализ на сахар", "Глюкоза"),  # синоним МИС на одну услугу
-        ("сколько готовится анализ 640", "Глюкоза"),  # код услуги
+        ("сколько готовится ферритин", "ферритин", "Ферритин"),  # дословное название
+        ("сколько готовится анализ на сахар", "анализ на сахар", "Глюкоза"),  # синоним МИС на одну услугу
+        ("сколько готовится анализ 640", "640", "Глюкоза"),  # код услуги
     ],
 )
-def test_data_strong_match_prints_the_deadline_without_the_model(question, name, mini_prod_world, mis_synonyms, monkeypatch):
+def test_data_strong_match_prints_the_deadline_without_the_model(question, phrase, name, mini_prod_world, mis_synonyms, monkeypatch):
     llm = _ReadinessLLM(fail=True)
-    _deploy(monkeypatch, llm)
+    _deploy(monkeypatch, llm, (phrase,))
     turn = _ask(question, f"strong-data-strong-{question}", mini_prod_world)
     assert turn["text"] == f"Срок готовности «{name}» — 1–2 дня."
     assert llm.prompts == []
@@ -221,7 +232,7 @@ def test_data_ambiguous_mis_synonym_is_not_one_deadline(mini_prod_world, mis_syn
     """Синоним МИС на четыре анализа — не одна услуга: срок одного из них без выбора не печатается."""
 
     llm = _ReadinessLLM(fail=True)
-    _deploy(monkeypatch, llm)
+    _deploy(monkeypatch, llm, ("анализ на холестерин",))
     turn = _ask("сколько готовится анализ на холестерин", "strong-data-cholesterol", mini_prod_world)
     assert (turn["text"], turn["handoff"]) == (RESULT_TIMING_OPERATOR_TEXT, True)
     assert len(llm.prompts) == 1  # не одна услуга — выбор модели, а она недоступна

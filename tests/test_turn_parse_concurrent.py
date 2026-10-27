@@ -1,8 +1,8 @@
 """Под `turn_parse = on` правила понимания считаются, пока LLM выбирает фразы (L-15b, шаг 6, O3b).
 
 Профиль шага 6: ожидание выбора фраз LLM (p95 3,6 с) и CPU правил понимания (S2-сегментация сплошного
-текста — до секунд) шли друг за другом. Инварианты: (а) порядок — генератор фраз → одновременно выбор LLM и
-правила → читатели: правила стартуют после генератора (сегментацию берут из памяти хода) и до ответа LLM;
+текста — до секунд) шли друг за другом. Инварианты: (а) порядок — одновременно разметка LLM и правила → читатели:
+правила стартуют до ответа LLM (генератора окон на пути прода нет — разметка `turn_spans`, прод с деплоя 17);
 (б) ответ хода и понимание те же, что при правилах до разбора (класс «одна или несколько» под
 `deploy_parse` — `tests/test_price_one_or_many_class.py`); (в) телеметрия прежняя: `tu_list`, `tu_rule`,
 `tu_parse_agree`; (г) сбой правил не вешает разбор и ход; (д) два хода — второй короткий вопрос не берёт
@@ -94,7 +94,8 @@ def test_rules_run_while_the_model_picks_phrases(mini_prod_world, monkeypatch): 
         row = world.take_telemetry()
         assert list(world.net.attempts) == []
     assert oracle.saw_rules is True  # правила стартовали до ответа LLM
-    assert probe.events.index("prepared") < probe.events.index("rules_start")  # и после генератора
+    # «и после генератора окон» (`_turn_phrases._prepare`) — свойство пути `turn_spans_llm = off`: разметка прода окон не строит
+    assert "prepared" not in probe.events
     violations = _violations(case, first["text"], "oracle", oracle.picked)
     assert not violations, "\n".join([*violations, "--- ответ:", first["text"]])
     assert sorted(_priced(second["text"]) - _priced(first["text"])) == []  # контекст = показанное

@@ -84,8 +84,14 @@ def test_one_consult_row_is_answered_as_before(one_row_world, monkeypatch):
 
 
 def test_own_service_in_the_reply_is_searched_by_its_words(many_rows_world, monkeypatch):
+    # Разметка хода (`turn_spans_llm = on`, прод с 24.10) — оракул с фразой «приём гинеколога»: без LLM разметки вопрос с
+    # названием внутри — «Уточните название» (`price_by_parse = on`) до поиска по словам.
+    from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
+
     book = "хочу записаться к урологу"
-    side = _in_world(many_rows_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_ON, llm=_llm(book))[-1]
+    keep_llm_breaker_closed(monkeypatch)
+    llm = SpansOracle(("приём гинеколога",), inner=_llm(book))
+    side = _in_world(many_rows_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_ON, llm=llm)[-1]
 
     assert "appointment_branch_side_question" in side["flags"], side
     assert _HEADER not in side["text"] and "гинеколог" in side["text"].lower(), side["text"]

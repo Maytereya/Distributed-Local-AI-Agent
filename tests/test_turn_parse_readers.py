@@ -36,7 +36,8 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime, turn_parse
-from tests.test_price_one_or_many_class import CASES, _is_basket_section
+from tests.spans_oracle import SpansOracle, is_spans, spans_response
+from tests.test_price_one_or_many_class import CASES, TRUE_CUT, _is_basket_section
 from tests.test_price_turns_golden import (  # noqa: F401 — mini_prod_world, synonym_fork — фикстуры
     DIALOGS,
     _golden,
@@ -115,7 +116,7 @@ def test_run_on_list_the_rules_missed_is_a_basket_by_the_parse(mini_prod_world, 
     for name, cost in (("Ферритин", "530"), ("Глюкоза", "190"), ("Холестерол", "225")):
         assert f"По услуге «{name}»:\n1. {name} — {cost} руб." in turn["text"]
     # Итог корзины (`basket_calc = on`, прод с 26.10) — решение `basket_total`; подделка его не знает — без «Итого».
-    assert llm.asked(_BASKET_MARK) == [] and [entry["task"] for entry in row["choose"]] == ["turn_phrases", "basket_total"]
+    assert llm.asked(_BASKET_MARK) == [] and [entry["task"] for entry in row["choose"]] == ["turn_spans", "basket_total"]
 
 
 def test_one_service_phrase_the_rules_cut_is_not_a_basket(mini_prod_world, monkeypatch):  # noqa: F811
@@ -136,27 +137,32 @@ def test_basket_asks_rows_only_for_weak_phrases(mini_prod_world, monkeypatch):  
     turn, row = _turn(CASES["list_true_three"].text, llm, mini_prod_world, monkeypatch, "readers-weak")
     [basket] = llm.asked(_BASKET_MARK)
     assert "«ттг» →" in basket and "«витамин д» →" in basket and "«ферритин» →" not in basket
-    assert [entry["task"] for entry in row["choose"]] == ["turn_phrases", "price_basket", "basket_total"]
+    assert [entry["task"] for entry in row["choose"]] == ["turn_spans", "price_basket", "basket_total"]
     assert "Ферритин — 530" in turn["text"] and "ТТГ (TSH) тиреотропный гормон — 400" in turn["text"]
 
 
-def test_fragment_outside_the_picked_phrases_is_named_unrecognized(mini_prod_world, monkeypatch):  # noqa: F811
+def test_marked_phrase_without_rows_is_named_unrecognized(mini_prod_world, monkeypatch):  # noqa: F811
+    """Фраза, которую LLM разметила услугой, а строк прайса у неё нет, — «Не распознал» (S3: не замалчиваем). Разметка прода
+    (`turn_spans`, деплой 17) размечает слова: фрагмента по разделителям вне разметки (генератор пути off) больше нет — что LLM
+    не отметила, то она сочла не услугой."""
+
     _deploy(monkeypatch)
-    llm = _Recorder("list_one_unrecognized", cut=("ферритин", "глюкоза"))  # «спирометрия» LLM услугой не сочла
+    llm = _Recorder("list_one_unrecognized", cut=("ферритин", "глюкоза", "спирометрия"))
     turn, row = _turn(CASES["list_one_unrecognized"].text, llm, mini_prod_world, monkeypatch, "readers-leftover")
-    assert row["tu_parse_n"] == 2 and llm.asked(_BASKET_MARK) == []
+    assert row["tu_parse_n"] == 3 and llm.asked(_BASKET_MARK) == []  # у «спирометрии» кандидатов нет — выбора строк нет
     assert "Ферритин — 530" in turn["text"] and "Глюкоза — 190" in turn["text"] and "в моче" not in turn["text"]
     assert "Не распознал: спирометрия" in turn["text"]
 
 
 def test_one_strong_phrase_is_priced_by_data_without_llm(mini_prod_world, monkeypatch):  # noqa: F811
     """Дословное название — строки по данным МИС, без выбора строки и без ответа правил с соседями (у ОАК —
-    вторая услуга семьи с ценой)."""
+    вторая услуга семьи с ценой). Разметка прода (`turn_spans`, деплой 17) без LLM решает только реплику, которая сама —
+    название целиком; название внутри вопроса размечает LLM, и фраза — сильная по данным: выбора строки нет."""
 
     _deploy(monkeypatch)
     llm = _Recorder("name_commas_in_parens")
     turn, row = _turn(CASES["name_commas_in_parens"].text, llm, mini_prod_world, monkeypatch, "readers-strong")
-    assert row["tu_parse_status"] == "strong_whole" and llm.prompts == []
+    assert row["tu_parse_status"] == "picked" and len(llm.prompts) == 1 and llm.asked("Слова сообщения с номерами:") == llm.prompts
     assert "Общий анализ крови (Le, Er, Hb, СОЭ) — 390" in turn["text"] and "(полный)" not in turn["text"]
 
 
@@ -273,7 +279,7 @@ def test_readiness_of_a_run_on_list_is_a_handoff_not_one_deadline(mini_prod_worl
     turn, row = _turn("сколько дней делается ФЕРРИТИН ГЛЮКОЗА", llm, mini_prod_world, monkeypatch, "readers-days-list")
     assert (row["tu_parse_status"], row["tu_parse_n"]) == ("picked", 2)
     assert turn["text"] == RESULT_TIMING_OPERATOR_TEXT
-    assert [entry["task"] for entry in row["choose"]] == ["turn_phrases"]
+    assert [entry["task"] for entry in row["choose"]] == ["turn_spans"]
 
 
 def test_test_assist_list_is_the_parse(catalog, mini_prod_world, monkeypatch):  # noqa: F811
@@ -343,16 +349,20 @@ def test_failed_parse_is_read_as_its_separator_cut(monkeypatch):
 
 
 def test_weak_positions_without_llm_are_variants_not_one_price(mini_prod_world, monkeypatch):  # noqa: F811
-    """LLM недоступна: сильная позиция — её строка по данным; слабые («ттг», «витамин д») — несколько вариантов
-    кода с полными названиями и ценами, а не одна строка правил как «та самая» (поправка владельца 13.10)."""
+    """Выбор строк LLM недоступен: сильная позиция — её строка по данным; слабые («ттг», «витамин д») — несколько вариантов
+    кода с полными названиями и ценами, а не одна строка правил как «та самая» (поправка владельца 13.10).
+
+    Разметка фраз — оракул (`turn_spans_llm = on`, прод с деплоя 17): при лежащей LLM целиком цены нет вовсе — «Уточните
+    название» (`price_by_parse = on`), политика вариантов действует, когда разметка ответила, а выбор строк — нет."""
 
     from tests.test_price_one_or_many_class import _priced_sections, _violations
 
     _deploy(monkeypatch)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(TRUE_CUT["list_true_three"]))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         [turn] = run_dialog([CASES["list_true_three"].text], "readers-down-variants")
         row = world.take_telemetry()
-    assert row["tu_parse_status"] == "unavailable" and row["tu_rule"] == "parse_unavailable"
+    assert row["tu_parse_status"] == "picked" and row["tu_rule"] == "parse_picked"
     assert _violations(CASES["list_true_three"], turn["text"], "down") == []
     sections = _priced_sections(turn["text"])
     assert sections[0] == ["Ферритин"] and all(2 <= len(section) <= 5 for section in sections[1:]), sections
@@ -410,6 +420,8 @@ class _JournalLLM:
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
         options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        if is_spans(prompt):  # разметка слов `turn_spans` (прод с деплоя 17) — те же фразы
+            return spans_response(prompt, sorted(self.phrases, key=lambda text: -len(text.split())))
         if _PHRASES_MARK in seen:
             picks = [n for n, text in options if self.norm(text.strip("«»")) in self.phrases]
         elif _BASKET_MARK in seen:
@@ -463,10 +475,12 @@ def _price_miss(monkeypatch, catalog, question: str, parse: turn_parse.PhrasePar
 
 def test_price_journal_takes_the_phrase_of_the_llm_parse(catalog, tmp_path, monkeypatch):
     """Под `on` фраза в журнал — выбранная LLM разбора (срез реплики), `source: price`; разбор «ни одна фраза не
-    услуга» (`none_fit`) — в журнал ничего: «Цена анализа» клинике не синоним. Вне разбора — как раньше."""
+    услуга» (`none_fit`) — в журнал ничего: «Цена анализа» клинике не синоним. Вне разбора — тоже ничего: цена пути прода
+    (`price_by_parse = on`, деплой 18; DESIGN-2026-10-25-PRICE-STAGE2, П4) пишет в журнал только фразу разбора — клинике не
+    уходит фраза вырезателя (путь off писал её строкой без `source`)."""
 
     question = "Цена анализа"
-    assert [e["phrase"] for e in _price_miss(monkeypatch, catalog, question, None, tmp_path / "off.jsonl")] == ["Цена анализа"]
+    assert _price_miss(monkeypatch, catalog, question, None, tmp_path / "off.jsonl") == []
     none_fit = turn_parse.PhraseParse(reply=question, status="none_fit", source="llm")
     assert _price_miss(monkeypatch, catalog, question, none_fit, tmp_path / "none_fit.jsonl") == []
 
@@ -474,8 +488,7 @@ def test_price_journal_takes_the_phrase_of_the_llm_parse(catalog, tmp_path, monk
     picked = _parsed(question, _phrase("спирометрия", question))
     [entry] = _price_miss(monkeypatch, catalog, question, picked, tmp_path / "picked.jsonl")
     assert (entry["phrase"], entry["found"], entry["source"]) == ("спирометрия", False, "price")
-    [legacy] = _price_miss(monkeypatch, catalog, question, None, tmp_path / "legacy.jsonl")
-    assert "source" not in legacy  # вне `on` строка журнала прежняя
+    assert _price_miss(monkeypatch, catalog, question, None, tmp_path / "legacy.jsonl") == []  # без разбора — ничего
 
 
 def test_readiness_journals_the_weak_phrase_with_the_llm_choice(catalog, mini_prod_world, monkeypatch):  # noqa: F811
@@ -510,5 +523,10 @@ def test_phrase_with_a_qualifier_the_price_lacks_is_not_priced_by_neighbours(llm
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         [turn] = run_dialog(["сколько стоит ферритин и приём терапевта по ОМС"], f"readers-oms-{llm}")
         row = world.take_telemetry()
+    if llm == "down":
+        # При лежащей LLM разметки нет — «Уточните название» (`price_by_parse = on`, прод с 26.10): ни цены ферритина по буквам,
+        # ни платных приёмов — нейтрально по принципам (решение 22.10 (а), политика 27.10).
+        assert turn["text"] == "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость."
+        return
     assert "Ферритин — 530" in turn["text"] and "Не распознал: приём терапевта по ОМС" in turn["text"]
     assert "врача-терапевта —" not in turn["text"] and "price_basket" not in [entry["task"] for entry in row["choose"]]

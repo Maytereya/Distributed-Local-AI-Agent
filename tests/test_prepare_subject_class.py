@@ -10,7 +10,9 @@
 шёл в подготовку («как подготовиться к узи»), держит тот же инвариант.
 
 Через эндпоинт `messenger_generate_once`; мир — `mini_prod`; LLM — подделка настоящего типа: выбор «подготовка или
-запись» — подготовка, остальные места — «недоступна».
+запись» — подготовка, разметка хода (`turn_spans_llm = on`, прод с 24.10) — оракул `tests/spans_oracle.py` с услугой, которую
+назвал пациент, остальные места — «недоступна». Без разметки предмет памятки не строится вовсе (`prepare_by_parse = on`):
+«Уточните, к какому анализу…» — тест не дошёл бы до кавычек.
 """
 
 from __future__ import annotations
@@ -28,11 +30,14 @@ from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services._prices_helpers import _catalog_rows
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 
 _TESTS = Path(__file__).resolve().parent
 _PREPARE_OR_BOOKING_MARK = "есть слова и о записи, и о подготовке"
 _QUOTED = re.compile(r"«([^«»]+)»")
 _NO_MEMO = "у меня нет — подскажет оператор"
+# Услуги, которые пациент назвал в вопросах ниже, — ответ разметки (длинная фраза раньше короткой).
+_SPANS = ("узи брюшной полости", "узи", "экг", "гастроскопии", "кольпоскопии")
 
 
 @pytest.fixture(scope="module")
@@ -67,7 +72,8 @@ def _ask(world_dir: Path, monkeypatch, question: str, *, switch: str) -> tuple[s
 
     with ev_world.FrozenWorld(world_dir, "day"), monkeypatch.context() as patch:
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
-        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM())
+        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(_SPANS, inner=_LLM()))
+        keep_llm_breaker_closed(patch)
         choice._CACHE.clear()
         return asyncio.run(run())
 

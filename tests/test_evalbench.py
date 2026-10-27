@@ -610,7 +610,9 @@ def test_dialogs_run_turns_in_one_session_and_record_shown_context(tmp_path, mon
             return []
 
     out, seen = io.StringIO(), []
-    dialog = {"id": "d1", "set": "t", "expect": "подготовка к ферритину", "turns": ["сколько стоит ферритин", "а как подготовиться?"]}
+    # Первый ход — голое название: мир стенда здесь без LLM (`_NoCalls`), и под `price_by_parse = on` (прод с 26.10) цену без LLM
+    # получает только реплика-название (решение 22.10 (а)); «сколько стоит ферритин» — «Уточните название» (до 27.10 был он).
+    dialog = {"id": "d1", "set": "t", "expect": "подготовка к ферритину", "turns": ["ферритин", "а как подготовиться?"]}
     with ev_world.FrozenWorld(root, "day") as world:
         stats = asyncio.run(
             ev_dialogs._run_dialogs(

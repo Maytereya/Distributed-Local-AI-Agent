@@ -11,6 +11,9 @@
 услуги — каждая позиция получает свои строки (оракул корзины), чужой цены нет; (б) W, сильная по данным,
 или W без разделителей — по-прежнему решение LLM; (в) следующий короткий вопрос («а сколько?») не берёт
 услугу, которой пациент не видел (контекст = показанное).
+
+Статус `merged` ставит только генератор окон (`turn_spans_llm = off`); у разметки прода его нет — тест через эндпоинт на пути
+прода `xfail(strict=True)` (находка STEP-2026-10-27-DEFAULTS-PROD), тест телеметрии `merged` удалён вместе с путём off.
 """
 
 from __future__ import annotations
@@ -126,6 +129,12 @@ def _priced(text: str) -> set[str]:
     return {" ".join(m.group("name").split()) for m in _PRICED.finditer(text)}
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="STEP-2026-10-27-DEFAULTS-PROD, находка «слияние списка разметкой»: у разметки `turn_spans` (прод с деплоя 17) нет "
+    "статуса `merged` (дизайн DESIGN-2026-10-23-NO-STOPWORDS §2 его сохранял) — список, размеченный одной слабой фразой, идёт "
+    "путём одной услуги: строки разных позиций одним списком (чужой цены нет)",
+)
 def test_merged_list_through_the_endpoint_prices_every_position(mini_prod_world, monkeypatch):  # noqa: F811
     case = CASES["list_true_three"]
     _configure(monkeypatch, "deploy_parse")
@@ -142,14 +151,4 @@ def test_merged_list_through_the_endpoint_prices_every_position(mini_prod_world,
     unseen = sorted(_priced(second["text"]) - shown)
     assert unseen == [], "\n".join([*unseen, "--- первый ответ:", first["text"], "--- второй:", second["text"]])
 
-
-def test_merge_is_counted_in_turn_telemetry(mini_prod_world, monkeypatch):  # noqa: F811
-    case = CASES["list_true_three"]
-    _configure(monkeypatch, "deploy_parse")
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _MergingOracle(case, "ферритин, ттг и витамин д"))
-    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
-        run_dialog([case.text], "merged-list-telemetry")
-        row = world.take_telemetry()
-    assert row.get("tu_parse_status") == "merged"
-    assert row.get("tu_rule") == "parse_merged"
 

@@ -21,6 +21,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
+from tests.spans_oracle import SpansOracle
 from tests.test_price_turns_golden import DIALOGS, FIXTURE, _golden, run_dialog, synonym_fork  # noqa: F401 — фикстура для synonym_fork-диалогов
 
 _PRICE_PROMPT_MARK = "ответить пациенту на вопрос о цене"
@@ -87,7 +88,8 @@ def test_gastroscopy_is_fgds_by_model_term_not_gastrin_by_letters(old_key, mini_
     if old_key is not None:
         monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", old_key, raising=False)
     llm = _PriceOnlyLLM(_fgds_by_term)
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    # Разметка фраз (`turn_spans_llm = on`, прод с деплоя 17) — первое решение хода: без неё цена — «Уточните название».
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("гастроскопия",), inner=llm))
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         [turn] = run_dialog(["сколько стоит гастроскопия"], f"choose-fgds-{old_key}")
 
@@ -96,22 +98,34 @@ def test_gastroscopy_is_fgds_by_model_term_not_gastrin_by_letters(old_key, mini_
     assert llm.price_calls == 2  # первый круг — «нет», второй — по термину модели
 
 
-def test_out_of_range_pick_keeps_rules_answer(mini_prod_world, monkeypatch):
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceOnlyLLM(lambda rows: ([999], [])))
-    with ev_world.FrozenWorld(mini_prod_world, "day"):
-        record = run_dialog(DIALOGS["one_gastroscopy"], "choose-invalid")
+def test_out_of_range_pick_gives_no_price_by_letters(mini_prod_world, monkeypatch):
+    """Номер строки вне списка — ответ модели не по контракту: без цены «по буквам» (Гастрин 750), честный перевод.
 
-    assert record == _golden()["one_gastroscopy"]
+    Путь прода (`turn_spans_llm = on`, `price_by_parse = on`): разметка — оракул, выбор строки — 999. Прежде (путь off) — ответ
+    правил, как в эталоне при лежащей LLM: «Гастрин — 750 руб.» на «гастроскопию»; теперь «…подключаю оператора» — лучше (п. 1, 3).
+    """
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("гастроскопия",), inner=_PriceOnlyLLM(lambda rows: ([999], []))))
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        [turn] = run_dialog(DIALOGS["one_gastroscopy"], "choose-invalid")
+
+    assert turn["handoff"] is True and "руб" not in turn["text"] and "Гастрин" not in turn["text"], turn
 
 
 def test_choice_is_written_to_turn_telemetry(mini_prod_world, monkeypatch):
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceOnlyLLM(_fgds_by_term))
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("гастроскопия",), inner=_PriceOnlyLLM(_fgds_by_term)))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:  # мир стенда сам собирает строки телеметрии
         run_dialog(["сколько стоит гастроскопия"], "choose-telemetry")
         row = world.take_telemetry()
 
     choices = row["choose"]
-    # Путь ответа о цене — промпт `*_general` (выключатель `price_select_rules` снят 31.10, режим `general` на проде с деплоя 17).
-    assert [(c["task"], c["status"]) for c in choices] == [("price_service_general", "none_fit"), ("price_service_general", "picked")]
+    # Путь ответа о цене — промпт `*_general` (выключатель `price_select_rules` снят 31.10, режим `general` на проде с деплоя 17);
+    # первое решение хода — разметка фраз `turn_spans` (прод с деплоя 17).
+    assert [(c["task"], c["status"]) for c in choices] == [
+        ("turn_spans", "picked"),
+        ("price_service_general", "none_fit"),
+        ("price_service_general", "picked"),
+    ]
+    choices = choices[1:]
     assert choices[0]["reason"] == "other_service" and all(c["options"] >= 1 for c in choices)
     assert [c["site"] for c in row["llm"] if c["site"].startswith("choose_")] == ["choose_price_service_general"] * 2

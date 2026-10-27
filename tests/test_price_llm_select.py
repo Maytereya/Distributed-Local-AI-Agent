@@ -89,6 +89,28 @@ def _fake_llm(monkeypatch, decide, calls: list | None = None):
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Client())
 
 
+def _in_price_turn(monkeypatch, question: str, phrases: tuple[str, ...], call):
+    """`call()` в ценовом ходе, как на проде: сначала разбор реплики `question` (`observe_price_turn`), разметка — оракул
+    `tests/spans_oracle.py` с фразами `phrases`, прочие места LLM — клиент, который тест поставил до вызова.
+
+    Под `price_by_parse = on` (прод с 26.10) фразу услуги — сильное совпадение (Ш1) и фразу журнала синонимов (Ш5) — даёт только
+    разбор этой реплики; модульный вызов `select_price_rows` вне хода разбора не видит: сильна только реплика-название, а журналу
+    клиники нечего писать."""
+
+    from messengers_router import turn_understanding
+    from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(phrases, inner=llm_runtime._OLLAMA_CLIENT))
+    keep_llm_breaker_closed(monkeypatch)
+
+    async def go():
+        turn_understanding.begin_turn()
+        await turn_understanding.observe_price_turn("PRICE", user_text=question, pending=None)
+        return await call()
+
+    return asyncio.run(go())
+
+
 def _failing_llm(monkeypatch):
     async def boom(*_args, **_kwargs):
         raise TimeoutError("llm busy")
@@ -180,10 +202,12 @@ def test_turn_without_own_service_words_does_not_call_llm(monkeypatch, turn):
 
 def test_exact_price_name_does_not_call_llm(monkeypatch):
     # «ферритин» = «Ферритин» дословно — сильное совпадение по данным МИС (L-13): его строки без LLM (не тратит
-    # секунду). С 16.10 политика одна (T7 шаг 2) — ответ «сильное», а не «оставить правила».
+    # секунду). С 16.10 политика одна (T7 шаг 2) — ответ «сильное», а не «оставить правила». Под `price_by_parse = on` фраза
+    # услуги — из разбора хода (разметка — LLM хода; выбор строки не зовётся).
     calls: list = []
     _fake_llm(monkeypatch, _pick("Ферритин"), calls)
-    selection = run(PS.select_price_rows("сколько стоит ферритин", RETAIL))
+    question = "сколько стоит ферритин"
+    selection = _in_price_turn(monkeypatch, question, ("ферритин",), lambda: PS.select_price_rows(question, RETAIL))
     assert selection is not None and selection.status == "strong"
     assert [row["serviceName"] for row in selection.rows] == ["Ферритин"]
     assert calls == []
@@ -227,7 +251,8 @@ def test_second_pass_finds_service_by_medical_term_and_journals_it(monkeypatch, 
         return {"match": [], "other": list(rows.values()), "search_terms": ["ФГДС"]}
 
     _fake_llm(monkeypatch, decide, calls)
-    sel = run(PS.select_price_rows("сколько стоит гастроскопия", [_GASTRIN, _GASTRIN17, _FGDS] + [_FERRITIN]))
+    question, rows = "сколько стоит гастроскопия", [_GASTRIN, _GASTRIN17, _FGDS] + [_FERRITIN]
+    sel = _in_price_turn(monkeypatch, question, ("гастроскопия",), lambda: PS.select_price_rows(question, rows))
 
     assert [r["serviceName"] for r in sel.rows] == ["Эзофагогастродуоденоскопия (ФГДС)"]
     assert len(calls) == 2
@@ -600,7 +625,8 @@ def _journal(tmp_path) -> list[dict]:
 
 def test_miss_is_journaled_for_the_clinic(monkeypatch, tmp_path):
     _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "search_terms": ["функция внешнего дыхания"]})
-    assert run(PS.select_price_rows("сколько стоит спирометрия", RETAIL + _FULL_SIZE)) is None
+    question = "сколько стоит спирометрия"
+    assert _in_price_turn(monkeypatch, question, ("спирометрия",), lambda: PS.select_price_rows(question, RETAIL + _FULL_SIZE)) is None
 
     entry = _journal(tmp_path)[-1]
     assert entry["phrase"] == "спирометрия"
@@ -629,8 +655,10 @@ def test_rules_answer_is_not_a_miss(monkeypatch, tmp_path):
 def test_reply_the_llm_found_no_service_name_in_is_not_journaled(monkeypatch, tmp_path, reason, terms, question):
     _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "reason": reason, "search_terms": terms})
 
-    # Ответ пациенту не меняется: правила ничего не предложили — их прежний ответ.
-    assert run(PS.select_price_rows(question, RETAIL + _FULL_SIZE)) is None
+    # Ответ пациенту не меняется: правила ничего не предложили — их прежний ответ. Разметка отметила слово реплики (фраза
+    # журнала есть) — запись не делает именно суждение выбора «не название услуги», а не пустой разбор.
+    phrase = question.split()[-1].strip("?")
+    assert _in_price_turn(monkeypatch, question, (phrase,), lambda: PS.select_price_rows(question, RETAIL + _FULL_SIZE)) is None
     assert _journal(tmp_path) == []
 
 
@@ -638,7 +666,8 @@ def test_reply_the_llm_found_no_service_name_in_is_not_journaled(monkeypatch, tm
 def test_real_miss_is_still_journaled(monkeypatch, tmp_path, terms):
     # Встречный: LLM признала услугу, но в прайсе её нет («спирометрия», а там «Спирография») — запись есть.
     _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "reason": "other_service", "search_terms": terms})
-    assert run(PS.select_price_rows("сколько стоит спирометрия", RETAIL + _FULL_SIZE)) is None
+    question = "сколько стоит спирометрия"
+    assert _in_price_turn(monkeypatch, question, ("спирометрия",), lambda: PS.select_price_rows(question, RETAIL + _FULL_SIZE)) is None
 
     entries = _journal(tmp_path)
     assert [(e["phrase"], e["found"], e["terms"]) for e in entries] == [("спирометрия", False, terms)]

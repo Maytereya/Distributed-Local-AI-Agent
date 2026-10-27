@@ -59,3 +59,16 @@ def test_other_places_go_to_the_inner_fake(monkeypatch) -> None:
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     answer = asyncio.run(oracle.generate(prompt="классифицируй"))
     assert json.loads(answer.response) == {"label": "PRICE"} and oracle.asked == ["inner"]
+
+
+def test_hyphen_and_plus_split_words_as_in_the_prompt(monkeypatch) -> None:
+    """Слова разметки режет `_PRICE_TOKEN_RE` (дефис и «+» — разделители): фраза с ними находится в словах реплики."""
+
+    catalog = [*_CATALOG, {"serviceName": "Прием (осмотр, консультация) врача-терапевта", "serviceHomecode": "7", "cost": 900}]
+    reply = "сколько стоит прием врача-терапевта и экспресс-тест"
+    oracle = SpansOracle(("прием врача-терапевта", "экспресс-тест"))
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
+    monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+    parse = asyncio.run(S.parse_turn_spans(reply, facet=None, catalog=catalog))
+    assert parse.status == "picked", parse
+    assert [item.text for item in parse.items] == ["прием врача-терапевта", "экспресс-тест"]

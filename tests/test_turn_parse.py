@@ -10,7 +10,7 @@ STEP-2026-10-13-L15B-1-PARSE-CACHE. Память хода (`turn_parse`) сни�
 - память не переживает ход: новый ход считает заново, другой срез — другой ключ;
 - повторный вызов в ходе не пересчитывает (резолвер не зовётся), вне хода — считается как раньше;
 - работает из `asyncio.to_thread` и дочерних задач (копия контекста держит тот же объект);
-- в ходе-списке через эндпоинт корзина берёт разбор понимания, а не считает его заново;
+- в ходе-списке через эндпоинт у каждого хода свой держатель и свой разбор (корзина пути прода читает фразы разметки);
 - слот разбора на фразы (L-15b, шаг 4): одна задача на ход, вне хода и под `off` слота нет; результат
   виден без ожидания только готовым; опоздавшую тень конец хода отменяет (`late`); тень память хода
   читает, но не пополняет.
@@ -237,17 +237,24 @@ def test_turn_memory_is_shared_with_threads_and_child_tasks(mini_prod_world, res
 @pytest.mark.parametrize("mode", ["shadow", "on"])  # понимание хода; разбор реплики — единственный режим
 def test_list_turn_through_the_endpoint_parses_the_reply_once(mode, mini_prod_world, turn_memos, monkeypatch):  # noqa: F811
     """Через эндпоинт, два хода подряд в одном цикле: у каждого хода свой держатель и свой разбор
-    (второй ход не берёт память первого); под `on` корзина берёт разбор понимания из памяти хода."""
+    (второй ход не берёт память первого); под `on` оба хода — корзина с ценами.
 
+    Разметка фраз — оракул (`turn_spans_llm = on`, прод с деплоя 17): при лежащей LLM цена списка — «Уточните название»
+    (`price_by_parse = on`), и до корзины ход не доходит. Корзина пути прода читает фразы разметки, а не память разбора
+    правил (`_multi_price_items`) — переиспользование её памяти корзиной было свойством пути off."""
+
+    from messengers_router import llm_runtime
     from messengers_router.runtime_config import config as cfg
+    from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 
     monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", mode, raising=False)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(("ферритин", "глюкоза", "холестерин")))
+    keep_llm_breaker_closed(monkeypatch)
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         record = run_dialog([LIST, LIST], f"turn-parse-{mode}")
     computing = [memo for memo in turn_memos if memo.computed]
     assert len(computing) == 2
     if mode == "on":
-        assert all(memo.reused >= 1 for memo in computing)
         assert all("руб" in turn["text"] for turn in record)
 
 

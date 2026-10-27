@@ -35,6 +35,13 @@
 (набор деплоя 14.10: понимание хода, корзина, срок, симптом — on), `deploy_parse` и `next` — прежние имена наборов, с
 17.10 равные `deploy` (разбор хода, цена через модуль, политика L-13 и «контекст = показанное» — единственные пути).
 
+Путь прода (`turn_spans_llm`, `price_by_parse`, `turn_understanding_one` — on с 22–26.10, умолчания кода с 27.10): фразу
+услуги размечает LLM, а без разметки цена — только реплике, которая сама целиком название или код («сколько стоит ферритин»
+без LLM — «Уточните…», решения владельца 22.10 (а) и 27.10). Чтобы ответ X показал услугу и следующему ходу было о чём быть,
+диалоги идут с оракулом разметки (`_play(spans=…)`, `tests/spans_oracle.py`): фразы-услуги на весь диалог, прочие места
+LLM — подделка теста или «недоступна»; строки слабой фразы — выбор LLM (`_Scripted`, `_PickRows`). Набор `default`
+разметку не спрашивает — его ходы прежние.
+
 Классификатор LLM в гейте недоступен: короткие вопросы, которые правила не опознают («а сколько?», «а срок?»,
 «1»), уходят в «не понял» — безопасный ответ, он тоже закреплён. Ходы с живым классификатором, который
 перенёс бы услугу из `seeded`-контекста в сущности, гейт не воспроизводит — это стенд (`evalbench`, `cached`,
@@ -62,6 +69,7 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
+from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
 from tests.test_price_turns_golden import FIXTURE, mini_prod_world  # noqa: F401 — фикстура модуля
 
@@ -134,6 +142,23 @@ class _Scripted:
         raise ConnectionError("тест: LLM недоступна для этого места")
 
 
+class _PickRows:
+    """LLM выбора строки цены, которая сразу берёт строки со словом `word` в названии (без регистра) — как живая модель на
+    «оак» берёт варианты «Общего анализа крови»; прочие места — недоступна. Обе формы ответа выбора цены, как у `_Scripted`."""
+
+    def __init__(self, word: str) -> None:
+        self.word = word.lower()
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+        seen = f"{system}\n\n{prompt}" if system else prompt
+        if _PRICE_MARK not in seen:
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        picks = [n for n, text in options if self.word in text.rsplit(" — ", 1)[0].lower()]
+        answer: dict[str, Any] = {"match": picks, "search_terms": []} if system is None else {"picks": picks, "reason": "none", "search_terms": []}
+        return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
+
+
 def _state_view(state: dict[str, Any]) -> dict[str, Any]:
     pending = state.get("_pending") if isinstance(state.get("_pending"), dict) else {}
     family = state.get("_price_family_context") if isinstance(state.get("_price_family_context"), dict) else {}
@@ -173,13 +198,39 @@ _SYNONYM_FORK = {
 }
 
 
+def _use_llm(monkeypatch, llm: Any, spans: tuple[str, ...] | None) -> None:
+    """LLM диалога после того, как набор выключателей применён: `spans` — оракул разметки поверх `llm` (только на пути
+    `turn_spans_llm = on`; см. `_play`), иначе `llm` как есть; None и None — LLM гейта (недоступна)."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    if spans is not None and str(getattr(cfg, "MR_TURN_SPANS_LLM", "off")).lower() == "on":
+        llm = SpansOracle(spans, inner=llm)
+        keep_llm_breaker_closed(monkeypatch)
+    if llm is not None:
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+
+
 def _play(
-    turns: list[str], name: str, world_dir: Path, monkeypatch, config: str, llm: Any = None, render: str | None = None, fork: bool = False
+    turns: list[str],
+    name: str,
+    world_dir: Path,
+    monkeypatch,
+    config: str,
+    llm: Any = None,
+    render: str | None = None,
+    fork: bool = False,
+    spans: tuple[str, ...] | None = None,
 ) -> list[_Turn]:
     """Диалог через обработчик эндпоинта (`messenger_generate_once`, отладочный ответ) в мини-проде.
 
     :param render: фиксированный текст свободного ответа LLM (подбор анализов отвечает ею); None — LLM недоступна
     :param fork: словарь синонимов МИС с «оак» на три услуги
+    :param spans: разметка реплик `turn_spans` (путь прода с 24.10, `tests/spans_oracle.py`) — фразы-услуги на весь диалог
+        (фразы, которой в реплике нет, разметка не отмечает); прочие места LLM — `llm` (None — недоступна). Предохранитель
+        LLM в диалоге не размыкается: подделка отвечает не на все места, а на проде LLM либо отвечает, либо лежит целиком.
+        Набор с `turn_spans_llm = off` (`default`) разметку не спрашивает — оракула и предохранителя не касаемся, как было.
+        None — как раньше (без оракула).
     """
 
     from messengers_router import renderer
@@ -191,8 +242,7 @@ def _play(
     for key, value in _SETS[config].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
     monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)  # как на стенде: решения не делятся между ходами
-    if llm is not None:
-        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    _use_llm(monkeypatch, llm, spans)
     if fork:
         from messengers_router.services import _biomaterial as bio
 
@@ -352,38 +402,45 @@ class Scenario:
     llm: Callable[[], Any] | None = None
     render: str | None = None
     fork: bool = False  # синоним МИС «оак» на три услуги (словарь клиники задан явно: гейт держит синонимы пустыми)
+    # Фразы-услуги разметки `turn_spans` (путь прода, `_play(spans=…)`): без LLM разметки цена — только реплике, которая сама
+    # целиком название (решения владельца 22.10 (а) и 27.10), и ответ X был бы «Уточните…» — продолжению не о чем быть.
+    spans: tuple[str, ...] | None = None
 
 
 _NOTHING_FOUND = lambda: _Scripted(terms=("ФГДС",))  # noqa: E731 — LLM выбора цены: «не та услуга» в обоих кругах, термин ФГДС
 _FOUND_GGT = lambda: _Scripted(cut=("ггтп",), terms=("ГГТ",), find_prefix="ГГТ")  # noqa: E731 — «ггтп» → ГГТ по термину LLM
+_OAK_ROWS = lambda: _PickRows("Общий анализ крови")  # noqa: E731 — «оак» → варианты «Общего анализа крови» выбором LLM
 
 SCENARIOS: dict[str, Scenario] = {
     # одна услуга: строки прайса показаны, правила и данные МИС
-    "one_ferritin": Scenario("сколько стоит ферритин", ("price", "a_price", "prep", "where", "where_price")),
+    "one_ferritin": Scenario("сколько стоит ферритин", ("price", "a_price", "prep", "where", "where_price"), spans=("ферритин",)),
     # семейство: правила показывают соседние строки; под разбором (STRONG) — только дословное название
-    "family_glucose": Scenario("сколько стоит глюкоза", ("price", "a_price", "prep")),
-    "family_oak": Scenario("сколько стоит оак", ("price", "a_price", "prep", "where", "one", "where_price")),
+    "family_glucose": Scenario("сколько стоит глюкоза", ("price", "a_price", "prep"), spans=("глюкоза",)),
+    # (путь прода: строки слабой «оак» выбирает LLM — варианты «Общего анализа крови», как живая модель; без выбора — названия без цен)
+    "family_oak": Scenario("сколько стоит оак", ("price", "a_price", "prep", "where", "one", "where_price"), llm=_OAK_ROWS, spans=("оак",)),
     # синоним МИС на несколько услуг: показаны ровно они
-    "fork_oak": Scenario("сколько стоит оак", ("price", "a_price", "prep"), fork=True),
+    "fork_oak": Scenario("сколько стоит оак", ("price", "a_price", "prep"), fork=True, spans=("оак",)),
     # «не нашёл» (под L-13 — честное «не нашёл», иначе ответ правил: семья «Гастрин»)
-    "not_found_gastro": Scenario("сколько стоит гастроскопия", ("price", "a_price", "one"), llm=_NOTHING_FOUND),
+    "not_found_gastro": Scenario("сколько стоит гастроскопия", ("price", "a_price", "one"), llm=_NOTHING_FOUND, spans=("гастроскопия",)),
     # названия без цен (вариант B L-13) / одна цена правил
-    "names_ttg": Scenario("сколько стоит анализ ттг", ("price", "a_price", "yes", "one")),
+    "names_ttg": Scenario("сколько стоит анализ ттг", ("price", "a_price", "yes", "one"), spans=("анализ ттг",)),
     # опечатка: ответ политики «перевод на оператора» (L-13) / цена правил
-    "typo_ferritin": Scenario("сколько стоит ферритинн", ("price", "a_price")),
+    "typo_ferritin": Scenario("сколько стоит ферритинн", ("price", "a_price"), spans=("ферритинн",)),
     # список (корзина): сильные позиции — по данным, слабые — выбор LLM или варианты кода
-    "cart_three": Scenario("сколько стоит ферритин, ттг и витамин д", ("price", "a_price", "prep", "where")),
+    "cart_three": Scenario("сколько стоит ферритин, ттг и витамин д", ("price", "a_price", "prep", "where"), spans=("ферритин", "ттг", "витамин д")),
     # приём: пациент увидел бы одну строку из нескольких — под L-13 названия без цены
-    "names_neurologist": Scenario("сколько стоит прием невролога", ("price", "a_price")),
+    "names_neurologist": Scenario("сколько стоит прием невролога", ("price", "a_price"), spans=("прием невролога",)),
     # две услуги через «и», одной из них нет в мини-проде («Не распознал»)
-    "uzi_compound": Scenario("сколько стоит узи почек и щитовидной железы", ("price", "a_price", "prep")),
+    "uzi_compound": Scenario("сколько стоит узи почек и щитовидной железы", ("price", "a_price", "prep"), spans=("узи почек", "щитовидной железы")),
     # строку выбрала LLM по термину, правила её не находили
-    "llm_pick_ggt": Scenario("сколько стоит ггтп", ("price", "a_price"), llm=_FOUND_GGT),
+    "llm_pick_ggt": Scenario("сколько стоит ггтп", ("price", "a_price"), llm=_FOUND_GGT, spans=("ггтп",)),
     # срок: из МИС кодом / честный перевод на оператора
-    "readiness_ferritin": Scenario("сколько готовится ферритин", ("price", "prep")),
-    "readiness_generic": Scenario("сколько готовятся анализы", ("price",)),
+    "readiness_ferritin": Scenario("сколько готовится ферритин", ("price", "prep"), spans=("ферритин",)),
+    "readiness_generic": Scenario("сколько готовятся анализы", ("price",), spans=()),
     # подбор анализов: свободный ответ LLM, данных об услуге в состоянии быть не должно
-    "assist_prevention": Scenario("какие анализы сдать для профилактики", ("price", "a_price"), render="Могу подобрать анализы. Уточните, что именно вас беспокоит."),
+    "assist_prevention": Scenario(
+        "какие анализы сдать для профилактики", ("price", "a_price"), render="Могу подобрать анализы. Уточните, что именно вас беспокоит.", spans=()
+    ),
 }
 
 # Красное. Контекст после ответа X: (сценарий, набор) → {код: причина}. Пусто — зелёный (на 13.10 весь класс зелёный:
@@ -425,7 +482,9 @@ def test_context_is_what_was_shown(name, config, mini_prod_world, monkeypatch): 
     """После ответа X в состоянии нет услуги, которой пациент не видел (контекст = показанное)."""
 
     scenario = SCENARIOS[name]
-    played = _play([scenario.first], name, mini_prod_world, monkeypatch, config, llm=scenario.llm() if scenario.llm else None, render=scenario.render)
+    played = _play(
+        [scenario.first], name, mini_prod_world, monkeypatch, config, llm=scenario.llm() if scenario.llm else None, render=scenario.render, spans=scenario.spans
+    )
     found = _context_violations(played[0])
     _settle(found, KNOWN_CONTEXT.get((name, config), {}), _dialog_text([scenario.first], played))
 
@@ -437,7 +496,17 @@ def test_short_question_after_answer(name, followup, config, mini_prod_world, mo
 
     scenario = SCENARIOS[name]
     turns = [scenario.first, *FOLLOWUPS[followup]]
-    played = _play(turns, f"{name}-{followup}", mini_prod_world, monkeypatch, config, llm=scenario.llm() if scenario.llm else None, render=scenario.render, fork=scenario.fork)
+    played = _play(
+        turns,
+        f"{name}-{followup}",
+        mini_prod_world,
+        monkeypatch,
+        config,
+        llm=scenario.llm() if scenario.llm else None,
+        render=scenario.render,
+        fork=scenario.fork,
+        spans=scenario.spans,
+    )
     found = _followup_violations(played[:-1], played[-1], turns[-1])
     _settle(found, KNOWN_FOLLOWUP.get((name, followup, config), {}), _dialog_text(turns, played))
 
@@ -450,18 +519,22 @@ class JournalCase:
     said: str
     llm: Callable[[], _Scripted]
     expected: tuple[str, ...]  # фразы, которые должны попасть в журнал (нормализованные), по порядку; () — ничего
+    spans: tuple[str, ...] = ()  # фразы-услуги разметки `turn_spans` (путь прода); () — разметка не нашла услуги
 
 
 _TOO_GENERAL = lambda: _Scripted(reason="too_general")  # noqa: E731 — LLM выбора цены: «слишком общее» (причину знает промпт модуля)
 
 JOURNAL_CASES: dict[str, JournalCase] = {
     # фраза пациента и есть то, что выбрала LLM
-    "bare_term": JournalCase("сколько стоит ггтп", _FOUND_GGT, ("ггтп",)),
+    "bare_term": JournalCase("сколько стоит ггтп", _FOUND_GGT, ("ггтп",), ("ггтп",)),
     # слова вопроса вокруг названия: журналу нужна фраза услуги, а не «а ггтп»
-    "term_in_a_sentence": JournalCase("а подскажите пожалуйста сколько стоит ггтп сдать", _FOUND_GGT, ("ггтп",)),
+    "term_in_a_sentence": JournalCase("а подскажите пожалуйста сколько стоит ггтп сдать", _FOUND_GGT, ("ггтп",), ("ггтп",)),
     # слово, которого нет ни в прайсе, ни у LLM («спирометрия»): клинике нужнее всего
     "unknown_word": JournalCase(
-        "подскажите пожалуйста сколько стоит спирометрия", lambda: _Scripted(cut=("спирометрия",), terms=("спирография",)), ("спирометрия",)
+        "подскажите пожалуйста сколько стоит спирометрия",
+        lambda: _Scripted(cut=("спирометрия",), terms=("спирография",)),
+        ("спирометрия",),
+        ("спирометрия",),
     ),
     # реплика без названия услуги — не синоним (прод 13.10: «Цена анализа», «сможете посчитать» в журнале)
     "no_service_named_1": JournalCase("Цена анализа", _TOO_GENERAL, ()),
@@ -489,7 +562,7 @@ def test_synonym_journal_phrase(name, config, mini_prod_world, monkeypatch):  # 
     названия услуги — ничего. Фраза — упоминание хода (L-14, шаг 2)."""
 
     case = JOURNAL_CASES[name]
-    [turn] = _play([case.said], name, mini_prod_world, monkeypatch, config, llm=case.llm())
+    [turn] = _play([case.said], name, mini_prod_world, monkeypatch, config, llm=case.llm(), spans=case.spans)
     phrases = tuple(_normalise_catalog_text(str(row["phrase"])) for row in turn.journal)
     found: dict[str, str] = {}
     if phrases != case.expected:
@@ -508,33 +581,42 @@ def test_list_mentions_chosen_is_catalog_name_by_rules_and_phrase_by_parse(confi
     правил — названия строк прайса, у разбора (`turn_parse = on`) — фразы пациента (слабые позиции строки
     ещё не выбрали). Единого смысла поля нет — перевод на `ServiceMention` его задаёт (кандидаты, сила, выбор)."""
 
-    [turn] = _play([_LIST_REPLY], "mentions-list", mini_prod_world, monkeypatch, config)
+    [turn] = _play([_LIST_REPLY], "mentions-list", mini_prod_world, monkeypatch, config, spans=("ферритин", "ттг", "витамин д"))
     assert turn.understanding is not None and turn.understanding["facet"] == "price"
-    # Разбор реплики — единственный режим (T7 шаг 3б): во всех наборах — фразы разбора, не названия каталога.
+    # Разбор реплики — единственный режим (T7 шаг 3б): во всех наборах — фразы разбора, не названия каталога. Путь прода
+    # (`turn_spans_llm = on`) — фразы разметки LLM (`parse_picked`); набор `default` — прежний генератор окон без выбора LLM.
     assert turn.understanding["services"] == ["ферритин", "ттг", "витамин д"]
-    assert turn.understanding["services_rule"] == "parse_unavailable"
+    assert turn.understanding["services_rule"] == ("parse_unavailable" if config == "default" else "parse_picked")
 
 
 @pytest.mark.parametrize("config", CONFIGS)
 def test_single_service_is_a_mention(config, mini_prod_world, monkeypatch):  # noqa: F811
     """L-14, шаг 0 (14.10): у одиночной услуги — упоминание хода (сильное по данным МИС — с выбором)."""
 
-    [turn] = _play(["сколько стоит ферритин"], "mentions-single", mini_prod_world, monkeypatch, config)
+    [turn] = _play(["сколько стоит ферритин"], "mentions-single", mini_prod_world, monkeypatch, config, spans=("ферритин",))
     assert turn.understanding is not None and turn.understanding["services"] == ["Ферритин"]
 
 
 def test_single_mention_by_rules_strength_and_choice(mini_prod_world):  # noqa: F811
     """Сила и выбор — по данным МИС: дословное название — сильное, выбор — оно; слово без названия и синонима —
-    слабое, без кандидатов и без выбора (строку выбирает путь цены, как раньше); без фразы услуги — ничего."""
+    слабое, без кандидатов и без выбора (строку выбирает путь цены, как раньше); без фразы услуги — ничего.
+
+    Путь прода (`price_by_parse = on`, 26.10): упоминание правил — то, что остаётся ходу без разметки LLM, и ключ силы —
+    фраза как есть, без вырезателя правил. Сильна реплика, которая сама целиком — дословное название; дословное название
+    внутри вопроса («сколько стоит ферритин») без LLM — слабое, без кандидатов: пациент видит «Уточните…», а не цену по
+    буквам (до 26.10 — сильное «Ферритин»). По принципам нейтрально: решения владельца 22.10 (а) и 27.10 — без LLM услугу
+    внутри вопроса не угадываем; с LLM ход берёт фразу разметки (`test_single_service_is_a_mention`)."""
 
     from messengers_router import turn_understanding as tu
 
     with ev_world.FrozenWorld(mini_prod_world, "day"):
-        strong = tu.understand_price_turn("сколько стоит ферритин").single
+        strong = tu.understand_price_turn("Ферритин").single
+        in_question = tu.understand_price_turn("сколько стоит ферритин").single
         weak = tu.understand_price_turn("сколько стоит ттг").single
         empty = tu.understand_price_turn("сколько стоит?")
         listed = tu.understand_price_turn(_LIST_REPLY)
     assert (strong.source, strong.strength, strong.candidates, strong.chosen) == ("rules", "strong", ("Ферритин",), "Ферритин")
+    assert (in_question.source, in_question.strength, in_question.candidates, in_question.chosen) == ("rules", "weak", (), None)
     assert (weak.source, weak.strength, weak.candidates, weak.chosen) == ("rules", "weak", (), None)
     assert empty.services == () and empty.single is None
     assert listed.single is None and listed.list_size == len(listed.services) >= 2
@@ -550,6 +632,7 @@ def test_single_mention_is_an_observer_and_tu_list_keeps_its_meaning(config, min
 
     for key, value in _SETS[config].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
+    _use_llm(monkeypatch, None, ("ферритин",))  # путь прода: фраза хода — разметка LLM
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         run_dialog(["сколько стоит ферритин"], f"mention-telemetry-{config}")
         row = world.take_telemetry()
@@ -586,7 +669,7 @@ def _shown_params():
 @pytest.mark.parametrize(("name", "config", "service"), list(_shown_params()))
 def test_shown_service_reaches_the_context(name, config, service, mini_prod_world, monkeypatch):  # noqa: F811
     scenario = SCENARIOS[name]
-    turn = _state_after(scenario.first, config, mini_prod_world, monkeypatch, f"shown-{name}", llm=scenario.llm() if scenario.llm else None)
+    turn = _state_after(scenario.first, config, mini_prod_world, monkeypatch, f"shown-{name}", llm=scenario.llm() if scenario.llm else None, spans=scenario.spans)
     assert _normalise_catalog_text(service) in _normalise_catalog_text(turn.text)  # услугу пациент действительно увидел
     assert turn.state["service_name"] == service
 
@@ -626,7 +709,9 @@ def test_family_list_keeps_the_first_variant_and_the_announced_family(config, mi
     выбирал — его выбрало заземление) и семейство для «все» — ровно то, что ответ пообещал показать (5). До 26.10 —
     «ещё 6» и 8: хвост добирал ОАМ и «ЗППП: анализ крови» (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD)."""
 
-    turn = _state_after("сколько стоит оак", config, mini_prod_world, monkeypatch, "state-family")
+    # Путь прода: «оак» — фраза разметки, строки выбирает LLM (варианты «Общего анализа крови», как живая модель); без выбора
+    # LLM слабая фраза цены не получает (названия без цен, вариант B L-13) — семейству не о чем быть.
+    turn = _state_after("сколько стоит оак", config, mini_prod_world, monkeypatch, "state-family", llm=_PickRows("Общий анализ крови"), spans=("оак",))
     assert "найдено еще 3 вариантов" in turn.text
     assert turn.state["service_name"] == "Общий анализ крови (Le, Er, Hb, СОЭ)"
     assert turn.state["family_context"] == {"service_name": "общий анализ крови", "variants": 5}
@@ -637,7 +722,7 @@ def test_family_list_keeps_the_first_variant_and_the_announced_family(config, mi
 def test_strong_single_service_is_the_context(config, mini_prod_world, monkeypatch):  # noqa: F811
     """Одна сильная по данным услуга: в состоянии ровно показанная строка; семейства для «все» нет."""
 
-    turn = _state_after("сколько стоит ферритин", config, mini_prod_world, monkeypatch, "state-strong")
+    turn = _state_after("сколько стоит ферритин", config, mini_prod_world, monkeypatch, "state-strong", spans=("ферритин",))
     assert _priced(turn.text) == ["ферритин"]
     assert (turn.state["service_name"], turn.state["test_name"], turn.state["family_context"], turn.state["pending"]) == ("Ферритин", None, None, None)
 
@@ -650,7 +735,7 @@ def test_readiness_answer_leaves_no_service_pending_or_label_in_state(config, mi
     Набор `default`: понимание хода в тени — вопрос о сроке не обрабатывается, подбор анализов без данных (LLM гейта
     недоступна) — честный оффер оператора с висящим подтверждением (`test_assist_from_data = on`, прод с 24.10; до — перевод)."""
 
-    turn = _state_after("сколько готовится ферритин", config, mini_prod_world, monkeypatch, "state-readiness")
+    turn = _state_after("сколько готовится ферритин", config, mini_prod_world, monkeypatch, "state-readiness", spans=("ферритин",))
     if config == "default":
         assert "точно ответит оператор" in turn.text and not turn.handoff, turn.text
         assert (turn.state["service_name"], turn.state["pending"]) == (None, ("OTHER", ("operator_offer_confirm",))), turn.state
@@ -670,7 +755,7 @@ def test_summary_does_not_outlive_the_context_it_copied(config, mini_prod_world,
 
     scenario = SCENARIOS["not_found_gastro"]
     turns = ["сколько стоит ферритин"] * 4 + [scenario.first]
-    played = _play(turns, "summary", mini_prod_world, monkeypatch, config, llm=scenario.llm())
+    played = _play(turns, "summary", mini_prod_world, monkeypatch, config, llm=scenario.llm(), spans=("ферритин", "гастроскопия"))
     last = played[-1]
     shown = _normalise_catalog_text(last.text)
     held = re.findall(r"service_name=([^,\n]+)", last.summary)
@@ -684,7 +769,7 @@ def test_repeat_guard_counts_the_answer_text_not_the_service(config, mini_prod_w
     получает оффер оператора (`_maybe_offer_operator_on_repeat`). Ни услуга, ни понимание хода тут не читаются;
     если перевод изменит текст уточнения («по какой из услуг…»), счётчик повторов поедет вместе с ним."""
 
-    played = _play([_LIST_REPLY, "сколько стоит?", "а цена?"], "repeat-guard", mini_prod_world, monkeypatch, config)
+    played = _play([_LIST_REPLY, "сколько стоит?", "а цена?"], "repeat-guard", mini_prod_world, monkeypatch, config, spans=("ферритин", "ттг", "витамин д"))
     clarify = "Скажите, пожалуйста, название услуги/анализа — я уточню стоимость."
     assert played[1].text == clarify and not played[1].handoff
     assert played[2].text.startswith(clarify) and "Перевести на оператора?" in played[2].text
@@ -696,7 +781,9 @@ def test_turn_telemetry_carries_counts_and_statuses_not_phrases(config, mini_pro
     ни самой реплики (ПДн и принцип «строка телеметрии не читается как текст»). Что понято и выбрано — нигде
     не записано: по телеметрии нельзя восстановить, о какой услуге ответил ход."""
 
-    played = _play([_LIST_REPLY, "сколько стоит?", "сколько стоит ферритин"], "telemetry", mini_prod_world, monkeypatch, config)
+    played = _play(
+        [_LIST_REPLY, "сколько стоит?", "сколько стоит ферритин"], "telemetry", mini_prod_world, monkeypatch, config, spans=("ферритин", "ттг", "витамин д")
+    )
     rows = [row for turn in played for row in turn.telemetry]
     assert len(rows) == 3
     dump = json.dumps(rows, ensure_ascii=False).lower()
