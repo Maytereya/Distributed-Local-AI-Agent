@@ -3875,10 +3875,15 @@ def multi_price_payload_from_items(
             annotated["care_setting_address"] = ""
             variants.append(annotated)
     names_notes = [
-        price_names_without_prices_text(str(item.get("fragment") or item["service_name"]), [str(item["unpriced"])])
+        price_names_without_prices_text(
+            str(item.get("fragment") or item["service_name"]),
+            [str(name) for name in item["unpriced"]] if isinstance(item["unpriced"], list) else [str(item["unpriced"])],
+        )
         for item in items
         if item.get("unpriced")
     ]
+    # Варианты без выбора LLM (`basket_fail_unpriced`, список названий) — к ответу оффер оператора (`build_price_response`).
+    offer = any(isinstance(item.get("unpriced"), list) for item in items)
     unrecognized_note = ""
     shown_unrecognized = ", ".join(dict.fromkeys(str(u).strip() for u in unrecognized if str(u).strip()))
     if shown_unrecognized:
@@ -3893,6 +3898,7 @@ def multi_price_payload_from_items(
             "prices": [],
             "clarify_text": "\n\n".join([*names_notes, *([unrecognized_note] if unrecognized_note else [])]),
             "note": "price_multi_service: names_without_prices",
+            **({"operator_offer": True} if offer else {}),
         }
     merged = any(item.get("merged") for item in items)  # корзина из фраз слила повторы в одну позицию
     if len(variants) < 2 and not (allow_single and variants and (unrecognized or names_notes or merged)):
@@ -3915,6 +3921,8 @@ def multi_price_payload_from_items(
         payload["unrecognized_note"] = unrecognized_note
     if calculation:
         payload["basket_calc"] = {**calculation, "partial": bool(names_notes or unrecognized_note)}
+    if offer:
+        payload["operator_offer"] = True
     return payload
 
 

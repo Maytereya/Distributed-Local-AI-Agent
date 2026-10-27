@@ -43,7 +43,7 @@ from ._doctors_helpers import (
     _specialty_label_for_doctor,
 )
 from ._prepare import _is_prepare_requested_in_price_query
-from ._basket_select import basket_calc, basket_from_phrases, choose_basket_rows
+from ._basket_select import basket_calc, basket_from_phrases, choose_basket_rows, failed_unpriced
 from ._strong_match import strong_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
@@ -237,7 +237,8 @@ async def _multi_price_payload(
             llm_allowed=choosing,
             journal=parse.status == turn_parse.ParseStatus.PICKED,
         )
-        calculation = await basket_calc(str(query or ""), positions, retail_rows, llm_allowed=choosing)
+        # Сбой выбора под `basket_fail_unpriced` — итога нет: решение «складывать ли» не спрашиваем (`summed: False`).
+        calculation = await basket_calc(str(query or ""), positions, retail_rows, llm_allowed=choosing and not failed_unpriced(positions))
         return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True, calculation=calculation)
     # Разбора нет или он не годится для действия (`empty`, `too_many`, `error`, вход — не реплика хода): корзина правил
     # с политикой сбоя разбора — строки слабых позиций выбирает LLM, при сбое — варианты кода (T7 шаг 3б: прежняя
@@ -250,7 +251,9 @@ async def _multi_price_payload(
     if not items:
         return None
     positions, not_found = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows, llm_allowed=choosing)
-    calculation = await basket_calc(str(query or query_text), positions, retail_rows, llm_allowed=choosing)
+    calculation = await basket_calc(
+        str(query or query_text), positions, retail_rows, llm_allowed=choosing and not failed_unpriced(positions)
+    )
     return multi_price_payload_from_items(positions, not_found, allow_single=True, calculation=calculation)
 
 

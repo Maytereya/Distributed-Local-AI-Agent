@@ -210,6 +210,7 @@ class MessengerRouterConfig:
     prepare_by_parse: str
     price_by_parse: str
     strong_family_letter: str
+    basket_fail_unpriced: str
     topic_by_llm: str
     booking_target_slot_llm: str
     button_answer_topic: str
@@ -653,6 +654,10 @@ settings = Settings(
         # названная другой буквой того же семейства, не сильная — её выбирает LLM. Семейства — из названий прайса.
         # off — как было. [MESSENGER_ROUTER] strong_family_letter
         strong_family_letter=_get_enum("MESSENGER_ROUTER", "strong_family_letter", default="off", allowed={"off", "on"}),
+        # Корзина при сбое выбора LLM (решение владельца 27.10, узел 7 проверки ответов без LLM; BUG-2026-10-27-LLM-QUEUE-GIVES-UP,
+        # шаг 3): слабые позиции — варианты кода **названиями без цен** и оффер оператора, «Итого» нет; сильные (по данным) — с
+        # ценой, как были. off — как было: два варианта и больше — с ценами и в итоге. [MESSENGER_ROUTER] basket_fail_unpriced
+        basket_fail_unpriced=_get_enum("MESSENGER_ROUTER", "basket_fail_unpriced", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -920,6 +925,7 @@ MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_STRONG_FAMILY_LETTER = settings.messenger_router.strong_family_letter
+MR_BASKET_FAIL_UNPRICED = settings.messenger_router.basket_fail_unpriced
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
 MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic
