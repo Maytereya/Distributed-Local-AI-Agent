@@ -208,6 +208,7 @@ class MessengerRouterConfig:
     turn_spans_llm: str
     prepare_by_parse: str
     price_by_parse: str
+    strong_family_letter: str
     topic_by_llm: str
     booking_target_slot_llm: str
     button_answer_topic: str
@@ -641,6 +642,11 @@ settings = Settings(
         # «названа ли услуга» — решение понимания хода; без LLM — только дословное название или код, иначе «уточните» /
         # оффер, без списка правил с ценами. off — как было. [MESSENGER_ROUTER] price_by_parse
         price_by_parse=_get_enum("MESSENGER_ROUTER", "price_by_parse", default="off", allowed={"off", "on"}),
+        # Сильное совпадение не теряет букву семейства (BUG-2026-10-27-STRONG-DROPS-LETTER): «гепатит с» не сильна строке
+        # «Гепатит В - HBsAg». Синоним МИС сильный, только если буквы семейства в нём те же, что у фразы пациента; строка,
+        # названная другой буквой того же семейства, не сильная — её выбирает LLM. Семейства — из названий прайса.
+        # off — как было. [MESSENGER_ROUTER] strong_family_letter
+        strong_family_letter=_get_enum("MESSENGER_ROUTER", "strong_family_letter", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -906,6 +912,7 @@ MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
+MR_STRONG_FAMILY_LETTER = settings.messenger_router.strong_family_letter
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
 MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic
