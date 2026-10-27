@@ -158,7 +158,6 @@ tests/test_topic_override_by_meaning.py
 tests/test_topic_registry_broken_yaml.py
 tests/test_turn_parse.py
 tests/test_turn_parse_concurrent.py
-tests/test_turn_parse_fallback_class.py
 tests/test_turn_parse_lazy_rules.py
 tests/test_turn_parse_merged.py
 tests/test_turn_parse_readers.py

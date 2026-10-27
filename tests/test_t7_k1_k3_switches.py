@@ -5,16 +5,18 @@
 - K3 — гард третьего стыка корзины (`_multi_price_items`: условие П2 в остатке реплики гасит корзину). Выключатель
   `t7_drop_k3`.
 
-Под разбором хода (`turn_parse`, единственный режим) обе эвристики решают только на пути правил (`turn_parse.acting_for`
-= None); сбой LLM разбора с 16.10 ведёт политика сбоя разбора (`_turn_phrases.fallback_split`: разрез данными МИС, иначе
-реплика целиком) — Q2 отменено. Риски снятия из брифа: «когда будет готов анализ на ферритин» → корзина из двух позиций,
-«Глюкозотолерантный тест (глюкоза+ C-пептид)» → две позиции (K1); «по ОМС» → платные позиции (K3, П2).
+Под разбором хода обе эвристики решают только на пути правил (`turn_parse.acting_for` = None). Риски снятия из брифа:
+«когда будет готов анализ на ферритин» → корзина из двух позиций, «Глюкозотолерантный тест (глюкоза+ C-пептид)» → две
+позиции (K1); «по ОМС» → платные позиции (K3, П2).
 
-Инварианты (через обработчик эндпоинта, мини-прод, LLM недоступна, сплошной текст — «сначала тест, потом снятие»):
-- под on ответы на реплики рисков и на весь корпус эталона запасного пути (`price_turns_parse_fallback.json`) — те же,
-  что под off: до эвристик эти реплики больше не доходят;
+Инварианты (умолчания кода = прод: разметка `turn_spans`, цена читает разбор хода; STEP-2026-10-27-DEFAULTS-PROD):
+- под on ответ на реплики рисков при лежащей LLM — тот же, что под off (через обработчик эндпоинта, мини-прод): до
+  эвристик реплика хода не доходит — без LLM цена только дословному названию, иначе «Уточните название»;
 - выключатель действительно снимает эвристику (`price_list_services` / `_multi_price_items` напрямую) — это и есть
   оставшийся путь правил (вход читателя — не реплика хода: дозаполнение, контекст, срок готовности; `too_many`).
+
+Тесты запасного пути старого генератора окон (`turn_spans_llm = off`: эталон `price_turns_parse_fallback.json`) удалены
+вместе с `test_turn_parse_fallback_class` при перевороте умолчаний на прод (27.10).
 """
 
 from __future__ import annotations
@@ -23,8 +25,7 @@ import pytest
 
 from evalbench import world as ev_world
 from messengers_router.services import _prices_helpers as H
-from tests import test_turn_parse_fallback_class as fallback
-from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
+from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 
 _K1_RISKS = [
     "когда будет готов анализ на ферритин",
@@ -43,39 +44,26 @@ _K3_RISKS = [
 ]
 
 
-def _answer(text: str, config: str, extra: dict[str, str], monkeypatch, world_dir, *, case: str = "") -> dict:
-    """Ход через эндпоинт обвязкой эталона запасного пути: набор `config` плюс выключатели `extra`; `case` — случай
-    эталона (с его оракулом), иначе — временный случай с этой репликой (LLM недоступна)."""
+def _answer(text: str, key: str, value: str, monkeypatch, world_dir) -> list[dict]:
+    """Ход через эндпоинт при лежащей LLM (мир гейта) с выключателем `key` = `value` — что видит пациент: ответ, перевод,
+    висящий вопрос, услуга сессии (инструмент плана эвристика списка меняет: корзина или одна услуга — ответ тот же)."""
 
-    name = case or f"t7-{len(text)}-{config}"
-    sets = f"t7-{config}-{sorted(extra.items())}"
-    if not case:
-        fallback.CASES[name] = fallback.Case(text, "any", "T7")
-    fallback._SETS[sets] = {**fallback._SETS[config], **extra}
-    try:
-        [turn] = fallback._dialog(name, sets, [text], monkeypatch, world_dir)
-    finally:
-        if not case:
-            fallback.CASES.pop(name, None)
-        fallback._SETS.pop(sets, None)
-    return turn
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, key, value, raising=False)
+    with ev_world.FrozenWorld(world_dir, "day") as world:
+        record = run_dialog([text], f"t7-{key}-{value}-{len(text)}")
+        attempts = list(world.net.attempts)
+    assert attempts == []
+    return [{key: turn[key] for key in ("text", "handoff", "pending", "service_name")} for turn in record]
 
 
-@pytest.mark.parametrize("config", ["deploy_parse", "prod"])
 @pytest.mark.parametrize(("key", "text"), [*(("MR_T7_DROP_K1", t) for t in _K1_RISKS), *(("MR_T7_DROP_K3", t) for t in _K3_RISKS)])
-def test_llm_down_solid_text_answers_the_same_without_the_heuristic(key, text, config, mini_prod_world, monkeypatch):  # noqa: F811
-    off = _answer(text, config, {key: "off"}, monkeypatch, mini_prod_world)
-    on = _answer(text, config, {key: "on"}, monkeypatch, mini_prod_world)
+def test_llm_down_solid_text_answers_the_same_without_the_heuristic(key, text, mini_prod_world, monkeypatch):  # noqa: F811
+    off = _answer(text, key, "off", monkeypatch, mini_prod_world)
+    on = _answer(text, key, "on", monkeypatch, mini_prod_world)
 
     assert on == off
-
-
-@pytest.mark.parametrize("key", ["MR_T7_DROP_K1", "MR_T7_DROP_K3"])
-@pytest.mark.parametrize("name", sorted(fallback.CASES))
-def test_fallback_golden_corpus_is_unchanged_without_the_heuristic(key, name, mini_prod_world, monkeypatch):  # noqa: F811
-    turn = _answer(fallback.CASES[name].text, "prod", {key: "on"}, monkeypatch, mini_prod_world, case=name)
-
-    assert [turn] == fallback._load()[f"{name}-prod"]
 
 
 def _catalog(world_dir):
@@ -87,7 +75,7 @@ def test_k1_switch_removes_both_guards_on_the_rules_path(mini_prod_world, monkey
     from messengers_router.runtime_config import config as cfg
 
     rows = _catalog(mini_prod_world)
-    covering = "сколько стоит прием, осмотр и консультация терапевта"
+    covering = "сколько стоит глюкозотолерантный тест, глюкоза и C-пептид"
     run_on = "сколько стоит оак оам ферритин глюкоза узи"
     monkeypatch.setattr(cfg, "MR_T7_DROP_K1", "off", raising=False)
     assert H.price_list_services(covering, rows=rows) == ((), "one_catalog_name")
