@@ -166,7 +166,8 @@ def test_without_deadline_a_short_queue_gives_up_and_the_turn_goes_to_rules(mini
     loaded = _turn(mini_prod_world, monkeypatch, text, deadline=0, busy_s=_BUSY_S)
     free = _turn(mini_prod_world, monkeypatch, text, deadline=0)
 
-    assert ("choose_turn_phrases", "queue_timeout") in loaded["outcomes"], loaded["outcomes"]
+    # Разметка реплики — `choose_turn_phrases` или `turn_spans` (умолчание = прод, STEP-2026-10-27-DEFAULTS-PROD): очередь 1,5 с у обеих.
+    assert any(site in ("choose_turn_phrases", "turn_spans") and outcome == "queue_timeout" for site, outcome in loaded["outcomes"]), loaded["outcomes"]
     assert loaded["telemetry"].get("llm_queue_gaveup", 0) >= 1, loaded["telemetry"]
     assert "llm_deadline_s" not in loaded["telemetry"]
     assert _same(loaded, free)[0] != _same(loaded, free)[1]
