@@ -4247,10 +4247,16 @@ async def patient_routing_stream(
             spent = llm_runtime.turn_decisions_spent()
             # Вопрос кнопки меню под `button_answer_topic` / `button_topic_hint`: значение, найденное правилами, LLM проверяет на
             # «другую тему» — правила находят его и в реплике о другом («ЭКГ как подготовиться?» на «Цену анализа»).
+            # Судья под `button_reply_judge` видит и кнопку с её темой: полный вопрос в теме кнопки — ответ, не «другая тема».
+            pending = memory.get_pending(state)
             answered = await pending_answer.answer(
-                *expected, user_text, filled=filled, confirm_topic=button_flow.judged_by_llm(memory.get_pending(state))
+                *expected,
+                user_text,
+                filled=filled,
+                confirm_topic=button_flow.judged_by_llm(pending),
+                button=button_flow.judge_context(pending, expected[1]),
             )
-            button_flow.refund_topic_judge(answered, memory.get_pending(state), spent)
+            button_flow.refund_topic_judge(answered, pending, spent)
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
