@@ -326,7 +326,7 @@ doctors, flow_policy, entity_grounder, router, core, `_service_normalizer`).
 
 **Одно известное падение — средовое, не код:**
 `tests/test_doctor_info_procedure_detail.py::test_non_modality_specialty_never_gets_noise_service[кто из хирургов ведёт приём]`.
-Тест дёргает LLM-refine, а `ollama_url = http://172.16.0.16:11434` отсюда
+Тест дёргает LLM-refine, а `ollama_url = http://<old-prod-host>:11434` отсюда
 недоступен (`http_code=000`), хотя API бота на порту 80 того же хоста отвечает.
 Проверено `git stash`: падает и на чистом HEAD без единой правки. Утром прогон
 был зелёным — значит порт 11434 отвалился по ходу дня. Чинить инфру, не код.
@@ -362,7 +362,7 @@ PRICE 13/13, **TEST_ASSIST 6/6**, TEST_RESULT 2/3.
 Команда прогона:
 
 ```bash
-bash messengers_router/eval_suite/run_remote_eval.sh --url http://172.16.0.28/api/messenger-generate-once --session-prefix s_after_20260814
+bash messengers_router/eval_suite/run_remote_eval.sh --url http://<prod-host>/api/messenger-generate-once --session-prefix s_after_20260814
 ```
 
 ---

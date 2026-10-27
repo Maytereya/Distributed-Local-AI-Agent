@@ -7,13 +7,13 @@
 ## 0. Контекст на момент хендоффа (что уже сделано в прошлой сессии)
 - **Resilience Фаза 1 (Tasks 1–8.1)** — задеплоено: честная degraded-таксономия (`resilience.py`), `tech_unavailable` без авто-оператора, структурные degraded-логи, fail-fast realtime-профиль `api_nayka`. Детали — `messengers_router_current_state.md` §1.11.
 - **BUG-2026-06-07-01** — починен (`88c80c5`): doctor-reschedule по ФИО теперь берёт филиалы из расписания врача, а не лаб-only «Гагарина 64». Это **appointment-путь**; баги ниже — в **lab/address-пути** (тот же класс «Гагарина 64», но другая ветка кода).
-- **🔴 ПЕРЕЕЗД НА ПРОД API ЗАВЕРШЁН** (config.ini `[NAUKA]` → `http://172.16.0.192/medserver-egisz/api/v1`, rebuild на `172.16.0.16`). Бот теперь на **реальных прод-данных** (136 регионов, 307 врачей). Тест-контур (`172.16.0.246/medserver-test`) обновлял данные «ночью следующего дня» — отсюда часть прошлых багов.
+- **🔴 ПЕРЕЕЗД НА ПРОД API ЗАВЕРШЁН** (config.ini `[NAUKA]` → `http://<mis-host>/medserver-egisz/api/v1`, rebuild на `<old-prod-host>`). Бот теперь на **реальных прод-данных** (136 регионов, 307 врачей). Тест-контур (`<mis-test-host>/medserver-test`) обновлял данные «ночью следующего дня» — отсюда часть прошлых багов.
 - Ветка: `release` (рабочая) / сервер на `test @ ab8adfc`. NLU-движок прод = **`legacy_v2` (rule-path активен — чинить правила, не только промпт)**.
 
 ## ⚠️ ГЛАВНАЯ ПОМЕТКА: все диалоги ниже — с ТЕСТ-данных (до cutover)
 Каждый баг **обязательно перепроверить на ПРОДЕ** (бот уже на проде). Часть может вести
 себя иначе или исчезнуть (реальные филиалы/врачи/данные). НЕ чинить вслепую по тест-поведению.
-Инструмент проверки на проде: live-debug пробой эндпоинта `http://172.16.0.16/api/messenger-generate-once`
+Инструмент проверки на проде: live-debug пробой эндпоинта `http://<old-prod-host>/api/messenger-generate-once`
 (с Mac; сервер даёт nginx-403 по source-IP) **или** `docker exec bookworm-agent python -c "..."` на сервере.
 
 ---
@@ -39,7 +39,7 @@
 «ул.Гагарина, 64», и на «есть другие адреса?» снова только Гагарина 64) — **ДАТИРОВАН ДО деплоя** →
 показывает старое поведение, НЕ обязательно пост-деплой регрессию. **Действие:** перепроверить на
 живом проде ПОСЛЕ деплоя той же фразой. Если всё ещё 1 филиал — фикс `88727d8` не покрыл lab-walk-in
-путь («анализы без записи, живая очередь»), нужен live debug-trace (SSH `max@172.16.0.16` / `docker exec`;
+путь («анализы без записи, живая очередь»), нужен live debug-trace (SSH `max@<old-prod-host>` / `docker exec`;
 локального кэша `/regions` НЕТ → офлайн-repro невозможен).
 
 ### BUG-B Мульти-айтем лаб-список парсится только частично (1 из ~30)
@@ -125,7 +125,7 @@ branch-матчинг). «Юг-2»/«ЮГ 2» — реальное имя фил
 1. **На каждый баг:** `superpowers:systematic-debugging` (root cause ПЕРЕД фиксом, по live-пробою на проде, не угадывать) → `superpowers:test-driven-development` (класс-инвариант-тест, не инстанс) → запись в `messengers_router_bug_log.md` (симптом/корень/инвариант/фикс/покрытие) → атомарный коммит.
 2. **Гейт fix-задач:** полный `./venv/bin/python -m pytest -q -p no:cacheprovider` + `ruff check` перед коммитом.
 3. **Конвенции:** ветка `release` (НЕ переключать); коммит оканчивается `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`; промпты — в ДВУХ локациях синхронно; NLU прод = `legacy_v2` (чинить правила); LLM-first NLU (не хрупкие стоп-слова).
-4. **Деплой/проверка на проде:** SSH `max@172.16.0.16` (пароль у владельца — **рекомендуется сменить**, светился в логе прошлой сессии); rebuild `cd /opt/bookworm_app/Distributed-Local-AI-Agent && docker compose up --build -d bookworm-agent agent-api`; бэкап конфига `/home/max/config.ini.test-contour.bak`.
+4. **Деплой/проверка на проде:** SSH `max@<old-prod-host>` (пароль у владельца — **рекомендуется сменить**, светился в логе прошлой сессии); rebuild `cd /opt/bookworm_app/Distributed-Local-AI-Agent && docker compose up --build -d bookworm-agent agent-api`; бэкап конфига `/home/max/config.ini.test-contour.bak`.
 5. **Старт новой сессии — прочитать:** этот файл → `messengers_router_current_state.md` → `messengers_router_bug_log.md` (паттерны прошлых багов, особенно 06-04-04 / 07-01 про «Гагарина 64») → план resilience (для Phase 2).
 
 ## 4. Рекомендуемый порядок

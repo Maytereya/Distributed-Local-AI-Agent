@@ -142,7 +142,7 @@ false-positive rate. РЕЗУЛЬТАТ = отчёт владельцу; вкл�
 - **FreeTalk (`src/localragagent/`) НЕ трогать** — Владимир (память project-freetalk-ownership).
 - config.ini вне git, вручную; **config.PY — в git** (не путать). При изменении
   структуры config.ini — сказать владельцу (передаёт Владимиру руками).
-- Прод SSH с Mac нет; эндпоинт `http://172.16.0.16/api/messenger-generate-once` с Mac доступен.
+- Прод SSH с Mac нет; эндпоинт `http://<old-prod-host>/api/messenger-generate-once` с Mac доступен.
 - Регексы policies.py — ReDoS-safe (test_security_probe гоняет).
 - Не дезинформировать НИКОГДА: честный degraded/оператор > выдумка.
 - git: с коммитами Владимира — merge, не rebase; `git config pull.rebase false`.

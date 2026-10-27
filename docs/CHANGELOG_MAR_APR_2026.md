@@ -88,5 +88,5 @@ PYTHONPATH=. venv/bin/python -m pytest tests/ --ignore=tests/eval -q
 # ожидается: ruff clean, 647 passed
 
 # remote eval (к живому серверу)
-./run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once
+./run_remote_eval.sh --url http://<old-prod-host>/api/messenger-generate-once
 ```

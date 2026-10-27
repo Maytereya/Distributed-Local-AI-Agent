@@ -19,7 +19,7 @@
 - **(C) Нет наблюдаемости.** Разработчики не знают частоту degraded-событий; операторы не видят, что проблема в сети/инфре, а не в пациенте.
 - **Латентность.** `Retry(total=3, backoff_factor=0.5)` в `agent_logic_2/nayka_api/api_nayka.py` усиливает задержку на больном апстриме → eval-таймауты 45-75с (RLY_02 ЭКГ→/regions, RLY_15 «нет»→ollama). Латентность — триггер, заставляющий degraded-mode срабатывать часто.
 
-Прод-апстримы: `ollama` (LLM), medserver `172.16.0.246:8081/medserver-test` (`/regions`, `/resultForPatient`, `/doctorSchedule`).
+Прод-апстримы: `ollama` (LLM), medserver `<mis-test-host>:8081/medserver-test` (`/regions`, `/resultForPatient`, `/doctorSchedule`).
 
 ## 2. Цели и не-цели
 

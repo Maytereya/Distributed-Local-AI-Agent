@@ -42,7 +42,7 @@
   - **Stage 21** — extract `Services` class methods into domain modules (follows Stage 20).
   - **Stage 22** — drop the re-export shim after a deprecation window.
 - **Stage 18 formally skipped (Session 15, 2026-04-18):** `scripts/bench_pending_dispatch.py` measured the no-pending fast-path over 2000 iterations — **p50 = 0.001 ms, p99 = 0.002 ms, max = 0.022 ms**. The plan's 20 ms gate is missed by four orders of magnitude; parallelizing pending-handler dispatch would add non-determinism risk for zero latency win. No code change.
-- **Local gate policy (Session 13 onwards):** `ruff check messengers_router/` + `PYTHONPATH=. venv/bin/pytest tests/ --ignore=tests/eval -q` gate every stage. Remote eval (`run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once`) is reserved for one-shot post-deploy verification, not per-stage.
+- **Local gate policy (Session 13 onwards):** `ruff check messengers_router/` + `PYTHONPATH=. venv/bin/pytest tests/ --ignore=tests/eval -q` gate every stage. Remote eval (`run_remote_eval.sh --url http://<old-prod-host>/api/messenger-generate-once`) is reserved for one-shot post-deploy verification, not per-stage.
 - **Last full-suite local result (post-Stage 15 remainder):** `577 passed, 3 warnings` in ~148s (563 prior + 14 new in `tests/test_stage15_prefetch.py`).
 - **Remote eval status:** last remote run before Session 14; `13c2cda` (PREPARE prompt fix) and `b01c5de` (orchestrator order restore) are not yet verified remotely. Re-run deferred until a batch of changes is ready to deploy.
 - **Environment caveat (unchanged):** local pytest picks up today-dated Nayka cache files. Hydrate the current-dated `doctors_*.jsonl`, `price_units_*.jsonl`, `price_region_3_*.jsonl`, and `service_info_*.jsonl` under `agent_logic_2/nayka_api/apidata/` before running pytest, otherwise date-rolled days will fail live-dependent tests for environment (not logic) reasons.
@@ -253,7 +253,7 @@
   - `77e21bf` — `perf(orchestrator): add per-stage latency instrumentation (Stage 14)`
   - `1dfc35d` — `perf(nlu): memoize deterministic text helpers with lru_cache`
 - **Skipped / deferred (documented reasons):**
-  - **Stage 12b–12g:** each helper extraction is behaviour-preserving but the plan requires "eval output identical" per plan §ground-rule 4; without remote eval against `http://172.16.0.16/api/messenger-generate-once` I cannot prove byte-for-byte equivalence on 49 critical + 49 golden + 49 stage5 cases. Local pytest only covers structural invariants, not the full NLU surface.
+  - **Stage 12b–12g:** each helper extraction is behaviour-preserving but the plan requires "eval output identical" per plan §ground-rule 4; without remote eval against `http://<old-prod-host>/api/messenger-generate-once` I cannot prove byte-for-byte equivalence on 49 critical + 49 golden + 49 stage5 cases. Local pytest only covers structural invariants, not the full NLU surface.
   - **Stage 15 (parallel catalog):** `_inject_catalog_candidates` has a data dependency on `_verify_doctor_entity` setting `entities["doctor_name"]` before `should_try_service` refinement (router.py lines 1087, 1091–1094). OPTION B requires separating fetch-from-apply in both helpers; plan rates "Risk: Medium. Eval mismatch = revert." Cannot validate without remote eval.
   - **Stage 17a (NLU short-circuit):** the current `_merge` in `nlu_pipeline.py:71–120` explicitly treats LLM as source of truth for non-safety labels. Docstring calls out that the old "high rule confidence → skip LLM" path caused green-eval / prod-fail divergence and was deliberately removed. Short-circuiting re-introduces that failure mode. Cannot safely gate behind "byte-identical eval output" requirement without remote eval.
   - **Stage 17b, 18:** not in scope per user instructions (17b needs new approval, 18 is measurements-driven).
@@ -327,7 +327,7 @@ These are non-negotiable. Violating any of them is an automatic rollback.
 
 1. **Every stage ends green.** Before merging a stage commit, the following must all pass:
    - `PYTHONPATH=. python -m pytest tests/ -x -q --ignore=tests/eval` (unit tests; use any already provisioned interpreter/venv with project deps installed)
-   - `bash messengers_router/eval_suite/run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once`
+   - `bash messengers_router/eval_suite/run_remote_eval.sh --url http://<old-prod-host>/api/messenger-generate-once`
      (all 7 eval stages: intent smoke, appointment flow, reliability, golden corpus, critical safety gate, prepare wrap, coverage)
    - `ruff check messengers_router/`
 2. **One stage = one commit (or a small atomic chain).** Do not bundle unrelated changes. Commit message prefix: `refactor(router):`.
@@ -354,7 +354,7 @@ RUN_ID=$(date +%s)
 mkdir -p messengers_router/eval_suite/logs/baseline_${RUN_ID}
 PYTHONPATH=. python -m pytest tests/ -x -q --ignore=tests/eval \
   2>&1 | tee messengers_router/eval_suite/logs/baseline_${RUN_ID}/pytest.log
-bash messengers_router/eval_suite/run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once \
+bash messengers_router/eval_suite/run_remote_eval.sh --url http://<old-prod-host>/api/messenger-generate-once \
   2>&1 | tee messengers_router/eval_suite/logs/baseline_${RUN_ID}/eval.log
 ruff check messengers_router/ 2>&1 | tee messengers_router/eval_suite/logs/baseline_${RUN_ID}/ruff.log
 ```
@@ -410,7 +410,7 @@ All stages below are verified against this baseline. If the baseline isn't green
 ```bash
 PYTHONPATH=. python -m pytest tests/ -x -q --ignore=tests/eval
 ruff check messengers_router/
-bash messengers_router/eval_suite/run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once
+bash messengers_router/eval_suite/run_remote_eval.sh --url http://<old-prod-host>/api/messenger-generate-once
 ```
 
 **Risk:** Medium. This stage is intentionally not a refactor stage; it is a baseline normalization stage. Keep the fixes narrow and deterministic.

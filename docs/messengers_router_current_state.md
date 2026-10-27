@@ -92,7 +92,7 @@
 
 ### 1.13 Прод-cutover findings + батч багов 08–09.06 ⭐ новейшее
 
-**Контекст:** переезд на прод-бэкенд `medserver-egisz` (`config.ini [NAUKA]` → `172.16.0.192/medserver-egisz`) вскрыл серию **field-mapping расхождений** — новый бэкенд отдаёт данные иначе, чем тот, под который писался бот. Журнал: `messengers_router_bug_log.md` (BUG-2026-06-08-01/02/03) + `messengers_router_address_diagnostic_2026-06-08.md`.
+**Контекст:** переезд на прод-бэкенд `medserver-egisz` (`config.ini [NAUKA]` → `<mis-host>/medserver-egisz`) вскрыл серию **field-mapping расхождений** — новый бэкенд отдаёт данные иначе, чем тот, под который писался бот. Журнал: `messengers_router_bug_log.md` (BUG-2026-06-08-01/02/03) + `messengers_router_address_diagnostic_2026-06-08.md`.
 
 - **⚠️ Прод `/regions` НЕ отдаёт поле `city`** — город закодирован деревом `parent` (`Все → *область → Город → филиалы`) + `companyName` («Наука-Самара»). Бот фильтровал Самару по `r.get("city")` → ронял ВСЕ реальные филиалы (**BUG-A**: анализы → 1 «Гагарина 64» вместо **31**). Фикс: `_regions._derive_region_city` выводит город из `parent`, `_inject_region_cities` проставляет на загрузке (`core._ensure_regions_loaded`, единая точка) — `88727d8`. Заодно спутники (Новокуйбышевск/Тольятти) исключаются по своему городу; вероятно чинит расписания (`_samara_region_tokens`) и распознавание филиалов (ЮГ-2).
 - **Запись по специальности → priceUnits care-setting → 1 филиал** (**BUG-2026-06-08-03**): Path 2 (priceUnits, место оказания процедуры) перехватывал приём врача по специальности (`service_q`=специальность матчила прайс «Приём гинеколога») → сужал до «Ленина 5». Фикс: `appt_by_specialty` guard на Path 2/3 → doctor-capable (ВСЕ филиалы спец-ти, specialty-aware) — `a737005`.

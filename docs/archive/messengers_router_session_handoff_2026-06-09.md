@@ -46,7 +46,7 @@
 - Ветка `release` (НЕ переключать). Атомарные коммиты, оканчиваются `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Гейт перед коммитом: `./venv/bin/python -m pytest -q -p no:cacheprovider` + `ruff check`.
 - **Скиллы:** на каждый баг `systematic-debugging` (root cause ПЕРЕД фиксом, по живому пробою) → `TDD` (класс-инвариант-тест) → запись в `messengers_router_bug_log.md` → атомарный коммит. Безопасность — `security-review`/`incident-response`.
 - **Промпты — в ДВУХ локациях** синхронно (`messengers_router/prompts/*` И `app_data/prompts/mr_*`). NLU прод = `legacy_v2` (rule-path активен). LLM-first NLU (не хрупкие стоп-слова).
-- **Прод-пробои:** эндпоинт даёт nginx-403 по source-IP (с Mac И из docker-exec через HTTP). Диагностика — **in-process**: `docker exec bookworm-agent python - <<'PY' … PY` через `api_nayka`/`Services`. Кириллица в paste рвётся на длинных строках → **chunked base64** (строки ≤60). SSH `max@172.16.0.16`.
+- **Прод-пробои:** эндпоинт даёт nginx-403 по source-IP (с Mac И из docker-exec через HTTP). Диагностика — **in-process**: `docker exec bookworm-agent python - <<'PY' … PY` через `api_nayka`/`Services`. Кириллица в paste рвётся на длинных строках → **chunked base64** (строки ≤60). SSH `max@<old-prod-host>`.
 - **Ключевой прод-факт:** новый бэкенд `medserver-egisz` `/regions` БЕЗ поля `city` (город в дереве `parent` + `companyName`). При region/address/schedule-багах СНАЧАЛА дёрнуть живой эндпоинт, смотреть РЕАЛЬНУЮ структуру (синтетика с выдуманным полем = ложный «код корректен»). Возможны такие же расхождения в `/doctors`, `/priceByRegion`.
 
 ## 6. Читать первым (порядок)
