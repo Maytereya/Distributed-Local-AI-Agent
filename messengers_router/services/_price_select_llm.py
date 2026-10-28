@@ -55,7 +55,7 @@ from .. import llm_runtime, turn_parse, turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ..russian_nlu import tokens_share_stem
-from . import _biomaterial, _price_by_parse
+from . import _biomaterial, _price_by_parse, _qualifier_pool
 from ._common import _normalise_catalog_text
 from ._common import _normalise_input
 from ._prices_helpers import (
@@ -797,6 +797,11 @@ async def select_price_rows(
     if by_synonym:
         keys = {_row_key(row) for row in by_synonym}
         pool = [*by_synonym, *(row for row in pool if _row_key(row) not in keys)][:_POOL_LIMIT]
+    # Материал позиции (уточнения, этап 3; `qualifier_pool = on`): строки, которые по данным МИС его не принимают, — вон, строки с
+    # ним — в пул; «посев кала» не выбирает общий посев (DESIGN-2026-10-28-POSITION-QUALIFIERS).
+    matter, bare = _qualifier_pool.material(question)
+    if matter:
+        pool = await asyncio.to_thread(_qualifier_pool.pool, pool, matter, bare or phrase, rows, _POOL_LIMIT)
     if not _price_by_parse.enabled():
         strong = strong_rows(question, rows, pool=pool)
     else:
@@ -892,6 +897,8 @@ async def select_price_rows(
     pool_by_terms = await asyncio.to_thread(
         _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, first=rare_by_terms, fallback_texts=term_words
     )
+    if matter:  # второй круг по терминам LLM тоже не теряет материал («посев мочи с чувствительностью» → посевы другого материала)
+        pool_by_terms = await asyncio.to_thread(_qualifier_pool.pool, pool_by_terms, matter, " ".join(terms), rows, _POOL_LIMIT)
     # Пустой список — не вопрос к LLM: выбрать не из чего, ответ «не нашёл» тот же без решения из лимита хода.
     if not pool_by_terms:
         journal_miss(terms, reason)

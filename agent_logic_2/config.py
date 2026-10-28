@@ -213,6 +213,7 @@ class MessengerRouterConfig:
     price_by_parse: str
     strong_family_letter: str
     position_qualifiers: str
+    qualifier_pool: str
     basket_fail_unpriced: str
     topic_by_llm: str
     booking_target_slot_llm: str
@@ -679,6 +680,10 @@ settings = Settings(
         # позиции или на весь вопрос — без розничной цены; прочие уточнения вне фразы — суду условия корзины. Нужен
         # `turn_spans_llm = on`. off — как было. [MESSENGER_ROUTER] position_qualifiers
         position_qualifiers=_get_enum("MESSENGER_ROUTER", "position_qualifiers", default="off", allowed={"off", "on"}),
+        # Уточнения позиции, этап 3 (DESIGN-2026-10-28-POSITION-QUALIFIERS): пул выбора строки по материалу позиции — строки, которые
+        # по данным МИС (`biomatNames`) материал не принимают, не кандидаты; строки с ним — в пул («посев кала» не выбирает общий
+        # посев). Нужен `position_qualifiers = on`. off — как было. [MESSENGER_ROUTER] qualifier_pool
+        qualifier_pool=_get_enum("MESSENGER_ROUTER", "qualifier_pool", default="off", allowed={"off", "on"}),
         # Корзина при сбое выбора LLM (решение владельца 27.10, узел 7 проверки ответов без LLM; BUG-2026-10-27-LLM-QUEUE-GIVES-UP,
         # шаг 3): слабые позиции — варианты кода **названиями без цен** и оффер оператора, «Итого» нет; сильные (по данным) — с
         # ценой, как были. off — как было: два варианта и больше — с ценами и в итоге. [MESSENGER_ROUTER] basket_fail_unpriced
@@ -963,6 +968,7 @@ MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_STRONG_FAMILY_LETTER = settings.messenger_router.strong_family_letter
 MR_POSITION_QUALIFIERS = settings.messenger_router.position_qualifiers
+MR_QUALIFIER_POOL = settings.messenger_router.qualifier_pool
 MR_BASKET_FAIL_UNPRICED = settings.messenger_router.basket_fail_unpriced
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
