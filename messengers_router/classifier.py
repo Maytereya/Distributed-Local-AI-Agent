@@ -66,7 +66,6 @@ from .policies import (
     low_confidence_policy,
     extract_service_phrase,
     extract_specialty,
-    has_nearest_schedule_hint,
     missing_slots,
     service_name_conflicts_with_doctor,
     detect_unsupported_catalog,
@@ -1493,16 +1492,7 @@ async def deterministic_rule_decision(
             price_intent=price_intent,
             appointment_action=appointment_action,
         )
-        if specialty and has_nearest_schedule_hint(text):
-            decision = RouteDecision(
-                label="DOCTOR_SCHEDULE",
-                confidence=0.72,
-                entities={"specialty": specialty},
-                flags=local_flags | {"rule_schedule_nearest", "rule_schedule_with_specialty"},
-                needs_handoff=False,
-                context_action="continue",
-            )
-        elif specialty and not appointment_intent and not price_intent and not prepare_intent:
+        if specialty and not appointment_intent and not price_intent and not prepare_intent:
             # Кейс 08.07 «УЗИ органов мошонки»: ветка оставляла ТОЛЬКО specialty,
             # и пациент получал ВСЕХ УЗИ-врачей с полными CRM-описаниями (~12К
             # символов), включая не делающих процедуру. Если фраза-услуга
