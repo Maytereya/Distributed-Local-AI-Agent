@@ -119,9 +119,11 @@ _LEAF = "menu.tests.booking_needed"
 _LEAF_REPLY = "Записаться на хгч"
 
 
-def _leaf_dialog(world_dir, monkeypatch, turns, *, switch: str, frame: str | None):
+def _leaf_dialog(world_dir, monkeypatch, turns, *, switch: str, frame: str | None, leaves: str = _LEAF):
+    from messengers_router.runtime_config import config as cfg
     from tests import test_button_answer_topic_class as harness
 
+    monkeypatch.setattr(cfg, "MR_BUTTON_LEAF_FRAME", leaves, raising=False)
     real = harness._LLM
 
     class _WithFrame(real):
@@ -158,3 +160,10 @@ def test_leaf_mark_only_under_frame(switch, mini_prod_world, monkeypatch):  # no
 
     turns = _leaf_dialog(mini_prod_world, monkeypatch, [_press(_LEAF), _LEAF_REPLY], switch=switch, frame="same")
     assert button_flow.LEAF_KEY not in turns[0]["state"] and "button_frame" not in turns[1]["telemetry"]
+
+
+def test_leaf_not_listed_holds_no_frame(mini_prod_world, monkeypatch):  # noqa: F811
+    """Рамка листа без своего вопроса — только у листов из `button_leaf_frame` (без ответа по данным темы рамка — шаблон)."""
+
+    turn = _leaf_dialog(mini_prod_world, monkeypatch, [_press(_LEAF), _LEAF_REPLY], switch="frame", frame="same", leaves="menu.price.promo")[1]
+    assert "button_frame" not in turn["telemetry"], turn["telemetry"]

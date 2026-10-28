@@ -229,6 +229,7 @@ class MessengerRouterConfig:
     walkin_by_llm: str
     button_topic_firm: str
     promo_by_llm: str
+    button_leaf_frame: str
     insurance_topic: str
     price_select_named: str
     bare_name_overview: str
@@ -772,6 +773,11 @@ settings = Settings(
         # Какая акция отвечает на вопрос — выбор LLM среди действующих акций (`services/news.py`, `PROMO_TASK`), не счёт
         # совпадений слов (STEP-2026-10-29-PROMO-BY-MEANING). off — как было. [MESSENGER_ROUTER] promo_by_llm
         promo_by_llm=_get_enum("MESSENGER_ROUTER", "promo_by_llm", default="off", allowed={"off", "on"}),
+        # Листы без своего вопроса, которые под `button_answer_topic = frame` держат рамку следующей реплики (id листьев через
+        # запятую; пусто — ни один). Рамка без ответа по данным темы — шаблон: «Нужно ли записываться» 48 → 70 % (без записи ли
+        # услуга решает каталог МИС), «Акции и скидки» 55 → 39 % (общий список акций), стенд 29.10. Включать по листу, по замеру
+        # (STEP-2026-10-29-BUTTON-FRAME). [MESSENGER_ROUTER] button_leaf_frame
+        button_leaf_frame=_get_str("MESSENGER_ROUTER", "button_leaf_frame", default=""),
         # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
         # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
         # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — «ответит оператор» и оффер; цена — путь цены.
@@ -993,6 +999,7 @@ MR_TEST_ASSIST_PRICE = settings.messenger_router.test_assist_price
 MR_WALKIN_BY_LLM = settings.messenger_router.walkin_by_llm
 MR_BUTTON_TOPIC_FIRM = settings.messenger_router.button_topic_firm
 MR_PROMO_BY_LLM = settings.messenger_router.promo_by_llm
+MR_BUTTON_LEAF_FRAME = settings.messenger_router.button_leaf_frame
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview

@@ -411,12 +411,20 @@ async def _in_frame(text: str, action: button_menu.ButtonAction) -> bool:
     return outcome == "same"
 
 
+def leaf_frame_leaves() -> frozenset[str]:
+    """`[MESSENGER_ROUTER] button_leaf_frame` — листы без своего вопроса, которые держат рамку следующей реплики: рамка без
+    ответа по данным темы — шаблон, включать по листу, по замеру; пусто (по умолчанию) — ни один."""
+
+    raw = str(getattr(_cfg, "MR_BUTTON_LEAF_FRAME", "") or "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
 def _frames_next_reply(button_id: str) -> bool:
-    """Лист без своего вопроса (отвечает на нажатие сразу: `pass` или `slot` со своими сущностями), кроме адресных — их
-    следующую реплику ведёт `address_followup`."""
+    """Лист без своего вопроса (отвечает на нажатие сразу: `pass` или `slot` со своими сущностями) из `button_leaf_frame`,
+    кроме адресных — их следующую реплику ведёт `address_followup`."""
 
     action = button_menu.action_for(button_id) if button_id else None
-    if action is None or not action.title:
+    if action is None or not action.title or button_id not in leaf_frame_leaves():
         return False
     answered_at_press = action.mode == "pass" or (action.mode == "slot" and bool(action.entities))
     return answered_at_press and not (action.mode == "pass" and action.label == "ADDRESS")
