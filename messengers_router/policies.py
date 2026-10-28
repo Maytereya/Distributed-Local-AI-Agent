@@ -420,7 +420,6 @@ _DATE_TIME_SIGNAL_RE = re.compile(
     r"\d{1,2}:\d{2}|\b(?:в|к)\s+\d{1,2}\s*(?:утра|дня|вечера|ночи)?)\b",
     re.I,
 )
-_RESULT_DELIVERY_QUESTION_RE = re.compile(r"\b(можно|куда)\b.*\b(почт\w*|придут)\b", re.I)
 _ASSIST_PRICE_CONTEXT_RE = re.compile(
     r"\b(по\s+направлен\w*|данн\w*\s+анализ\w*|сдач\w*\s+анализ\w*)\b",
     re.I,
@@ -699,10 +698,6 @@ HANDOFF_REASON_MATRIX: dict[str, str] = {
 }
 
 APPOINTMENT_STEP_BRANCH = "select_branch"
-APPOINTMENT_STEP_DATETIME = "select_datetime"
-APPOINTMENT_STEP_PATIENT = "collect_patient_name"
-APPOINTMENT_STEP_CONFIRM = "confirm"
-APPOINTMENT_STEP_DONE = "done"
 # Вариант A записи (решение владельца 08.10, повестка рефакторинга №6): после цели и
 # филиала бот один раз спрашивает пожелание по времени и цитирует его оператору как есть;
 # дату, время, ФИО и карточку «Подтверждаете?» не собирает — оператор берёт их по живому
@@ -1235,17 +1230,6 @@ def is_price_dominant_intent(
     if detect_test_assist_intent(text) and _ASSIST_PRICE_CONTEXT_RE.search(text or ""):
         return False
     return True
-
-
-def should_treat_result_delivery_as_test_assist(text: str) -> bool:
-    low = (text or "").lower()
-    return (
-        detect_test_assist_intent(text)
-        and bool(_RESULT_DELIVERY_QUESTION_RE.search(text or ""))
-        and "не высл" not in low
-        and "почему" not in low
-        and "личн" not in low
-    )
 
 
 def _has_analysis_context_entities(entities: dict[str, Any] | None = None) -> bool:
@@ -2642,8 +2626,6 @@ def _price_row_matches_service(row_name: str, expected_service: str) -> bool:
     return False
 
 
-
-
 def extract_price_rub(
     price_payload: dict[str, Any] | None,
     *,
@@ -2807,14 +2789,6 @@ def appointment_text_datetime_prompt(service: str, branch: str, price_rub: str |
     return f"Да, можем записать на {service} ({branch}). На какую дату и время вам удобно?"
 
 
-def appointment_text_patient_name_prompt() -> str:
-    return APPOINTMENT_REPLY_MAP["patient_name_prompt"]
-
-
-def appointment_text_confirm_prompt(summary: str) -> str:
-    return f"{summary} {APPOINTMENT_REPLY_MAP['confirm_suffix']}"
-
-
 def appointment_text_cancel_confirm() -> str:
     return APPOINTMENT_REPLY_MAP["cancel_confirm"]
 
@@ -2961,20 +2935,6 @@ def appointment_service_display(entities: dict[str, Any]) -> str:
     if dative:
         return f"приём к {dative}"
     return service_raw
-
-
-def doctor_schedule_text_clarify_doctor() -> str:
-    return "Уточните, пожалуйста, фамилию врача."
-
-
-def decision_handoff_reason(flags: set[str]) -> str:
-    if "low_confidence" in flags:
-        return "low_confidence"
-    return "generic"
-
-
-def decision_handoff_text(flags: set[str]) -> str:
-    return handoff_message(decision_handoff_reason(flags))
 
 
 _NOTE_RE = re.compile(r"📞\s*Заметка.*?(?=\n{2,}|\Z)", flags=re.S | re.I)

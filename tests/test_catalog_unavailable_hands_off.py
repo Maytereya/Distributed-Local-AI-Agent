@@ -6,14 +6,14 @@
 должен звать оператора (принцип 3 запрещает «уточните у оператора» без перевода).
 
 Стало под `on`: тот же ход — перевод (`service_error_doctors_list`, если нужен только каталог врачей, иначе общий
-`service_error`: каталог услуг нужен и цене, и записи). Под `off` — как было.
+`service_error`: каталог услуг нужен и цене, и записи).
 
 Инвариант класса: пустой каталог МИС не оставляет пациента без оператора.
+Выключатель `mis_honest_degradation` снят 28.10 (on на проде с 18.10): путь off удалён.
 """
 
 from __future__ import annotations
 
-import pytest
 
 from evalbench import faults
 from evalbench import world as ev_world
@@ -21,18 +21,11 @@ from messengers_router.policies import handoff_message
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 
 
-@pytest.mark.parametrize(("honest", "handoff"), [("on", True), ("off", False)])
-def test_empty_catalog_turn(honest, handoff, mini_prod_world, monkeypatch):  # noqa: F811
-    from messengers_router.runtime_config import config as cfg
-
-    with ev_world.FrozenWorld(mini_prod_world, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_MIS_HONEST_DEGRADATION", honest, raising=False)
+def test_empty_catalog_turn(mini_prod_world, monkeypatch):  # noqa: F811
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         with faults.Faults(world, snapshots="none", live="network"):
-            first, second = run_dialog(["сколько стоит ферритин", "а цена?"], f"catalog-empty-{honest}")
+            first, second = run_dialog(["сколько стоит ферритин", "а цена?"], "catalog-empty")
 
-    assert first["handoff"] is handoff, first["text"]
-    if handoff:
-        assert handoff_message("service_error") in first["text"], first["text"]
-        assert "напишите «оператор»" not in first["text"]
-    else:
-        assert "Попробуйте повторить запрос через 5 минут" in first["text"]
+    assert first["handoff"] is True, first["text"]
+    assert handoff_message("service_error") in first["text"], first["text"]
+    assert "напишите «оператор»" not in first["text"]

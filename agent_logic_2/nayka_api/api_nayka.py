@@ -993,89 +993,6 @@ def site_promotions(*, realtime: bool = False) -> list:
     return _cached_schedule_ref("promotions", _fetch)
 
 
-def site_result_for_patient(
-    *,
-    surname: str,
-    year: int,
-    filial: str,
-    number: int,
-    lang: str | None = None,
-    with_time: bool | None = None,
-) -> dict[str, Any]:
-    """
-    Получить результаты пациента через endpoint /site/resultForPatient.
-
-    Параметры соответствуют форме на сайте:
-    - surname: фамилия пациента
-    - year: год рождения
-    - filial: код/название филиала
-    - number: номер (код) анализа
-    - lang: язык (опционально)
-    - with_time: флаг time (опционально)
-    """
-    params: dict[str, Any] = {
-        "surname": surname,
-        "year": int(year),
-        "filial": filial,
-        "number": int(number),
-    }
-    if isinstance(lang, str) and lang.strip():
-        params["lang"] = lang.strip()
-    if with_time is not None:
-        params["time"] = bool(with_time)
-
-    try:
-        resp = _session_get(f"{base_url}/resultForPatient", params=params, realtime=True)
-        resp.raise_for_status()
-
-        content_type = str(resp.headers.get("Content-Type") or "").lower()
-        body_text = (resp.text or "").strip()
-
-        # API может возвращать как JSON, так и plain text (например, ссылку на бланк).
-        if "application/json" in content_type:
-            try:
-                payload: Any = resp.json()
-            except ValueError:
-                # Некорректный JSON при JSON Content-Type: пробуем текст как fallback.
-                if not body_text:
-                    return {
-                        "ok": False,
-                        "status_code": resp.status_code,
-                        "error": "empty_json_response",
-                        "params": params,
-                    }
-                try:
-                    payload = json.loads(body_text)
-                except Exception:
-                    payload = body_text
-        else:
-            if not body_text:
-                return {
-                    "ok": False,
-                    "status_code": resp.status_code,
-                    "error": "empty_response",
-                    "params": params,
-                }
-            try:
-                payload = json.loads(body_text)
-            except Exception:
-                payload = body_text
-
-        return {
-            "ok": True,
-            "status_code": resp.status_code,
-            "content_type": content_type,
-            "data": payload,
-        }
-    except requests.RequestException as e:
-        return {
-            "ok": False,
-            "status_code": getattr(getattr(e, "response", None), "status_code", None),
-            "error": str(e),
-            "params": params,
-        }
-
-
 def _merge_schedule_rows_by_date(rows: list) -> list:
     """Мержит дни ОДНОГО филиала по дате — против задвоенных дней.
 
@@ -1134,7 +1051,7 @@ def find_doctor_schedule(
     if region_name:
         region_id = next((r["id"] for r in regions if region_name.lower() in r["name"].lower()), None)
         if not region_id:
-            if not regions and regions_failed() and str(getattr(c, "MR_MIS_HONEST_DEGRADATION", "off")).lower() == "on":
+            if not regions and regions_failed():
                 # Справочник филиалов не получен — это сбой МИС, а не «такого региона нет» (DATA-2): строка с маркером
                 # сбоя → `ScheduleSourceUnavailable` → честный перевод `service_error_schedule`.
                 return "Не удалось получить список регионов: справочник филиалов МИС недоступен."

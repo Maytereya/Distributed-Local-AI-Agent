@@ -1052,31 +1052,6 @@ def _dedupe_doctors_by_fio(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _service_query_matches(service_q: str, service_name: str) -> bool:
-    sq = _normalise_input(service_q)
-    sn = _normalise_input(service_name)
-    if not sq or not sn:
-        return False
-    if sq in sn:
-        return True
-    if "анализ" in sq or "лаборатор" in sq:
-        analysis_tokens = (
-            "анализ",
-            "лаборатор",
-            "биоматериал",
-            "взятие",
-            "кров",
-            "моч",
-            "мазок",
-            "сыворот",
-            "плазм",
-        )
-        return any(tok in sn for tok in analysis_tokens)
-    if sq == "экг":
-        return "экг" in sn or "электрокардиограм" in sn
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Mid-block helpers (service-kind detection)
 # ---------------------------------------------------------------------------

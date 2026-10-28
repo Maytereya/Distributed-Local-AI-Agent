@@ -53,7 +53,6 @@ from . import turn_telemetry
 from .choice import Choice, Option, Status, Task, choose
 from .expects import (
     ANESTHESIA_OPTIONS,
-    ANY_BRANCH_OPTION,
     APPOINTMENT_ACTION_OPTIONS,
     SHOW_ALL_OPTIONS,
     Question,
@@ -154,7 +153,6 @@ FIXED_OPTIONS: dict[str, tuple[str, ...]] = {
     Question.ANESTHESIA.value: ANESTHESIA_OPTIONS,
     Question.SHOW_ALL.value: SHOW_ALL_OPTIONS,
 }
-ANY_BRANCH = ANY_BRANCH_OPTION
 
 
 @dataclass(frozen=True)

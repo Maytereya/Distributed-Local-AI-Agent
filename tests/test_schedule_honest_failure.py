@@ -5,9 +5,9 @@
 переложен на пациента); ответила часть — «ближайшее окно» только из ответивших. При сбое кэш расписания отдавал
 ответ до 10 минут давности без пометки (занятый слот — свободным).
 
-Стало под `mis_honest_degradation = on` (решения владельца 08.10 «расписание — только живое» и 18.10 «сбой МИС →
+Стало (решения владельца 08.10 «расписание — только живое» и 18.10 «сбой МИС →
 оператор»): не ответил хотя бы один врач — перевод `service_error_schedule`, как в пути по фамилии, и
-`log_degraded`; устаревший ответ расписания при сбое не отдаётся. Под `off` — как было (кроме `log_degraded` — только лог).
+`log_degraded`; устаревший ответ расписания при сбое не отдаётся.
 
 Инвариант класса: сбой источника расписания не выдаётся пациенту за «расписания нет» и не сужает выбор окна молча.
 
@@ -15,6 +15,7 @@
 «расписание <специальности>» → DOCTOR_INFO, без опроса расписаний — честно, не «нет расписания»); путь по специальности
 остаётся при названном в контексте враче и вопросе со специальностью. Поэтому проверка — на уровне сервиса
 `doctors_schedule_week`, а не через эндпоинт.
+Выключатель `mis_honest_degradation` снят 28.10 (on на проде с 18.10): путь off удалён.
 """
 
 from __future__ import annotations
@@ -49,10 +50,8 @@ def _row(fio: str) -> list[dict]:
     return [{"fio": fio, "regions": ["г. Самара, пр. Ленина, 5"], "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-10-20", "slots": ["09:00"]}]}}]
 
 
-def _patch(monkeypatch, failing: set[str], honest: str) -> None:
-    from messengers_router.runtime_config import config as cfg
+def _patch(monkeypatch, failing: set[str]) -> None:
 
-    monkeypatch.setattr(cfg, "MR_MIS_HONEST_DEGRADATION", honest, raising=False)
 
     async def doctors(self):
         return [dict(d) for d in _PHLEBOLOGISTS]
@@ -72,7 +71,7 @@ def _patch(monkeypatch, failing: set[str], honest: str) -> None:
 
 @pytest.mark.parametrize("failing", [{"Тестов", "Петров"}, {"Тестов"}], ids=["all_failed", "part_failed"])
 def test_specialty_schedule_failure_hands_off_under_the_switch(failing, monkeypatch, caplog):
-    _patch(monkeypatch, failing, "on")
+    _patch(monkeypatch, failing)
 
     with caplog.at_level(logging.WARNING, logger="messengers_router.resilience"):
         res = asyncio.run(Services().doctors_schedule_week("расписание флеболога", {}))
@@ -84,20 +83,8 @@ def test_specialty_schedule_failure_hands_off_under_the_switch(failing, monkeypa
     assert "upstream=doctor_schedule" in caplog.text
 
 
-@pytest.mark.parametrize(("failing", "rows"), [({"Тестов", "Петров"}, 0), ({"Тестов"}, 1)], ids=["all_failed", "part_failed"])
-def test_switch_off_keeps_the_old_answer_but_logs(failing, rows, monkeypatch, caplog):
-    _patch(monkeypatch, failing, "off")
-
-    with caplog.at_level(logging.WARNING, logger="messengers_router.resilience"):
-        res = asyncio.run(Services().doctors_schedule_week("расписание флеболога", {}))
-
-    assert res.get("handoff_required") is not True
-    assert len(res.get("schedule") or []) == rows
-    assert "upstream=doctor_schedule" in caplog.text  # сбой виден и под off
-
-
 def test_healthy_schedule_is_untouched_under_the_switch(monkeypatch):
-    _patch(monkeypatch, set(), "on")
+    _patch(monkeypatch, set())
 
     res = asyncio.run(Services().doctors_schedule_week("расписание флеболога", {}))
 

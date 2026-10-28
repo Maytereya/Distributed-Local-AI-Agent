@@ -182,7 +182,6 @@ def adversary_answer(site: str, prompt: str) -> str | None:
         "appointment_change_validator": "ДРУГОЕ",
         "existing_appointment_validator": "НЕТ",
         "empty_evidence_kind": "BYE",
-        "symptom_specialists": "НЕТ",
         "renderer_patient": ADVERSARY_RENDER_TEXT,
         "renderer_patient_rich": ADVERSARY_RENDER_TEXT,
         "renderer_critic_patient_alignment": json.dumps(

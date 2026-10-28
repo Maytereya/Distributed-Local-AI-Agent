@@ -99,45 +99,6 @@ def test_without_branch_list_other_cities_are_still_excluded():
 # --- выбор LLM -------------------------------------------------------------------
 
 
-def _llm_answers(monkeypatch, answer) -> list[str]:
-    # Прежний вызов (`generate_text`) — путь `choose_symptom = off`; режим явно, а не умолчанием кода
-    # (STEP-2026-10-15-DEFAULTS-A): под `on` подделка не вызывается, и проверки молча теряют смысл.
-    monkeypatch.setattr(S._cfg, "MR_CHOOSE_SYMPTOM", "off", raising=False)
-    prompts: list[str] = []
-
-    async def fake_generate_text(prompt, **_kwargs):
-        prompts.append(prompt)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-
-    monkeypatch.setattr(S, "generate_text", fake_generate_text)
-    return prompts
-
-
-@pytest.mark.parametrize(
-    ("answer", "expected"),
-    [
-        ("2, 1", S.SpecialistAdvice(specialties=("невролог", "терапевт"))),
-        ("Номера: 3.", S.SpecialistAdvice(specialties=("кардиолог",))),
-        ("2, 2, 4, 1, 3", S.SpecialistAdvice(specialties=("невролог", "оториноларинголог", "терапевт"))),
-        ("СРОЧНО", S.SpecialistAdvice(urgent=True)),
-        ("НЕТ", None),
-        ("0, 99", None),
-        ("не знаю", None),
-        ("", None),
-        (TimeoutError(), None),
-    ],
-    ids=["two", "one_with_words", "dedup_cap_three", "urgent", "no", "out_of_range", "unclear", "empty", "llm_failure"],
-)
-def test_llm_choice_is_parsed_strictly(monkeypatch, answer, expected):
-    prompts = _llm_answers(monkeypatch, answer)
-
-    assert asyncio.run(S.pick_specialists("у меня болит голова 3 дня", _SPECIALTIES)) == expected
-    assert "«у меня болит голова 3 дня»" in prompts[0]
-    assert "2. невролог" in prompts[0]
-
-
 # --- выбор на модуле choose() (ход (в), клиент 2) ------------------------------------
 
 
@@ -156,37 +117,12 @@ class _Client:
         return GenerateResponse(model="m", response=self.reply, done=True)
 
 
-def _choose_mode(monkeypatch, mode: str, reply) -> _Client:
+def _client(monkeypatch, reply) -> _Client:
     from messengers_router import llm_runtime
 
     client = _Client(reply)
-    monkeypatch.setattr(S._cfg, "MR_CHOOSE_SYMPTOM", mode, raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", client)
     return client
-
-
-@pytest.mark.parametrize(
-    ("answer", "expected"),
-    [
-        ("2, 1", S.SpecialistAdvice(specialties=("невролог", "терапевт"))),
-        ("Номера: 3.", S.SpecialistAdvice(specialties=("кардиолог",))),
-        ("2, 2, 4, 1", S.SpecialistAdvice(specialties=("невролог", "оториноларинголог", "терапевт"))),
-        ("СРОЧНО", S.SpecialistAdvice(urgent=True)),
-        ("НЕТ", None),
-        ("0, 99", None),
-        ("3, 99", None),  # известное отличие переноса: номеру вне списка не верим целиком
-        ("2, 4, 1, 3", None),  # и лишним номерам (прежний разбор обрезал до трёх)
-        ("не знаю", None),
-        (TimeoutError(), None),
-    ],
-)
-def test_legacy_mode_sends_the_old_request_and_judges_strictly(monkeypatch, answer, expected):
-    client = _choose_mode(monkeypatch, "legacy", answer)
-
-    assert asyncio.run(S.pick_specialists("у меня болит голова 3 дня", _SPECIALTIES)) == expected
-    request = client.calls[0]
-    assert "system" not in request and request["format"] is None
-    assert "«у меня болит голова 3 дня»" in request["prompt"] and "2. невролог" in request["prompt"]
 
 
 @pytest.mark.parametrize(
@@ -210,7 +146,7 @@ def test_legacy_mode_sends_the_old_request_and_judges_strictly(monkeypatch, answ
     ids=["two", "urgent", "urgent_wins", "not_complaint", "not_complaint_with_picks", "urgent_not_in_list", "none_fit", "not_in_list", "three", "number", "old_format", "failure"],
 )
 def test_on_mode_names_doctors_from_the_clinic_list_only(monkeypatch, reply, expected):
-    client = _choose_mode(monkeypatch, "on", reply)
+    client = _client(monkeypatch, reply)
 
     assert asyncio.run(S.pick_specialists("у меня болит голова 3 дня", _SPECIALTIES)) == expected
     request = client.calls[0]
@@ -222,12 +158,12 @@ def test_on_mode_names_doctors_from_the_clinic_list_only(monkeypatch, reply, exp
 
 
 def test_kill_switch_and_empty_catalog_skip_llm(monkeypatch):
-    prompts = _llm_answers(monkeypatch, "1")
+    client = _client(monkeypatch, '{"picks": ["терапевт"], "outcome": "none"}')
 
     assert asyncio.run(S.pick_specialists("болит голова", [])) is None
     monkeypatch.setattr(S._cfg, "MR_LLM_SYMPTOM_SPECIALISTS", False)
     assert asyncio.run(S.pick_specialists("болит голова", _SPECIALTIES)) is None
-    assert prompts == []
+    assert client.calls == []
 
 
 class _FakeServices:

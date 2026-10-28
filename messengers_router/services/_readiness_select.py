@@ -12,8 +12,8 @@
   строк одного названия сроки разные — это название не показывается;
 - ничего не выбрала, сбой, список услуг — None: честный перевод, как раньше.
 
-Выключатель `[MESSENGER_ROUTER] choose_readiness = off | on` (по умолчанию on — как на проде; действует под
-пониманием хода `on`, где вопрос о сроке распознаётся).
+Действует под пониманием хода `on`, где вопрос о сроке распознаётся (выключатель `choose_readiness` снят 28.10 — on на проде
+с 14.10).
 
 Что считать сильным, задаёт `[MESSENGER_ROUTER] strong_match` (L-15b, шаг 3): `legacy` (по умолчанию) —
 прежнее определение срока (название целиком или до скобок, словарь кода `_PRICE_SERVICE_ALIASES`, синоним
@@ -33,7 +33,6 @@ from typing import Any
 
 from .. import turn_parse
 from ..choice import Option, Status, Task, choose
-from ..runtime_config import config as _cfg
 from . import _price_by_parse
 from ._common import _normalise_catalog_text
 from ._price_select_llm import _mention_phrase, _record_synonym_suggestion
@@ -51,11 +50,6 @@ from ._strong_match import strong_rows
 
 READINESS_TASK = Task(name="readiness_service", max_picks=3, num_predict=64, timeout_s=12, queue_timeout_ms=3000)
 _CANDIDATES = 10
-
-
-def readiness_mode() -> str:
-    raw = str(getattr(_cfg, "MR_CHOOSE_READINESS", "off") or "").strip().lower()
-    return raw if raw in ("off", "on") else "off"
 
 
 def _one_deadline(rows: list[dict[str, Any]]) -> str | None:

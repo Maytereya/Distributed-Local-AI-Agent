@@ -200,11 +200,7 @@ class MessengerRouterConfig:
     llm_fail_offer: str
     classifier_compact: str
     choose_cache_ttl_s: int
-    choose_symptom: str
-    choose_readiness: str
     parse_fail_variants: int
-    variant_b_wordforms: str
-    mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
     p1_facet_none_offer: str
@@ -518,15 +514,10 @@ settings = Settings(
         # Выбор строки прайса на модуле choose() (ход (в), клиент 1) — единственный путь с 17.10: ключ [MESSENGER_ROUTER]
         # choose_price (off — прежний вызов, legacy — прежний промпт через модуль) снят и больше не читается (в config.ini
         # прода безвреден; STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE).
-        # Симптом → врач на модуле choose() (ход (в), клиент 2): off — прежний вызов и разбор; legacy —
-        # прежний промпт через модуль; on — врач названием из перечня ролей МИС (не больше двух), исходы
-        # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
-        # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_symptom
-        choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="on", allowed={"off", "legacy", "on"}),
-        # Срок готовности при слабом совпадении — услугу выбирает LLM, срок печатает код из МИС (ход (в)).
-        # off | on, по умолчанию on — как на проде с 14.10 (STEP-2026-10-15-DEFAULTS-B); действует под пониманием
-        # хода on. [MESSENGER_ROUTER] choose_readiness
-        choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="on", allowed={"off", "on"}),
+        # Симптом → врач — всегда выбор на модуле choose() (ход (в), клиент 2): ключ [MESSENGER_ROUTER] choose_symptom снят 28.10
+        # (on на проде с 14.10) и больше не читается (в config.ini прода безвреден).
+        # Срок готовности при слабом совпадении — всегда выбор LLM (ход (в)): ключ [MESSENGER_ROUTER] choose_readiness снят
+        # 28.10 (on на проде с 14.10) и больше не читается (в config.ini прода безвреден).
         # Разбор ценовой реплики на фразы-услуги (L-15b, контракт C) — единственный режим с T7 шага 3б (16.10): ключ
         # [MESSENGER_ROUTER] turn_parse снят и больше не читается (в config.ini прода безвреден).
         # Политика сбоя под turn_parse = on (L-15b, шаг 6, T5): сколько вариантов кода с ценами показывать у
@@ -628,17 +619,10 @@ settings = Settings(
         # [MESSENGER_ROUTER] names_patient_fill
         # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
         names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="on", allowed={"off", "on"}),
-        # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
-        # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
-        # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
-        # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
-        # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
-        variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
-        # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
-        # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
-        # приписка «по данным на ДД.ММ» или оператор. off — как было. По умолчанию on — как на проде с 18.10 (деплой 8;
-        # STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] mis_honest_degradation
-        mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="on", allowed={"off", "on"}),
+        # Вариант B L-13 — словоформы различающего слова всегда: ключ [MESSENGER_ROUTER] variant_b_wordforms снят 28.10 (on на
+        # проде с 18.10) и больше не читается (в config.ini прода безвреден).
+        # Ход (д), видимая деградация МИС — единственный путь: ключ [MESSENGER_ROUTER] mis_honest_degradation снят 28.10 (on на
+        # проде с 18.10) и больше не читается (в config.ini прода безвреден).
         # Тема реестра перебивает метку OTHER только после подтверждения LLM по смыслу (решение владельца 18.10:
         # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
         # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
@@ -949,11 +933,7 @@ MR_LLM_TURN_DEADLINE_S = settings.messenger_router.llm_turn_deadline_s
 MR_LLM_FAIL_OFFER = settings.messenger_router.llm_fail_offer
 MR_CLASSIFIER_COMPACT = settings.messenger_router.classifier_compact
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
-MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
-MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
-MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
-MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer

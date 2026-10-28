@@ -29,7 +29,6 @@ def catalog(monkeypatch):
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(_prices_helpers, "_catalog_rows", lambda _region: _ROWS)
-    monkeypatch.setattr(cfg, "MR_MIS_HONEST_DEGRADATION", "on", raising=False)
 
     def switch(value: str) -> None:
         monkeypatch.setattr(cfg, "MR_BOOKING_OPTIONS_PRICE", value, raising=False)

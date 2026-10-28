@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import address_flow, booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import address_flow, booking_slots, button_flow, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -70,8 +70,6 @@ from .response_builder import (
     build_doctor_info_response as response_build_doctor_info_response,
     build_doctor_schedule_response as response_build_doctor_schedule_response,
     build_first_structured_response as response_build_first_structured_response,
-    build_main_index_info_response as response_build_main_index_info_response,
-    build_news_response as response_build_news_response,
     build_price_response as response_build_price_response,
     build_service_bundle_response as response_build_service_bundle_response,
     build_test_result_response as response_build_test_result_response,
@@ -119,7 +117,7 @@ from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
 from .services._doctors_helpers import _extract_specialties_from_text, _is_consultation_service_query, _service_name_allows_specialty
 from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, consult_price_phrase, price_reply_names_own_service
-from .services._readiness_select import readiness_by_choice, readiness_from_catalog, readiness_mode
+from .services._readiness_select import readiness_by_choice, readiness_from_catalog
 from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT, RESULTS_PORTAL_URL
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
@@ -280,35 +278,12 @@ def _catalog_health_degraded_text(
     need_service_catalog: bool,
     need_doctors_catalog: bool,
 ) -> str:
-    if degradation.honest():
-        # Ход (д), принцип 3 («уточните у оператора» — только с настоящим переводом): каталог пуст — перевод, а не
-        # «попробуйте через 5 минут или напишите «оператор»» (решение владельца 18.10: сбой МИС → оператор).
-        # Каталог услуг нужен и цене, и записи — общий текст (не «цены» на вопрос о записи).
-        if need_doctors_catalog and not need_service_catalog:
-            return handoff_message("service_error_doctors_list")
-        return handoff_message("service_error")
-    if need_service_catalog and need_doctors_catalog:
-        return (
-            "Сейчас временно недоступен каталог услуг и врачей. "
-            "Я не смогу надежно подобрать услугу или врача. "
-            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-        )
-    if need_service_catalog:
-        return (
-            "Сейчас временно недоступен каталог услуг. "
-            "Я не смогу надежно подобрать нужную услугу. "
-            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-        )
-    if need_doctors_catalog:
-        return (
-            "Сейчас временно недоступен каталог врачей. "
-            "Я не смогу надежно подобрать врача или расписание. "
-            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-        )
-    return (
-        "Сейчас временно недоступен каталог клиники. "
-        "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-    )
+    # Ход (д), принцип 3 («уточните у оператора» — только с настоящим переводом): каталог пуст — перевод, а не
+    # «попробуйте через 5 минут или напишите «оператор»» (решение владельца 18.10: сбой МИС → оператор).
+    # Каталог услуг нужен и цене, и записи — общий текст (не «цены» на вопрос о записи).
+    if need_doctors_catalog and not need_service_catalog:
+        return handoff_message("service_error_doctors_list")
+    return handoff_message("service_error")
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -1947,11 +1922,9 @@ def _relabel_test_assist_catalog_hit_as_price(
     (walk-in «где сдать», prepare, адрес) сильнее — если guardrails увели метку
     из TEST_ASSIST, переклейка не срабатывает вовсе.
 
-    Три исключения, где exact-матч не означает «спросили цену»:
+    Два исключения, где exact-матч не означает «спросили цену»:
     - категорийный запрос («чекап» — линейка пакетов): до сюда не доходит,
       `should_try_service` для него выключается и exact-матча нет;
-    - вопрос о СРОКАХ готовности результата (`result_delivery_info`): анализ
-      назван, но спрашивают не цену — цену показывать нельзя;
     - формулировка ЦЕЛИ подбора («какие анализы сдать для профилактики»):
       матчер приземляет её на случайную строку по одному общему токену
       («…для ПРОФИЛАКТИКИ» → «Здоровая молодость: курс для профилактики и
@@ -1973,7 +1946,6 @@ def _relabel_test_assist_catalog_hit_as_price(
         understanding is not None
         and understanding.is_list
         and understanding.facet in (None, "price")
-        and "result_delivery_info" not in flags
         and not detect_test_assist_goal_phrasing(user_text)
     ):
         turn_understanding.note_acted("list_is_price")
@@ -1987,8 +1959,6 @@ def _relabel_test_assist_catalog_hit_as_price(
         # хода (`test_assist_answer`, цена — кодом), а не цена ближайшей строки. Список из разметки хода (`understanding_list_is_price`
         # выше) — решение LLM, не буквы: он остаётся ценой (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
         turn_telemetry.note(button_topic_firm="p1")
-        return decision
-    if "result_delivery_info" in flags:
         return decision
     if detect_test_assist_goal_phrasing(user_text):
         return _copy_decision(decision, flags=flags | {"test_assist_goal_phrasing_kept"})
@@ -2287,7 +2257,7 @@ async def _maybe_readiness_reply(
         return None
     memory.clear_pending(state)
     deadlines = await asyncio.to_thread(readiness_from_catalog, user_text)
-    if not deadlines and readiness_mode() == "on":
+    if not deadlines:
         # Слабое совпадение: услугу выбирает LLM из кандидатов, срок печатает код (ход (в)).
         deadlines = await readiness_by_choice(user_text)
     if deadlines:
@@ -3601,7 +3571,7 @@ async def _complete_route_after_doctor_guard(
                                 need_service_catalog=need_service_catalog,
                                 need_doctors_catalog=need_doctors_catalog,
                             ),
-                            "handoff": degradation.honest(),
+                            "handoff": True,
                             "status": str(health.get("status") or "degraded"),
                             "reason": str(health.get("reason") or "").strip(),
                             "need_service_catalog": need_service_catalog,
@@ -3898,7 +3868,6 @@ async def route_patient_message(
     )
 
 
-
 def _debug_meta(
     decision: RouteDecision,
     plan: Plan,
@@ -3986,14 +3955,6 @@ def _build_address_response(
     user_text: str,
 ) -> ResponseEnvelope | None:
     return response_build_address_response(flow_label, evidence, state, memory, decision, user_text)
-
-
-def _build_news_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
-    return response_build_news_response(flow_label, evidence, state)
-
-
-def _build_main_index_info_response(evidence: Evidence) -> ResponseEnvelope | None:
-    return response_build_main_index_info_response(evidence)
 
 
 def _build_appointment_schedule_preview_response(

@@ -15,8 +15,6 @@
   у вызывающего, ход не падает;
 - кэшируются только внятные ответы; сбой и мусор не кэшируются; кэш хранит номера, а id берёт из
   вариантов текущего вызова;
-- прежний промпт клиента (`LegacyWire`) уходит без роли system, с прежним форматом и параметрами,
-  а его ответ разбирается той же строгой механикой;
 - каждый выбор — строка в телеметрии хода (задача, статус, число вариантов), без текста;
 - непересекающийся выбор (`Task.disjoint`): пересечение спанов выбранных вариантов → INVALID, не
   кэшируется; варианты без спанов судятся как раньше;
@@ -360,26 +358,6 @@ def test_turn_budget_exhausted_is_unavailable(llm, monkeypatch):
 
     assert asyncio.run(turn()) == [ch.Status.PICKED, ch.Status.UNAVAILABLE]
     assert len(llm.calls) == 1
-
-
-def test_legacy_wire_is_the_old_request_and_strict_judgement(llm, monkeypatch):
-    monkeypatch.setattr(ollama_settings, "_cached_opts", {"temperature": 0.2, "num_predict": 2048})
-    llm.reply = '{"match": [3, 1], "search_terms": []}'
-
-    def old_answer(raw, _options):
-        data = json.loads(raw)
-        return {"picks": data["match"], "search_terms": data["search_terms"]}
-
-    wire = ch.LegacyWire(prompt=lambda q, opts: f"Старый промпт: {q}\n" + "\n".join(o.text for o in opts), answer=old_answer, options={"temperature": 0})
-    choice = _choose(legacy=wire)
-    request = llm.calls[0]
-    assert "system" not in request and request["format"] == "json"
-    assert request["prompt"].startswith("Старый промпт: сколько стоит оак")
-    assert request["options"].temperature == 0 and request["options"].num_predict == 2048
-    assert (choice.status, choice.ids) == (ch.Status.PICKED, ("c", "a"))
-
-    llm.reply = '{"match": [5], "search_terms": []}'
-    assert _choose(question="другой вопрос", legacy=wire).status is ch.Status.INVALID
 
 
 def test_every_choice_is_noted_in_turn_telemetry(llm, monkeypatch):
