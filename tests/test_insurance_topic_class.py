@@ -3,11 +3,12 @@
 Было (выгрузки диалогов 08.10 и 26.10, 25 реплик): «ДМС» правила и сущности брали за услугу или тему подбора — «Дмс» → «не
 понял», «Можно ли сдать анализы по полису ДМС?» → «напишите названия анализов», «Как записаться на процедуру по ДМС» → «к
 какому врачу?». Решение владельца 28.10 (ответ клиники): как получить помощь по ДМС — ответ операторов; ОМС, конкретный врач —
-перевод на оператора; цену по ДМС / ОМС не называть (путь цены, С3).
+оператор, оффером «перевести?» (ответ владельца 28.10 на вопросы К26, п. 2); цену по ДМС / ОМС не называть (путь цены, С3).
 
 Инвариант класса под `insurance_topic = on`: реплику со словом страхования (кандидат — слова из данных клиники) относит к
-варианту LLM; «как получить помощь по ДМС» — памятка из данных клиники и оффер оператора вопросом («да» — перевод); ОМС,
-конкретный врач, гарантийное письмо и отдел ДМС — перевод на оператора текстом из данных; цена, «ни одна» и сбой LLM — ответ
+варианту LLM; «как получить помощь по ДМС» — памятка из данных клиники и оффер оператора вопросом; ОМС, конкретный врач,
+гарантийное письмо и отдел ДМС — «ответит оператор» текстом из данных, тоже оффером, не переводом сразу; «да» на любой
+из офферов — перевод следующим ходом; цена, «ни одна» и сбой LLM — ответ
 как без выключателя, и лимит решений хода не тратится. Так же и в идущей записи: «по дмс» на вопрос о филиале — не слот
 услуги («Госпитализация в терапевтический стационар»). Реплика без слова страхования LLM темы не зовёт; медвопрос тему не
 отдаёт. off — как было, без вызова LLM.
@@ -43,8 +44,8 @@ DMS_GENERAL = [
     "Как записаться на процедуру по ДМС",
     "что взять с собой на приём по дмс?",
 ]
-# Номер варианта LLM → ключ текста перевода в данных клиники.
-HANDOFF = [
+# Номер варианта LLM → ключ текста «ответит оператор» в данных клиники.
+OPERATOR = [
     ("Принимает ли доктор Петрова по ДМС?", 2, "dms_doctor"),
     ("Куда прислать гарантийное письмо от страховой?", 3, "dms_case"),
     ("подскажите, отдел дмс рассмотрел мой протокол?", 3, "dms_case"),
@@ -110,7 +111,7 @@ def _answers(insurance: Any, classifier_label: str = "OTHER") -> dict[str, Any]:
     return {_CLASSIFIER_MARK: _classifier(classifier_label), _MARK: insurance}
 
 
-@pytest.mark.parametrize("reply", DMS_GENERAL + [r for r, _, _ in HANDOFF])
+@pytest.mark.parametrize("reply", DMS_GENERAL + [r for r, _, _ in OPERATOR])
 def test_off_is_as_before_without_llm(reply, answer_world, monkeypatch):  # noqa: F811
     out = _turn(answer_world, monkeypatch, reply, switch="off", answers=_answers(_pick(1)))
 
@@ -127,20 +128,22 @@ def test_how_to_get_care_by_dms_is_the_clinic_memo_with_operator_offer(reply, an
     assert not out["handoff"] and out["pending_offer"], out
 
 
-def test_yes_to_the_offer_after_the_memo_hands_off(answer_world, monkeypatch):  # noqa: F811
-    memo, yes = _turns(answer_world, monkeypatch, ["Записаться по дмс", "да"], switch="on", answers=_answers(_pick(1)))
+@pytest.mark.parametrize(("reply", "number"), [("Записаться по дмс", 1)] + [(r, n) for r, n, _ in OPERATOR])
+def test_yes_to_the_offer_hands_off(reply, number, answer_world, monkeypatch):  # noqa: F811
+    offer, yes = _turns(answer_world, monkeypatch, [reply, "да"], switch="on", answers=_answers(_pick(number)))
 
-    assert memo["pending_offer"] and not memo["handoff"], memo
+    assert offer["pending_offer"] and not offer["handoff"], offer
     assert yes["handoff"], yes
     assert _MARK not in yes["calls"], yes["calls"]  # «да» на оффер — ответ на вопрос бота, не новая тема
 
 
-@pytest.mark.parametrize(("reply", "number", "key"), HANDOFF)
-def test_oms_named_doctor_and_dms_paperwork_hand_off_with_clinic_text(reply, number, key, answer_world, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize(("reply", "number", "key"), OPERATOR)
+def test_oms_named_doctor_and_dms_paperwork_offer_the_operator_with_clinic_text(reply, number, key, answer_world, monkeypatch):  # noqa: F811
     out = _turn(answer_world, monkeypatch, reply, switch="on", answers=_answers(_pick(number)))
 
     assert out["telemetry"].get("insurance_topic") == key, out["telemetry"]
-    assert out["handoff"] and out["text"].startswith(_DATA["handoff"][key]), out
+    assert out["text"] == _DATA["operator_offer"][key], out["text"]
+    assert not out["handoff"] and out["pending_offer"], out  # оффер вопросом, не перевод сразу (ответ владельца 28.10, п. 2)
 
 
 @pytest.mark.parametrize("reply", AS_BEFORE)

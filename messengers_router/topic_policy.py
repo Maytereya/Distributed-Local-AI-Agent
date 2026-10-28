@@ -78,7 +78,7 @@ _ROWS: tuple[Relabel, ...] = (
     # --- тема по смыслу LLM ---
     Relabel(
         "insurance_topic", "topic_llm", "OTHER", "_maybe_insurance_topic",
-        "реплика об обслуживании по ДМС / ОМС по выбору LLM (`insurance_topic = on`): памятка ДМС с оффером или перевод",
+        "реплика об обслуживании по ДМС / ОМС по выбору LLM (`insurance_topic = on`): памятка ДМС или «ответит оператор» — с оффером",
         "BUG-2026-10-28-K26-DMS-OMS-TOPIC",
     ),
     # --- поток записи ---

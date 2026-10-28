@@ -760,7 +760,7 @@ settings = Settings(
         walkin_by_llm=_get_enum("MESSENGER_ROUTER", "walkin_by_llm", default="off", allowed={"off", "on"}),
         # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
         # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
-        # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — перевод на оператора; цена — путь цены.
+        # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — «ответит оператор» и оффер; цена — путь цены.
         # Тексты — данные клиники (`messengers_router/data/insurance_topic.yaml`). off — как было. [MESSENGER_ROUTER] insurance_topic
         insurance_topic=_get_enum("MESSENGER_ROUTER", "insurance_topic", default="off", allowed={"off", "on"}),
         # Выбор строки прайса на пути ответа о цене (топ-5 разбора 95 цен, п. 3, классы F + P1): промпты `*_general_named` с

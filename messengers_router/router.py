@@ -2267,9 +2267,9 @@ async def _maybe_insurance_topic(
 
     Стоит сразу за NLU (стадия `nlu_route`): раньше гарда врача, уточнений и инструментов, которые принимали «ДМС» за услугу
     или врача, — и в идущей записи: предпроверка записи (prelock) кладёт «по дмс» в слот услуги («Похоже, вы имели в виду
-    «Госпитализация в терапевтический стационар»»), а записать по ДМС может только сотрудник. Памятка ДМС — с оффером
-    оператора вопросом; ОМС, конкретный врач, гарантийное письмо — перевод. Срочное, жалобу и медвопрос тема не перехватывает:
-    у них свои шаблоны (принцип 4).
+    «Госпитализация в терапевтический стационар»»), а записать по ДМС может только сотрудник. Памятка ДМС, ОМС, конкретный
+    врач, гарантийное письмо — с оффером оператора вопросом («да» — перевод следующим ходом). Срочное, жалобу и медвопрос тема
+    не перехватывает: у них свои шаблоны (принцип 4).
     """
 
     if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
@@ -2277,10 +2277,7 @@ async def _maybe_insurance_topic(
     reply = await insurance_topic.decide(user_text)
     if reply is None:
         return None
-    if reply.handoff:
-        memory.clear_pending(state)
-    else:
-        mark_operator_offer_pending(state, memory)
+    mark_operator_offer_pending(state, memory)
     # Тему решила LLM: «низкая уверенность» NLU больше не повод переспрашивать (`recovery_policy.evaluate_recovery`).
     flags = (set(decision.flags) - {"low_confidence"}) | {insurance_topic.FLAG, f"{insurance_topic.FLAG}:{reply.kind}"}
     return (
@@ -2297,7 +2294,7 @@ async def _maybe_insurance_topic(
             clarify_slots=[],
         ),
         Plan(label="OTHER"),
-        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": reply.text, "handoff": reply.handoff}}),
+        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": reply.text, "handoff": False}}),
     )
 
 
