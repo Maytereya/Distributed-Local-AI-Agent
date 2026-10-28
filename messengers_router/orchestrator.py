@@ -525,6 +525,15 @@ async def nlu_route(
             runtime_options=runtime_options,
             **_button_topic_kwargs(action),
         )
+        # Вопрос об обслуживании по ДМС / ОМС (`insurance_topic`, класс К26) — до гарда врача и уточнений: они принимали «ДМС»
+        # за врача или услугу. Подпись кнопки — не слова пациента.
+        insured = None if action is not None else await router._maybe_insurance_topic(
+            decision=ctx.decision, user_text=ctx.text, state=ctx.state, memory=memory
+        )
+        if insured is not None:
+            ctx.decision, ctx.plan, ctx.evidence = insured
+            ctx.short_circuit = True
+            ctx.short_circuit_reason = "insurance_topic"
     else:
         from . import nlu_pipeline
 

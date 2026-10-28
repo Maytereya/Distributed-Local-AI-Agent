@@ -228,6 +228,7 @@ class MessengerRouterConfig:
     test_assist_from_data: str
     test_assist_price: str
     walkin_by_llm: str
+    insurance_topic: str
     price_select_named: str
     bare_name_overview: str
     booking_options_price: str
@@ -757,6 +758,11 @@ settings = Settings(
         # адреса и фраза «… без записи» — по решению LLM. Свой выключатель — связку 21.10 с `service_answer_from_data` владелец
         # развязал 26.10 (топ-5 разбора 95 цен, п. 2). off — как было (детектор по буквам). [MESSENGER_ROUTER] walkin_by_llm
         walkin_by_llm=_get_enum("MESSENGER_ROUTER", "walkin_by_llm", default="off", allowed={"off", "on"}),
+        # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
+        # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
+        # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — перевод на оператора; цена — путь цены.
+        # Тексты — данные клиники (`messengers_router/data/insurance_topic.yaml`). off — как было. [MESSENGER_ROUTER] insurance_topic
+        insurance_topic=_get_enum("MESSENGER_ROUTER", "insurance_topic", default="off", allowed={"off", "on"}),
         # Выбор строки прайса на пути ответа о цене (топ-5 разбора 95 цен, п. 3, классы F + P1): промпты `*_general_named` с
         # правилами 6 «Cito — это срочно» и 7 «позиция для другого пациента, которого пациент не называл
         # (плод, ребёнок до года), — не та»; второй круг по редким словам терминов LLM — и
@@ -972,6 +978,7 @@ MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_TEST_ASSIST_PRICE = settings.messenger_router.test_assist_price
 MR_WALKIN_BY_LLM = settings.messenger_router.walkin_by_llm
+MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview
 MR_BOOKING_OPTIONS_PRICE = settings.messenger_router.booking_options_price
