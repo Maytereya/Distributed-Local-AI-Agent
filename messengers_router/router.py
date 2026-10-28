@@ -1945,11 +1945,9 @@ def _relabel_test_assist_catalog_hit_as_price(
     (walk-in «где сдать», prepare, адрес) сильнее — если guardrails увели метку
     из TEST_ASSIST, переклейка не срабатывает вовсе.
 
-    Три исключения, где exact-матч не означает «спросили цену»:
+    Два исключения, где exact-матч не означает «спросили цену»:
     - категорийный запрос («чекап» — линейка пакетов): до сюда не доходит,
       `should_try_service` для него выключается и exact-матча нет;
-    - вопрос о СРОКАХ готовности результата (`result_delivery_info`): анализ
-      назван, но спрашивают не цену — цену показывать нельзя;
     - формулировка ЦЕЛИ подбора («какие анализы сдать для профилактики»):
       матчер приземляет её на случайную строку по одному общему токену
       («…для ПРОФИЛАКТИКИ» → «Здоровая молодость: курс для профилактики и
@@ -1971,7 +1969,6 @@ def _relabel_test_assist_catalog_hit_as_price(
         understanding is not None
         and understanding.is_list
         and understanding.facet in (None, "price")
-        and "result_delivery_info" not in flags
         and not detect_test_assist_goal_phrasing(user_text)
     ):
         turn_understanding.note_acted("list_is_price")
@@ -1979,8 +1976,6 @@ def _relabel_test_assist_catalog_hit_as_price(
     if "catalog_service_exact" not in flags:
         return decision
     if not str((decision.entities or {}).get("service_name") or "").strip():
-        return decision
-    if "result_delivery_info" in flags:
         return decision
     if detect_test_assist_goal_phrasing(user_text):
         return _copy_decision(decision, flags=flags | {"test_assist_goal_phrasing_kept"})

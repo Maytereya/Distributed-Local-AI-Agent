@@ -420,7 +420,6 @@ _DATE_TIME_SIGNAL_RE = re.compile(
     r"\d{1,2}:\d{2}|\b(?:в|к)\s+\d{1,2}\s*(?:утра|дня|вечера|ночи)?)\b",
     re.I,
 )
-_RESULT_DELIVERY_QUESTION_RE = re.compile(r"\b(можно|куда)\b.*\b(почт\w*|придут)\b", re.I)
 _ASSIST_PRICE_CONTEXT_RE = re.compile(
     r"\b(по\s+направлен\w*|данн\w*\s+анализ\w*|сдач\w*\s+анализ\w*)\b",
     re.I,
@@ -1239,17 +1238,6 @@ def is_price_dominant_intent(
     if detect_test_assist_intent(text) and _ASSIST_PRICE_CONTEXT_RE.search(text or ""):
         return False
     return True
-
-
-def should_treat_result_delivery_as_test_assist(text: str) -> bool:
-    low = (text or "").lower()
-    return (
-        detect_test_assist_intent(text)
-        and bool(_RESULT_DELIVERY_QUESTION_RE.search(text or ""))
-        and "не высл" not in low
-        and "почему" not in low
-        and "личн" not in low
-    )
 
 
 def _has_analysis_context_entities(entities: dict[str, Any] | None = None) -> bool:

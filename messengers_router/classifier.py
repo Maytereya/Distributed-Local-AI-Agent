@@ -52,7 +52,6 @@ from .policies import (
     has_datetime_signal,
     is_address_dominant_intent,
     is_price_dominant_intent,
-    should_treat_result_delivery_as_test_assist,
     detect_nonbookable_walkin_intent,
     detect_ambiguous_analysis_lookup,
     AMBIGUOUS_ANALYSIS_CLARIFY_TEXT,
@@ -1387,28 +1386,18 @@ async def deterministic_rule_decision(
             clarify_reason=AMBIGUOUS_ANALYSIS_CLARIFY_TEXT,
         )
     elif detect_test_result_intent(text):
-        if should_treat_result_delivery_as_test_assist(text):
-            decision = RouteDecision(
-                label="TEST_ASSIST",
-                confidence=0.7,
-                entities={},
-                flags=local_flags | {"rule_test_assist", "result_delivery_info"},
-                needs_handoff=False,
-                context_action="continue",
-            )
-        else:
-            entities: dict[str, Any] = {}
-            oid = _extract_order_id(text)
-            if oid:
-                entities["order_id"] = oid
-            decision = RouteDecision(
-                label="TEST_RESULT",
-                confidence=CONFIDENCE.rule_hardcode,
-                entities=entities,
-                flags=local_flags | {"rule_test_result"},
-                needs_handoff=False,
-                context_action="continue",
-            )
+        entities: dict[str, Any] = {}
+        oid = _extract_order_id(text)
+        if oid:
+            entities["order_id"] = oid
+        decision = RouteDecision(
+            label="TEST_RESULT",
+            confidence=CONFIDENCE.rule_hardcode,
+            entities=entities,
+            flags=local_flags | {"rule_test_result"},
+            needs_handoff=False,
+            context_action="continue",
+        )
     elif detect_clinic_hours_intent(text):
         # «график/режим работы филиалов» — часы работы клиники, НЕ расписание
         # врача. Проверяем ДО detect_schedule_intent, т.к. голый `\bграфик\b`

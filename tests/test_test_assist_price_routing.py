@@ -14,9 +14,8 @@
 Инвариант (класс): если реплика ПРИЗЕМЛИЛАСЬ на реальную услугу каталога
 (exact-матч в `_inject_catalog_candidates`), это PRICE. TEST_ASSIST остаётся
 только когда услуга НЕ найдена — воронка подбора существует ровно для этого.
-Исключения (не относятся к классу): категорийный запрос («чекап» — линейка
-пакетов, а не услуга) и вопрос о СРОКАХ ГОТОВНОСТИ результата
-(`result_delivery_info`) — цену там показывать нельзя.
+Исключение (не относится к классу): категорийный запрос («чекап» — линейка
+пакетов, а не услуга). Вопрос о сроке готовности ведёт путь срока (`_maybe_readiness_reply`).
 
 Тесты идут по ЖИВОМУ каталогу (region 3), как соседние price-тесты: класс, а не
 инстанс — список названий взят из прод-триажа.
@@ -217,20 +216,4 @@ def test_walkin_where_question_wins_over_price_relabel(monkeypatch):
 
     assert decision.label == "ADDRESS", sorted(decision.flags)
     assert plan.label == "ADDRESS"
-    assert "test_assist_catalog_hit_is_price" not in decision.flags
-
-
-def test_result_delivery_question_never_becomes_price(monkeypatch):
-    """Вопрос о СРОКАХ готовности результата (`result_delivery_info`) — не цена.
-    Даже если каталог резолвит упомянутый анализ, цену показывать нельзя."""
-    _install_stubs(
-        monkeypatch,
-        label="TEST_ASSIST",
-        flags={"rule_test_assist", "result_delivery_info"},
-    )
-
-    decision, plan, _ev = _route("когда будут готовы результаты общего анализа крови", "p1-delivery")
-
-    assert decision.label == "TEST_ASSIST", sorted(decision.flags)
-    assert plan.label == "TEST_ASSIST"
     assert "test_assist_catalog_hit_is_price" not in decision.flags
