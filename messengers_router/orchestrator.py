@@ -796,6 +796,17 @@ async def _render_impl(
         turn_telemetry.note(answer_source="pending")
         return ctx
 
+    # 3a. Путь цены сдался («не нашёл», цен нет; `price_not_found_by_data`, STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA): сначала данные
+    # клиники — строки прайса и памяток со вторым кругом поиска, без «похожего»; нет данных — честный оффер; сбой — ответ цены, как было.
+    if service_answer.price_gave_up(ctx.decision, ctx.evidence):
+        verdict = await service_answer.decide(ctx.text, site="price_not_found", exact=True)
+        answer = service_answer.envelope(verdict, ctx.state, memory)
+        if answer is not None:
+            ctx.response = answer
+            turn_telemetry.note(answer_source="service_answer")
+            return ctx
+        service_answer.refund(verdict)
+
     # 3. Deterministic/pre-built path — response is already encoded in evidence.
     prebuilt = _extract_prebuilt_response(ctx, services=services, memory=memory)
     if prebuilt is not None:

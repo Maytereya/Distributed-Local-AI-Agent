@@ -23,6 +23,10 @@
 - `free_text` — перед свободным текстом LLM (оркестратор): ответ, близкое или оффер; «не о клинике» и сбой — как было;
 - `other_offer` — OTHER от LLM под `topic_by_llm`; `empty_evidence` — вопрос без данных (L-05); `doctors_by_service` —
   «врачей по услуге не нашёл» (L-06(б)): ответ или близкое — только из данных, иначе прежний оффер.
+- `price_not_found` — под своим выключателем `price_not_found_by_data` (STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA): путь цены сдался
+  («Не нашёл актуальную стоимость … Уточните название», цен нет). Стенд 29.10, кнопки цены под рамкой: 32 провала таким ответом — и
+  где услуга в данных есть (второй круг поиска по терминам LLM), и где её нет, а нужен честный оффер. Всегда без «похожего»
+  (`EXACT_TASK`): ответ — строки данных, иначе честный оффер; сбой и «не о клинике» — прежний ответ цены.
 """
 
 from __future__ import annotations
@@ -276,14 +280,15 @@ def _merge(old: Sequence[Fact], new: Sequence[Fact]) -> list[Fact]:
     return [*old, *[fact for fact in new if fact.key() not in keys]][:_ROUND_FACTS]
 
 
-async def _ask(question: str, facts: Sequence[Fact]) -> tuple[Verdict, tuple[str, ...]]:
+async def _ask(question: str, facts: Sequence[Fact], *, exact: bool = False) -> tuple[Verdict, tuple[str, ...]]:
+    exact = exact or no_similar()
     options = [Option(id=str(i), text=fact.option_text()) for i, fact in enumerate(facts)]
-    picked = await choose(EXACT_TASK if no_similar() else TASK, question, options)
+    picked = await choose(EXACT_TASK if exact else TASK, question, options)
     if picked.failed:
         return Verdict(FAILED), ()
     chosen = tuple(facts[int(i)] for i in picked.ids)
     if picked.status is Status.OUTCOME:
-        if picked.outcome == SIMILAR and no_similar():
+        if picked.outcome == SIMILAR and exact:
             # Близкое, но другое — не ответ пациенту: честный оффер (и второй круг по терминам модели, как у «нет данных»).
             turn_telemetry.note(svc_answer_similar_hidden=len(chosen))
             return Verdict(NO_DATA), picked.terms
@@ -295,21 +300,45 @@ async def _ask(question: str, facts: Sequence[Fact]) -> tuple[Verdict, tuple[str
     return Verdict(NO_DATA), picked.terms  # вопрос о клинике, ни один пункт ответа не держит
 
 
-async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = ()) -> Verdict:
-    """Что ответить на вопрос о клинике по её данным. Сбой LLM — FAILED: что делать, решает вызывающий."""
+async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = (), exact: bool = False) -> Verdict:
+    """Что ответить на вопрос о клинике по её данным (`exact` — без исхода «похожее» пациенту). Сбой LLM — FAILED: что делать,
+    решает вызывающий."""
 
     spent_before = llm_runtime.turn_decisions_spent()
     facts = await gather_facts(question, first_rows=first_rows)
-    verdict, terms = await _ask(question, facts)
+    verdict, terms = await _ask(question, facts, exact=exact)
     rounds = 1
     if verdict.kind == NO_DATA and terms:
         extra = await gather_facts(question, texts=terms)
         merged = _merge(facts, extra)
         if len(merged) > len(facts):
-            verdict, _terms = await _ask(question, merged)
+            verdict, _terms = await _ask(question, merged, exact=exact)
             rounds = 2
     turn_telemetry.note(svc_answer=verdict.kind, svc_answer_site=site, svc_answer_facts=len(verdict.facts), svc_answer_rounds=rounds)
     return Verdict(verdict.kind, verdict.facts, calls=max(0, llm_runtime.turn_decisions_spent() - spent_before))
+
+
+def price_not_found_on() -> bool:
+    """`[MESSENGER_ROUTER] price_not_found_by_data = on`; мусор и отсутствие — off (как было)."""
+
+    return str(getattr(_cfg, "MR_PRICE_NOT_FOUND_BY_DATA", "off") or "").strip().lower() == "on"
+
+
+def price_gave_up(decision: Any, evidence: Any) -> bool:
+    """Ход цены, где путь цены сдался: цен нет, перевода нет, не варианты семейства и не «в таком виде нет», а «не нашёл» по выбору
+    LLM или без него (`price_not_found`). Сбой разбора («уточните название» без LLM) — нет: LLM недоступна, второй вызов не поможет."""
+
+    from . import evidence_keys as ek
+
+    if not price_not_found_on() or decision is None or evidence is None or getattr(decision, "label", "") != "PRICE":
+        return False
+    payload = (getattr(evidence, "items", None) or {}).get(ek.PRICE)
+    if not isinstance(payload, dict) or payload.get("prices") or payload.get("retail_prices") or payload.get("doctors"):
+        return False
+    if payload.get("handoff_required") or payload.get("qualifiers_missing") or str(payload.get("service_kind") or "") == "family_query":
+        return False
+    note = str(payload.get("note") or "")
+    return not payload.get("clarify_text") or note == "price_match_policy: none_fit"
 
 
 def refund(verdict: Verdict) -> None:
