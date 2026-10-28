@@ -157,7 +157,7 @@ def _dialog(world_dir, monkeypatch, turns, *, mode: str) -> list[dict[str, Any]]
         return out
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        for key, value in {"MR_PENDING_BUTTONS": "on", "MR_CHOOSE_CACHE_TTL_S": 0, "MR_BUTTON_PRICE_SCOPE": mode}.items():
+        for key, value in {"MR_CHOOSE_CACHE_TTL_S": 0, "MR_BUTTON_PRICE_SCOPE": mode}.items():
             patch.setattr(cfg, key, value, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM({_MARK_ANY: json.dumps({"picks": []})}))

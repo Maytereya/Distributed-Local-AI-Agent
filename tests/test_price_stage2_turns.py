@@ -55,7 +55,6 @@ PROD_D17: dict[str, Any] = {
     "MR_TOPIC_OVERRIDE_LLM": "off",
     "MR_PARSE_FRAGMENT_WINDOWS": "off",
     "MR_PARSE_COMPLETE_WINDOWS": "off",
-    "MR_PENDING_BUTTONS": "on",
     "MR_TOPIC_BY_LLM": "rule_test_assist,rule_doctor_info_specialty,rule_schedule,rule_analysis_lookup_ambiguous,"
     "rule_website_help,rule_address_work_hours,rule_test_result,rule_prepare",
     "MR_P1_FACET_NONE_OFFER": "on",

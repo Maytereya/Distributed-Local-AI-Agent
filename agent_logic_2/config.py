@@ -240,7 +240,6 @@ class MessengerRouterConfig:
     t7_drop_k3: str
     price_judge_conditions: str
     basket_calc: str
-    pending_buttons: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
     # ход (и) — запасной путь правил `llm_primary` при сбое разбора LLM (`nlu_pipeline`)
@@ -535,13 +534,9 @@ settings = Settings(
         # Ответ на висящий вопрос бота — одна функция `pending_answer` — единственный путь с 24.10: ключи [MESSENGER_ROUTER]
         # pending_reply и pending_reply_types сняты и больше не читаются (в config.ini прода безвредны;
         # STEP-2026-10-22-SWITCH-REMOVAL).
-        # Вопросы-слоты кнопок и остатки класса 5 — через одну функцию ответа на висящий вопрос (`pending_answer`; решение
-        # владельца 19.10, п. 5): вопрос-слот («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?»,
-        # реквизиты результата) ставит `_expects` вида «свободный ответ», ответ решает функция; уточняющий вопрос на «Какой
-        # филиал вам удобен?» получает ответ и тот же вопрос снова; «обе» на составную цену — цены обеих; второе «нет» на
-        # «Похоже, вы имели в виду …?». off — как было. По умолчанию on — как на проде с 21.10 (деплой 12;
-        # STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] pending_buttons
-        pending_buttons=_get_enum("MESSENGER_ROUTER", "pending_buttons", default="on", allowed={"off", "on"}),
+        # Вопросы-слоты кнопок и остатки класса 5 — всегда через одну функцию ответа на висящий вопрос (`pending_answer`;
+        # решение владельца 19.10, п. 5): ключ [MESSENGER_ROUTER] pending_buttons снят 29.10 (on на проде с 21.10) и больше не
+        # читается (в config.ini прода безвреден).
         # Предел переспросов (D2.4; пункт 5 принципов, инвариант 3bacf58): off — как было (обработчик висящего
         # вопроса переспрашивает без счёта); on — один вопрос звучит не больше двух раз подряд, третьего нет:
         # бот называет нужный ответ и предлагает оператора. [MESSENGER_ROUTER] reask_limit
@@ -696,21 +691,21 @@ settings = Settings(
         # подготовка?»): тему знает кнопка, LLM-классификатор её не переспрашивает (журнал прода 14–24.10: 59 % таких ответов
         # ждали его 3,7 с, до 12 с). Одна функция ответа на висящий вопрос решила «это ответ» — тема кнопки. `slot` — вопросы-
         # слоты (подготовка, подбор анализов, результаты), `on` — и кнопки цены (их ответ судит та же функция; карточка 25.10:
-        # +3 чужие цены выбора строки — блок). Нужен `pending_buttons = on`. off — как было. [MESSENGER_ROUTER] button_answer_topic
+        # +3 чужие цены выбора строки — блок). off — как было. [MESSENGER_ROUTER] button_answer_topic
         button_answer_topic=_get_enum("MESSENGER_ROUTER", "button_answer_topic", default="off", allowed={"off", "slot", "on"}),
         # Чужая тема в ответ на вопрос кнопки («Цена анализа» → «а где вы находитесь?»): одна функция ответа решила «другая тема» —
         # LLM выбирает из закрытого списка листьев меню, бот подсказывает нужную кнопку («Это вопрос про … — основная информация в
         # кнопке «…»»), а не угадывает тему общим путём; в сообщении и ответ, и другой вопрос — ответ по теме кнопки и подсказка.
-        # Нужен `pending_buttons = on`. off — как было. [MESSENGER_ROUTER] button_topic_hint
+        # off — как было. [MESSENGER_ROUTER] button_topic_hint
         button_topic_hint=_get_enum("MESSENGER_ROUTER", "button_topic_hint", default="off", allowed={"off", "on"}),
         # Судья ответа на вопрос кнопки видит нажатую кнопку и её тему: полный вопрос в теме кнопки («Сколько стоит общий анализ
         # крови?» на «Цене анализа») — ответ, а не «другая тема» (карточка 25.10: на «Цене анализа» 214 из 343 вопросов по теме
-        # судья звал другой темой). Нужен `pending_buttons = on`. off — как было. [MESSENGER_ROUTER] button_reply_judge
+        # судья звал другой темой). off — как было. [MESSENGER_ROUTER] button_reply_judge
         button_reply_judge=_get_enum("MESSENGER_ROUTER", "button_reply_judge", default="off", allowed={"off", "on"}),
         # Уточняющий вопрос о вопросе кнопки результатов («Где на бланке код?», «Как узнать сам результат?» после «Ввести
         # данные»): судья решил «вопрос о вопросе бота» — ответ, где код и номер и как посмотреть результат, и тот же вопрос
-        # дальше, а не повтор инструкции и оффер оператора (класс К3 карты провалов деплоя 18). Нужен `pending_buttons = on`.
-        # off — как было. [MESSENGER_ROUTER] button_side_answer
+        # дальше, а не повтор инструкции и оффер оператора (класс К3 карты провалов деплоя 18). off — как было.
+        # [MESSENGER_ROUTER] button_side_answer
         button_side_answer=_get_enum("MESSENGER_ROUTER", "button_side_answer", default="off", allowed={"off", "on"}),
         # Область цены кнопки второго уровня (ТЗ 17.08, «сужение поиска по теме»): ответ на вопрос «Цена приёма врача» ищется
         # среди услуг без срока готовности (не анализов, данные прайса МИС), «Цена анализа» / «Сколько стоит анализ» — среди
@@ -996,7 +991,6 @@ MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
 MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
 MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
 MR_BASKET_CALC = settings.messenger_router.basket_calc
-MR_PENDING_BUTTONS = settings.messenger_router.pending_buttons
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_LLM_PRIMARY_RULES_FALLBACK = settings.messenger_router.llm_primary_rules_fallback
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows

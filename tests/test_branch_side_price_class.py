@@ -23,7 +23,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import expects
 from tests.test_booking_slots_by_meaning import _LLM
-from tests.test_pending_buttons_class import _CLASSIFIER_MARK, _OFF, _ON, _PENDING_MARK, _classifier, _collected, _in_world
+from tests.test_pending_buttons_class import _CLASSIFIER_MARK, _PENDING_MARK, _SWITCHES, _classifier, _collected, _in_world
 
 _TESTS = Path(__file__).resolve().parent
 _PRICE_MARK = "ответить пациенту на вопрос о цене"
@@ -127,7 +127,7 @@ def _foreign(text: str, own: str) -> list[str]:
 @pytest.mark.parametrize("target", sorted(_SPECIALTIES))
 def test_side_price_question_is_about_the_booking_service(target, reply, side_price_world, monkeypatch):
     own, book = _SPECIALTIES[target], f"хочу записаться к {target}"
-    asked, side, picked = _in_world(side_price_world, monkeypatch, [book, reply, "1"], switches=_ON, llm=_llm(book))
+    asked, side, picked = _in_world(side_price_world, monkeypatch, [book, reply, "1"], switches=_SWITCHES, llm=_llm(book))
 
     assert asked["text"].endswith(_BRANCH_TAIL), asked["text"]
     assert "appointment_branch_side_question" in side["flags"] and side["label"] == "PRICE", side
@@ -143,11 +143,11 @@ def test_side_price_question_is_about_the_booking_service(target, reply, side_pr
 def test_side_price_question_without_the_model_decision_is_as_before(target, side_price_world, monkeypatch):
     own, book = _SPECIALTIES[target], f"хочу записаться к {target}"
     llm = _LLM({_CLASSIFIER_MARK: lambda prompt: _classifier("APPOINTMENT") if book in prompt else _classifier("PRICE")})
-    on = _in_world(side_price_world, monkeypatch, [book, "а сколько стоит приём?"], switches=_ON, llm=llm)[-1]
-    off = _in_world(side_price_world, monkeypatch, [book, "а сколько стоит приём?"], switches=_OFF, llm=llm)[-1]
+    turn = _in_world(side_price_world, monkeypatch, [book, "а сколько стоит приём?"], switches=_SWITCHES, llm=llm)[-1]
 
-    assert on["text"] == off["text"] and "appointment_branch_side_question" not in on["flags"]
-    assert not _foreign(on["text"], own), on["text"]
+    assert "appointment_branch_side_question" not in turn["flags"]
+    assert "appointment_flow_topic_switch_requested" in turn["flags"], turn  # как было: вопрос о смене темы записи
+    assert not _foreign(turn["text"], own), turn["text"]
 
 
 def test_side_price_question_naming_its_own_service_is_searched_by_its_words(side_price_world, monkeypatch):
@@ -161,7 +161,7 @@ def test_side_price_question_naming_its_own_service_is_searched_by_its_words(sid
     book = "хочу записаться к урологу"
     keep_llm_breaker_closed(monkeypatch)
     llm = SpansOracle(("приём гинеколога",), inner=_llm(book))
-    side = _in_world(side_price_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_ON, llm=llm)[-1]
+    side = _in_world(side_price_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_SWITCHES, llm=llm)[-1]
 
     assert "appointment_branch_side_question" in side["flags"], side
     assert "гинеколог" in side["text"].lower() and not _foreign(side["text"], "гинеколог"), side["text"]

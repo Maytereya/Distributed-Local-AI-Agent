@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import evidence_keys as ek
-from . import address_flow, expects, pending_answer, shown_context
+from . import address_flow, expects, shown_context
 from . import walkin as walkin_llm
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
@@ -440,10 +440,9 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
     # Сбор недостающих данных (ФИО/год/филиал/номер) — уточняющий вопрос.
     missing = result_status.get("missing_fields")
     if isinstance(missing, list) and missing:
-        if pending_answer.buttons_on():
-            # Реквизиты результата — вопрос-слот со свободным ответом: «не помню номер анализа» решает одна функция
-            # ответа на висящий вопрос (решение владельца 19.10, п. 4), а не общий классификатор.
-            expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
+        # Реквизиты результата — вопрос-слот со свободным ответом: «не помню номер анализа» решает одна функция
+        # ответа на висящий вопрос (решение владельца 19.10, п. 4), а не общий классификатор.
+        expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
         return ResponseEnvelope(
             text=clarification_question("TEST_RESULT", [str(m) for m in missing]),
             attachments=[],

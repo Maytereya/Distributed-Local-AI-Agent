@@ -31,7 +31,7 @@ from evalbench import world as ev_world
 from messengers_router import expects
 from tests.test_booking_slots_by_meaning import _LLM
 from tests.test_branch_side_price_class import _PRICE_MARK, side_price_source
-from tests.test_pending_buttons_class import _CLASSIFIER_MARK, _OFF, _ON, _PENDING_MARK, _classifier, _in_world
+from tests.test_pending_buttons_class import _CLASSIFIER_MARK, _PENDING_MARK, _SWITCHES, _classifier, _in_world
 
 _TWO_BRANCHES = ("пр.Ленина, 5", "ул.Ново-Садовая, 106, корпус 82")
 _STEMS = ("уролог", "гинеколог", "невролог")
@@ -114,7 +114,7 @@ def _llm(side: str, label: str) -> _LLM:
 
 def _after_side(world, monkeypatch, specialty: str, side: str, reply: str) -> tuple[dict, dict, dict]:
     text, label = _SIDES[side]
-    return tuple(_in_world(world, monkeypatch, [_BOOKINGS[specialty], text, reply], switches=_ON, llm=_llm(text, label)))
+    return tuple(_in_world(world, monkeypatch, [_BOOKINGS[specialty], text, reply], switches=_SWITCHES, llm=_llm(text, label)))
 
 
 @pytest.mark.parametrize("reply", _NOT_OFFERED)
@@ -123,7 +123,7 @@ def _after_side(world, monkeypatch, specialty: str, side: str, reply: str) -> tu
 def test_branch_not_offered_after_a_side_answer_is_never_booked(specialty, side, reply, two_branch_world, monkeypatch):
     asked, answered, after = _after_side(two_branch_world, monkeypatch, specialty, side, reply)
     text, label = _SIDES[side]
-    without_side = _in_world(two_branch_world, monkeypatch, [_BOOKINGS[specialty], reply], switches=_ON, llm=_llm(text, label))[-1]
+    without_side = _in_world(two_branch_world, monkeypatch, [_BOOKINGS[specialty], reply], switches=_SWITCHES, llm=_llm(text, label))[-1]
 
     assert list(asked["state"][expects.EXPECTS_KEY]["options"][:2]) == list(_TWO_BRANCHES), asked["text"]
     assert "appointment_branch_side_question" in answered["flags"], answered  # побочный ответ был
@@ -157,14 +157,7 @@ def test_side_answer_keeps_the_branch_question_as_it_was(side, two_branch_world,
     """Поле ожидания после побочного ответа — прежний вопрос: его текст со списком записи, пункты и счёт переспросов."""
 
     text, label = _SIDES[side]
-    asked, answered = _in_world(two_branch_world, monkeypatch, [_BOOKINGS["уролог"], text], switches=_ON, llm=_llm(text, label))
+    asked, answered = _in_world(two_branch_world, monkeypatch, [_BOOKINGS["уролог"], text], switches=_SWITCHES, llm=_llm(text, label))
 
     assert "appointment_branch_side_question" in answered["flags"], answered
     assert answered["state"][expects.EXPECTS_KEY] == asked["state"][expects.EXPECTS_KEY]
-
-
-def test_without_pending_buttons_there_is_no_side_answer(two_branch_world, monkeypatch):
-    text, label = _SIDES["hours"]
-    off = _in_world(two_branch_world, monkeypatch, [_BOOKINGS["уролог"], text], switches=_OFF, llm=_llm(text, label))[-1]
-
-    assert "appointment_branch_side_question" not in off["flags"]  # как было

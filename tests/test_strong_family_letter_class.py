@@ -48,7 +48,6 @@ PROD_D18: dict[str, Any] = {
     "MR_PREPARE_VS_BOOKING_LLM": "on",
     "MR_PRICE_OPTION_MIS_NOTES": "on",
     "MR_BASKET_WEAK_PHRASE_JUDGE": "on",
-    "MR_PENDING_BUTTONS": "on",
     "MR_ROLES_CATALOG_LLM": "on",
     "MR_CATALOG_CONFIRM_LLM": "on",
     "MR_TOPIC_BY_LLM": "rule_test_assist,rule_doctor_info_specialty,rule_schedule,rule_analysis_lookup_ambiguous,"

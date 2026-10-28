@@ -62,7 +62,6 @@ def _dialog(world_dir, monkeypatch, turns, *, switch: str) -> list[dict[str, Any
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
         for key, value in {
             "MR_NLU_ENGINE": "legacy_v2",
-            "MR_PENDING_BUTTONS": "on",
             "MR_CHOOSE_CACHE_TTL_S": 0,
             "MR_BUTTON_ANSWER_TOPIC": "slot",
             "MR_WALKIN_BY_LLM": "on",
