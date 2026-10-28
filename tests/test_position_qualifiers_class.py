@@ -365,9 +365,19 @@ def test_insurance_verdict_asks_only_about_marked_words(kind, picks, verdict, mo
     monkeypatch.setattr(cfg, "MR_POSITION_QUALIFIERS", "on", raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Two())
     monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
-    parse = asyncio.run(S.parse_turn_spans("ферритин по ДМС и глюкоза", facet=None, catalog=_CATALOG))
+    async def go():
+        token = llm_runtime.begin_turn_budget()
+        try:
+            parsed = await S.parse_turn_spans("ферритин по ДМС и глюкоза", facet=None, catalog=_CATALOG)
+            return parsed, llm_runtime.turn_decisions_spent()
+        finally:
+            llm_runtime.end_turn_budget(token)
+
+    parse, spent = asyncio.run(go())
     assert parse.insurance == verdict
     assert (["1. по ДМС"] if verdict else []) == [line for chunk in asked for line in chunk.splitlines() if line[:1].isdigit()]
+    # Решение хода тратит только вердикт, закрывший ход: «не страховка» — возвращено пути цены (карточка c3x: «платно делаете уколы»).
+    assert spent == (2 if verdict == "confirmed" else 1)
 
 
 def test_answer_without_the_field_is_a_parse_without_qualifiers(monkeypatch):

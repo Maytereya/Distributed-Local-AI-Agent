@@ -342,13 +342,18 @@ async def _insurance_verdict(reply: str, parse: PhraseParse) -> str:
     """Вердикт по метке «оплата» (решение владельца 28.10: цену по ОМС и ДМС называет оператор): отмеченные слова — варианты выбора,
     LLM выбирает те, что про оплату по ОМС / ДМС / страховке. `confirmed` — хоть одно; `denied` — ни одного (метка снята: «цена»,
     «платно», «сертификат»); `unavailable` — вопрос не ответил (действует прежнее правило: суд условия отверг позицию и метка есть).
-    "" — метки нет, вопрос не задаётся."""
+    "" — метки нет, вопрос не задаётся. Вердикт, который ход не закрыл (не `confirmed`), решения хода не тратит — его возвращаем, как у
+    ответа на висящий вопрос (решение владельца Q5 18.10): карточка `c3x` — без возврата выбору строки «платно делаете уколы» не хватало
+    решения на второй круг (`budget`), цена → «не нашёл»."""
 
     marked = [q.text for q in (*parse.loose, *(q for item in parse.items for q in item.qualifiers)) if q.kind == QualifierKind.INSURANCE]
     if not marked:
         return ""
+    spent = llm_runtime.turn_decisions_spent()
     choice = await choose(INSURANCE_TASK, reply, [Option(id=str(k), text=text) for k, text in enumerate(marked)])
     verdict = "unavailable" if choice.failed else "confirmed" if choice.status is Status.PICKED and choice.ids else "denied"
+    if verdict != "confirmed" and llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(tu_insurance_refund=1)
     turn_telemetry.note(tu_insurance=verdict)
     return verdict
 
