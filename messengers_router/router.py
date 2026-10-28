@@ -547,12 +547,17 @@ def _capture_appointment_wish(decision: RouteDecision, user_text: str, state: Se
 
 
 def _maybe_offer_operator_on_repeat(
-    response: ResponseEnvelope, state: SessionState, memory: MemoryStore, user_text: str = ""
+    response: ResponseEnvelope, state: SessionState, memory: MemoryStore, user_text: str = "", *, pressed: bool = False
 ) -> ResponseEnvelope:
     """Анти-залип: бот второй раз подряд задаёт тот же ВОПРОС (третий раз — тот же ответ с
     данными) на ДРУГУЮ реплику пациента → к ответу добавляется «Перевести на оператора?».
 
     Пациент повторил тот же вопрос — тот же ответ законен и повтором не считается.
+
+    Нажатие листа меню (`pressed`) — выбор темы, не реплика пациента: повтором не считается, счёт начинается заново с ответа
+    на нажатие (BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT: «Сколько стоит анализ» → «Цена анализа» — один вопрос у двух листов —
+    давал оффер, и название анализа следующей репликой становилось согласием на перевод). Реплика после нажатия, на которую бот
+    снова задал тот же вопрос, — повтор, как без кнопки.
 
     Переиспользует существующий operator-offer-pending: следующий ход
     обрабатывает ``_handle_operator_offer_pending`` (да→handoff, нет→продолжаем,
@@ -572,6 +577,9 @@ def _maybe_offer_operator_on_repeat(
     """
     text = (response.text or "").strip()
     norm = _repeat_norm(text)
+    if pressed:
+        state.last_entities.update({"_last_answer_norm": norm, "_answer_repeat_count": 0, "_last_user_norm": ""})
+        return response
     user_norm = " ".join(str(user_text or "").lower().split())
     same_question = bool(user_norm) and user_norm == state.last_entities.get("_last_user_norm")
     state.last_entities["_last_user_norm"] = user_norm
@@ -4442,7 +4450,7 @@ async def patient_routing_stream(
     response = _offer_operator_on_deadline(response, state, memory)
     # Предел переспросов (D2.4, под `reask_limit = on`) — раньше анти-залипа: тот не трогает ответ с оффером.
     response = _maybe_offer_operator_on_reask_limit(response, state, memory)
-    offered = _maybe_offer_operator_on_repeat(response, state, memory, user_text)
+    offered = _maybe_offer_operator_on_repeat(response, state, memory, user_text, pressed=button_menu.action_for(button_id) is not None)
     if offered is not response:
         turn_telemetry.override(answer_source="operator_offer_on_repeat")
     response = offered

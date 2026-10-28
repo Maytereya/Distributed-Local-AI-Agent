@@ -57,6 +57,30 @@ def test_same_question_twice_on_different_replies_offers_operator(question):
     assert question in r.text
 
 
+_BUTTON_QUESTION = "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин»."
+
+
+def _press(state, memory, text):
+    return _maybe_offer_operator_on_repeat(ResponseEnvelope(text=text), state, memory, "Цена анализа", pressed=True)
+
+
+def test_button_press_is_not_a_repeat():
+    # BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT: «Сколько стоит анализ» → «Цена анализа» — один вопрос у двух листов; нажатие —
+    # выбор темы, не реплика пациента, повтором не считается — ни после реплики, ни после другого нажатия.
+    st, mem = _state(), MemoryStore()
+    _run(st, mem, _BUTTON_QUESTION, user_text="что-то непонятное")
+    for _ in range(3):
+        assert _REPEAT_GUARD_OFFER not in _press(st, mem, _BUTTON_QUESTION).text
+    assert not st.last_entities.get("_operator_offer_pending")
+
+
+def test_reply_after_press_that_gets_the_same_question_is_a_repeat():
+    # Встречная сторона: счёт идёт с ответа на нажатие — реплика пациента («не знаю») и тот же вопрос снова — залип, как без кнопки.
+    st, mem = _state(), MemoryStore()
+    _press(st, mem, _BUTTON_QUESTION)
+    assert _REPEAT_GUARD_OFFER in _run(st, mem, _BUTTON_QUESTION, user_text="не знаю").text
+
+
 def test_same_data_answer_twice_is_allowed_third_offers():
     # Ответ с данными (цена, ссылка) второй раз подряд — ещё не залип; третий — оффер.
     st, mem = _state(), MemoryStore()
