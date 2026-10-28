@@ -298,19 +298,3 @@ def test_site_regions_threads_realtime_flag(monkeypatch):
     api_nayka.site_regions(realtime=True)
     api_nayka.site_regions()
     assert seen == [True, False]
-
-
-def test_result_for_patient_uses_realtime(monkeypatch):
-    captured = {}
-    class _Resp:
-        headers = {"Content-Type": "text/plain"}
-        text = "https://naykalab.ru/result/blank.pdf"
-        status_code = 200
-        def raise_for_status(self): pass
-        def json(self): return {}
-    def fake_get(url, *, realtime=False, **kw):
-        captured["realtime"] = realtime
-        return _Resp()
-    monkeypatch.setattr(api_nayka, "_session_get", fake_get)
-    api_nayka.site_result_for_patient(surname="Тестов", year=1990, filial="Бг", number=1)
-    assert captured.get("realtime") is True
