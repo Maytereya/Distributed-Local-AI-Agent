@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import address_flow, booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import address_flow, booking_slots, button_flow, degradation, expects, insurance_topic, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2253,6 +2253,48 @@ def _maybe_topic_handoff(
                 }
             }
         ),
+    )
+
+
+async def _maybe_insurance_topic(
+    *,
+    decision: RouteDecision,
+    user_text: str,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Вопрос об обслуживании по ДМС / ОМС — ответ темы по решению LLM (`insurance_topic = on`, класс К26).
+
+    Стоит сразу за NLU (стадия `nlu_route`): раньше гарда врача, уточнений и инструментов, которые принимали «ДМС» за услугу
+    или врача, — и в идущей записи: предпроверка записи (prelock) кладёт «по дмс» в слот услуги («Похоже, вы имели в виду
+    «Госпитализация в терапевтический стационар»»), а записать по ДМС может только сотрудник. Памятка ДМС, ОМС, конкретный
+    врач, гарантийное письмо — с оффером оператора вопросом («да» — перевод следующим ходом). Срочное, жалобу и медвопрос тема
+    не перехватывает: у них свои шаблоны (принцип 4).
+    """
+
+    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
+        return None
+    reply = await insurance_topic.decide(user_text)
+    if reply is None:
+        return None
+    mark_operator_offer_pending(state, memory)
+    # Тему решила LLM: «низкая уверенность» NLU больше не повод переспрашивать (`recovery_policy.evaluate_recovery`).
+    flags = (set(decision.flags) - {"low_confidence"}) | {insurance_topic.FLAG, f"{insurance_topic.FLAG}:{reply.kind}"}
+    return (
+        _relabel(
+            decision, "insurance_topic",
+            label="OTHER",
+            entities={},
+            flags=flags,
+            source="insurance_topic",
+            needs_handoff=False,
+            context_action="new_topic",
+            clarify_needed=False,
+            clarify_reason="",
+            clarify_slots=[],
+        ),
+        Plan(label="OTHER"),
+        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": reply.text, "handoff": False}}),
     )
 
 
