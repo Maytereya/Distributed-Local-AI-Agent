@@ -25,12 +25,19 @@ from tests.test_booking_slots_by_meaning import _LLM
 from tests.test_promotions_flow import promo_env  # noqa: F401 — фикстура
 
 _MARK = "Пациент спросил об акциях"
+_CHECK_MARK = "отвечает ли эта акция на вопрос пациента"
+_YES = json.dumps({"picks": [], "outcome": "yes"})
 
 
-def _info(monkeypatch, text: str, *, switch: str, answer: str | None, entities: dict | None = None) -> tuple[dict, _LLM]:
+def _info(
+    monkeypatch, text: str, *, switch: str, answer: str | None, entities: dict | None = None, check: str | None = _YES
+) -> tuple[dict, _LLM]:
     from messengers_router.runtime_config import config as cfg
 
-    llm = _LLM({_MARK: answer} if answer is not None else {})
+    answers = {_MARK: answer} if answer is not None else {}
+    if check is not None:
+        answers = {_CHECK_MARK: check, **answers}
+    llm = _LLM(answers)
     monkeypatch.setattr(cfg, "MR_PROMO_BY_LLM", switch, raising=False)
     monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
     monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
@@ -62,8 +69,17 @@ def test_promo_picked_by_meaning_is_printed(promo_env, monkeypatch):  # noqa: F8
 
     pick = _option(_ACTIVE, "ПОПУЛЯРНЫЕ АНАЛИЗЫ СО СКИДКОЙ 30%")
     payload, llm = _info(monkeypatch, "дешевле сдать кровь у вас можно?", switch="on", answer=json.dumps({"picks": [pick], "outcome": "promo"}))
-    assert llm.calls == [_MARK]
+    assert llm.calls == [_MARK, _CHECK_MARK]
     assert payload["mode"] == "detail" and _titles(payload) == ["ПОПУЛЯРНЫЕ АНАЛИЗЫ СО СКИДКОЙ 30%"]
+
+
+@pytest.mark.parametrize("check", [json.dumps({"picks": [], "outcome": "no"}), None])
+def test_unconfirmed_pick_keeps_word_search(check, promo_env, monkeypatch):  # noqa: F811
+    """Проверка отдельным вопросом не подтвердила акцию (или упала) — чужую акцию не печатаем: прежний поиск по словам."""
+
+    on, _ = _info(monkeypatch, "акция чекап", switch="on", answer=json.dumps({"picks": [2], "outcome": "promo"}), check=check)
+    off, _ = _info(monkeypatch, "акция чекап", switch="off", answer=None)
+    assert on == off
 
 
 def test_absent_promo_is_honest_without_echo(promo_env, monkeypatch):  # noqa: F811

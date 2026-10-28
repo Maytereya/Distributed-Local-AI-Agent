@@ -94,6 +94,10 @@ PROMO_TASK = Task(
     queue_timeout_ms=3000,
 )
 _PROMO_OPTION_TEXT = 240  # знаков текста акции в варианте выбора: условия обычно в начале
+# Выбранную акцию подтверждает отдельный короткий вопрос с полным текстом акции: чужая акция — дезинформация (карточка 29.10:
+# «Почему нет сил» → «Доктор Шубин», бонусы новым клиентам → подарочные сертификаты).
+PROMO_CHECK_TASK = Task(name="promo_check", outcomes=("yes", "no"), num_predict=24, timeout_s=8, queue_timeout_ms=3000)
+_PROMO_CHECK_TEXT = 900  # знаков текста акции в проверке
 
 
 def promo_by_llm_on() -> bool:
@@ -450,6 +454,9 @@ async def _promo_by_meaning(query: str, active: list[dict[str, Any]], entities: 
     picks = [active[int(i) - 1] for i in (choice.ids if choice is not None else ()) if str(i).isdigit() and 1 <= int(i) <= len(active)]
     turn_telemetry.note(promo_by_llm=outcome or "none", promo_by_llm_picks=len(picks))
     if outcome == "promo" and picks:
+        picks = [p for p in picks if await _promo_answers(query, p)]
+        turn_telemetry.note(promo_by_llm_checked=len(picks))
+    if outcome == "promo" and picks:
         return {"news": [_promo_public_fields(p) for p in picks], "mode": "detail", "entities_used": entities}
     if outcome in ("absent", "list"):
         return {
@@ -461,3 +468,17 @@ async def _promo_by_meaning(query: str, active: list[dict[str, Any]], entities: 
     if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
         turn_telemetry.note(tu_promo_by_llm_refund=1)
     return None
+
+
+async def _promo_answers(query: str, promo: dict[str, Any]) -> bool:
+    """Отвечает ли выбранная акция на вопрос — отдельный вопрос LLM с полным текстом акции (`PROMO_CHECK_TASK`); сбой — нет:
+    неподтверждённую акцию не печатаем."""
+
+    fields = _promo_public_fields(promo)
+    card = "\n".join(x for x in (fields["title"], fields["subtitle"], " ".join(fields["text"].split())[:_PROMO_CHECK_TEXT]) if x)
+    try:
+        choice = await choose(PROMO_CHECK_TASK, query, [], context=card)
+    except Exception:  # новый слой: его сбой не ломает ход — акция не подтверждена
+        logger.warning("promo_check_failed", exc_info=True)
+        return False
+    return choice.status is Status.OUTCOME and choice.outcome == "yes"
