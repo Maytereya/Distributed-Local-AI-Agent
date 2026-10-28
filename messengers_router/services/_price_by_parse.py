@@ -59,6 +59,24 @@ def failed(text: str) -> bool:
     return turn_understanding.parse_status(text) in _FAILED
 
 
+def payment_condition(text: str) -> str:
+    """Условие оплаты на ходе (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2; есть только под `position_qualifiers = on`):
+    `loose` — ни к одной услуге (на весь вопрос или вопрос без названия: «а сколько стоит по омс?» после цены), `position` — у
+    единственной позиции; пусто — нет или разметка его не отметила (тогда — прежний гард П2). Позицию списка с условием оплаты
+    ведёт корзина (`phrase_price_items`)."""
+
+    from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
+
+    parse = turn_understanding.parse_for(text)
+    if parse is None or not parse.decided:
+        return ""
+    if any(item.kind == turn_parse.QualifierKind.PAYMENT for item in parse.loose):
+        return "loose"
+    if len(parse.items) == 1 and parse.items[0].has(turn_parse.QualifierKind.PAYMENT):
+        return "position"
+    return ""
+
+
 def number_is_choice(text: str) -> bool:
     """Число — номер из показанного прошлым ответом, а не код услуги (находка № 8 дизайна): «1» после списка цен — первая
     строка списка, а не услуга с кодом 1 (коды 1–20 в прайсе все заняты). Мерило — данные хода: ответ показал пациенту

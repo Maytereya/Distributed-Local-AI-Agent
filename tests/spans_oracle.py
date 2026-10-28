@@ -30,6 +30,31 @@ def is_spans(prompt: str) -> bool:
     return SPANS_MARK in (prompt or "")
 
 
+def _words(prompt: str) -> list[str]:
+    numbered = prompt.split(SPANS_MARK, 1)[1].strip().splitlines()[0].split()
+    return [_normalise_catalog_text(item.partition(":")[2]) for item in numbered]
+
+
+def _find(words: list[str], text: str) -> list[int] | None:
+    """Первое вхождение слов `text` в слова разметки — [первое, последнее] с 1; нет — None. Слова — как у разметки
+    (`_turn_spans.words`): дефис и «+» — разделители («врача-терапевта» — два слова)."""
+
+    want = [_normalise_catalog_text(token) for token in _PRICE_TOKEN_RE.findall(str(text or ""))]
+    for k in range(len(words) - len(want) + 1):
+        if want and words[k : k + len(want)] == want:
+            return [k + 1, k + len(want)]
+    return None
+
+
+def _groups(prompt: str, phrases: Iterable[str]) -> list[tuple[str, list[int]]]:
+    words, groups = _words(prompt), []
+    for phrase in phrases:
+        found = _find(words, phrase)
+        if found and not any(found[0] <= last and first <= found[1] for _phrase, (first, last) in groups):
+            groups.append((phrase, found))
+    return groups
+
+
 def spans_groups(prompt: str, phrases: Iterable[str]) -> list[list[int]]:
     """Номера [первое, последнее] каждой фразы в словах запроса разметки (по порядку фраз; нет в реплике — пропуск).
 
@@ -37,36 +62,45 @@ def spans_groups(prompt: str, phrases: Iterable[str]) -> list[list[int]]:
     на весь диалог — длинная фраза раньше короткой («колоноскопии под наркозом», затем «колоноскопии»).
     """
 
-    numbered = prompt.split(SPANS_MARK, 1)[1].strip().splitlines()[0].split()
-    words = [_normalise_catalog_text(item.partition(":")[2]) for item in numbered]
-    groups: list[list[int]] = []
-    for phrase in phrases:
-        # Слова фразы — как слова разметки (`_turn_spans.words`): дефис и «+» — разделители («врача-терапевта» — два слова)
-        want = [_normalise_catalog_text(token) for token in _PRICE_TOKEN_RE.findall(str(phrase or ""))]
-        for k in range(len(words) - len(want) + 1):
-            if want and words[k : k + len(want)] == want:
-                if not any(k + 1 <= last and first <= k + len(want) for first, last in groups):
-                    groups.append([k + 1, k + len(want)])
-                break
-    return groups
+    return [group for _phrase, group in _groups(prompt, phrases)]
 
 
-def spans_response(prompt: str, phrases: Iterable[str]) -> GenerateResponse:
-    """Ответ модели на разметку — JSON-строкой, как у живой."""
+def spans_response(prompt: str, phrases: Iterable[str], qualifiers: Iterable[tuple[str | None, str, str]] | None = None) -> GenerateResponse:
+    """Ответ модели на разметку — JSON-строкой, как у живой.
 
-    return GenerateResponse(model="m", response=json.dumps({"phrases": spans_groups(prompt, phrases)}), done=True)
+    `qualifiers` (уточнения позиции, `position_qualifiers = on`): `(фраза или None, слова уточнения, вид)` — уточнение фразы из
+    `phrases` (её номер группы) или ни к одной (`None` → `of = 0`); уточнения, слов которых нет в реплике или чья фраза не
+    отмечена, — пропуск. None — ответ без поля (промпт без уточнений)."""
+
+    groups = _groups(prompt, phrases)
+    answer: dict[str, Any] = {"phrases": [group for _phrase, group in groups]}
+    if qualifiers is not None:
+        words, numbers = _words(prompt), {phrase: k for k, (phrase, _group) in enumerate(groups, 1)}
+        answer["qualifiers"] = [
+            {"of": numbers[of] if of is not None else 0, "words": found, "kind": kind}
+            for of, text, kind in qualifiers
+            if (found := _find(words, text)) and (of is None or of in numbers)
+        ]
+    return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
 
 class SpansOracle:
     """Разметка — заданные фразы (пусто — «ни одной услуги», None — разметка недоступна); остальное — `inner` или «недоступна».
 
     `phrases` можно сменить между ходами (`oracle.phrases = (...)`): у каждого хода своя реплика. `asked` — места, куда пришёл
-    ход (`spans` / `spans:down` / `inner`), для проверки, что разметку вообще спросили.
+    ход (`spans` / `spans:down` / `inner`), для проверки, что разметку вообще спросили. `qualifiers` — уточнения позиции в ответе
+    (см. `spans_response`; None — ответ без поля).
     """
 
-    def __init__(self, phrases: Iterable[str] | None = (), inner: Any = None) -> None:
+    def __init__(
+        self,
+        phrases: Iterable[str] | None = (),
+        inner: Any = None,
+        qualifiers: Iterable[tuple[str | None, str, str]] | None = None,
+    ) -> None:
         self.phrases = tuple(phrases) if phrases is not None else None
         self.inner = inner
+        self.qualifiers = tuple(qualifiers) if qualifiers is not None else None
         self.asked: list[str] = []
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
@@ -75,7 +109,7 @@ class SpansOracle:
                 self.asked.append("spans:down")
                 raise ConnectionError("тест: разметка недоступна")
             self.asked.append("spans")
-            return spans_response(prompt, self.phrases)
+            return spans_response(prompt, self.phrases, self.qualifiers)
         if self.inner is None:
             raise ConnectionError("тест: LLM недоступна для этого места")
         self.asked.append("inner")

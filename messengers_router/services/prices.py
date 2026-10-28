@@ -211,6 +211,21 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
     return {"service_name": phrase, "prices": [], "retail_prices": [], "doctors": [], "clarify_text": text, "note": note, "entities_used": used}
 
 
+def _payment_payload(query: str, entities: dict[str, Any]) -> dict[str, Any] | None:
+    """Условие оплаты на ходе (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2): LLM разметки отметила «по ОМС / ДМС / полису»
+    у единственной позиции или ни к одной («а сколько стоит по омс?» после цены — BUG-2026-10-27-OMS-FOLLOWUP-PRICED). Прайс МИС —
+    розничный, цену по ОМС он не отвечает: исход суда условия «условия нет» (`qualifier_absent` → «не нашёл»), без суда — 0
+    решений LLM, раньше корзины и «контекста = показанное». Цена попутно (запись, карточка врача) — не трогается. Иначе None."""
+
+    if not entities.get("__price_question"):
+        return None
+    where = _price_by_parse.payment_condition(str(query or ""))
+    if not where:
+        return None
+    turn_telemetry.note(price_payment=where)
+    return _match_policy_payload(PriceSelection(rows=(), status="none_fit", reason="qualifier_absent"), str(query or ""), entities)
+
+
 async def _multi_price_payload(
     query: str, query_text: str, retail_rows: list[dict[str, Any]], entities: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -702,6 +717,9 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     clarify = _parse_failed_clarify(query, entities)
     if clarify is not None:
         return clarify
+    payment = _payment_payload(query, entities)
+    if payment is not None:
+        return payment
     # retail prices: city-level regionId в /priceByRegion/{cityRegionId}
     try:
         price_rows = await _load_with_retry(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
@@ -935,6 +953,8 @@ async def service_bundle_info(
             "entities_used": entities,
         }
     clarify = None if family_row is not None else _parse_failed_clarify(query, entities)
+    if clarify is None and family_row is None:
+        clarify = _payment_payload(query, entities)  # раньше «контекста = показанное»: «а по омс?» не берёт показанную строку
     if clarify is not None:
         clarify["top_n_applied"] = top_limit
         return clarify

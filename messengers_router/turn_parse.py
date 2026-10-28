@@ -154,11 +154,34 @@ _DECIDED = frozenset({ParseStatus.STRONG_WHOLE, ParseStatus.STRONG_ALL, ParseSta
 _FAILED = frozenset({ParseStatus.UNAVAILABLE, ParseStatus.INVALID, ParseStatus.MERGED})
 
 
+class QualifierKind(StrEnum):
+    """Вид уточнения позиции (DESIGN-2026-10-28-POSITION-QUALIFIERS): закрытый перечень схемы разметки `turn_spans`."""
+
+    PAYMENT = "payment"  # кто и как платит: ОМС, ДМС, полис, бесплатно — розничный прайс такой цены не отвечает
+    CONDITION = "condition"  # прочее условие строки: срочно, на дому, первичный
+    MATERIAL = "material"  # материал, орган, объект: кал, моча, из зева, вен
+    METHOD = "method"  # метод, форма результата: количественно, ПЦР, суммарные
+    ADDON = "addon"  # сопутствующая услуга: под наркозом, с седацией
+
+
+@dataclass(frozen=True)
+class Qualifier:
+    """Уточнение позиции — слова пациента `reply[start:end]` и их вид; `inside` — слова внутри фразы своей позиции."""
+
+    kind: QualifierKind
+    text: str
+    start: int
+    end: int
+    inside: bool = False
+
+
 @dataclass(frozen=True)
 class ParsedPhrase:
     """Фраза реплики `reply[start:end]` — одна услуга; `rows` — строки прайса сильной фразы (читатель
     копирует, прежде чем менять); `beside` — слова её фрагмента, которых не покрыл выбор (у списка, см.
-    `_turn_phrases.result`): «омс» у «ферритин» из «ферритин по омс, глюкоза» (обвязка «по» не в счёт)."""
+    `_turn_phrases.result`): «омс» у «ферритин» из «ферритин по омс, глюкоза» (обвязка «по» не в счёт); под
+    `position_qualifiers = on` — слова её уточнений вне фразы, которые отнесла к ней LLM разметки. `qualifiers` — уточнения
+    позиции (вид и слова), `full` — фраза вместе с уточнениями, слова пациента в его порядке («ферритин по ОМС»)."""
 
     text: str
     start: int
@@ -166,6 +189,11 @@ class ParsedPhrase:
     strength: Strength
     rows: tuple[dict[str, Any], ...] = ()
     beside: str = ""
+    qualifiers: tuple[Qualifier, ...] = ()
+    full: str = ""
+
+    def has(self, kind: QualifierKind) -> bool:
+        return any(item.kind == kind for item in self.qualifiers)
 
 
 @dataclass(frozen=True)
@@ -185,6 +213,7 @@ class PhraseParse:
     candidates: int = 0
     ms: int = 0
     split: tuple[ParsedPhrase, ...] = ()
+    loose: tuple[Qualifier, ...] = ()  # уточнения ни к одной услуге (`of = 0`): условие на весь вопрос или вопрос без названия
 
     @property
     def is_list(self) -> bool:
@@ -210,6 +239,14 @@ class PhraseParse:
             "leftover": list(self.leftover),
             "candidates": self.candidates,
             "ms": self.ms,
+            **(
+                {
+                    "qualifiers": [[f"{q.kind}:{q.text}" for q in item.qualifiers] for item in self.items],
+                    "loose": [f"{q.kind}:{q.text}" for q in self.loose],
+                }
+                if self.loose or any(item.qualifiers for item in self.items)
+                else {}
+            ),
         }
 
 
