@@ -1073,7 +1073,10 @@ def format_news_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -
         return "\n\n".join(blocks).strip()
 
     lines: list[str] = []
-    if mode == "miss":
+    if mode == "absent":
+        # `promo_by_llm`: о чём спросили, такой акции среди действующих нет — честно, без эха вопроса.
+        lines.append("Такой акции или скидки сейчас нет. Сейчас действуют:")
+    elif mode == "miss":
         q = str(payload.get("query_echo") or "").strip()
         lines.append(
             f"Не нашёл акцию по запросу «{q}». Сейчас действуют:" if q

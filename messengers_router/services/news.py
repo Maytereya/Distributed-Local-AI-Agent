@@ -17,8 +17,17 @@ TTL-кэш справочника): настоящие названия, усл�
 
 Режимы ответа (``mode`` в payload): ``list`` (какие акции есть), ``detail``
 (нашли конкретную по названию/номеру), ``miss`` (честный промах поиска +
-актуальный список). Деградация источника некритична — пустой список без
-принудительного handoff (прежнее поведение).
+актуальный список), ``absent`` (под ``promo_by_llm``: о чём спросили, такой акции
+среди действующих нет + актуальный список). Деградация источника некритична —
+пустой список без принудительного handoff (прежнее поведение).
+
+Под ``[MESSENGER_ROUTER] promo_by_llm = on`` (STEP-2026-10-29-PROMO-BY-MEANING) какая
+акция отвечает на вопрос, решает LLM закрытым выбором среди действующих акций
+(``PROMO_TASK``, промпт ``choose_promo_answer``), код печатает их карточки; прежде —
+счёт совпадений слов (``_score_promo``): «А на первый приём есть скидка?» → акция на
+витамин D, «Что входит в акцию госпитализация?» → весь список (стенд деплоя 20: 9 из 17
+провалов листа «Акции и скидки» — шаблон или чужая акция). Номер из показанного списка
+и «все» — как было (структурный ответ); сбой LLM и «другая тема» — прежний путь.
 """
 
 from __future__ import annotations
@@ -31,7 +40,10 @@ from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_nayka
 
+from .. import llm_runtime, turn_telemetry
 from .. import resilience as _R
+from ..choice import Option, Status, Task, choose
+from ..runtime_config import config as _cfg
 from ._common import _service_fallback
 
 if TYPE_CHECKING:
@@ -70,6 +82,24 @@ _ORDINAL_WORDS = {
 }
 
 _PROMO_LIST_LIMIT = 8
+
+# Какая из действующих акций отвечает на вопрос пациента (`promo_by_llm`): до двух карточек; исходы — акция, такой нет,
+# общий вопрос о списке, не об акциях.
+PROMO_TASK = Task(
+    name="promo_answer",
+    max_picks=2,
+    outcomes=("promo", "absent", "list", "other_topic"),
+    num_predict=48,
+    timeout_s=8,
+    queue_timeout_ms=3000,
+)
+_PROMO_OPTION_TEXT = 240  # знаков текста акции в варианте выбора: условия обычно в начале
+
+
+def promo_by_llm_on() -> bool:
+    """`[MESSENGER_ROUTER] promo_by_llm = on`: акцию под вопрос выбирает LLM по смыслу, не счёт совпадений слов."""
+
+    return str(getattr(_cfg, "MR_PROMO_BY_LLM", "off") or "").strip().lower() == "on"
 
 # Выбор акции из показанного списка: «2», «про 3», «расскажи номер 5», «вторую». Одно определение
 # (STEP-2026-10-16-ONE-PHRASING): по нему классификатор продолжает NEWS (`classifier._promo_followup_entities`),
@@ -350,6 +380,11 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
                     }
         # Номер без валидного контекста — отдаём список (ниже) с подсказкой.
 
+    if promo_by_llm_on():
+        by_meaning = await _promo_by_meaning(effective_query, active, entities)
+        if by_meaning is not None:
+            return by_meaning
+
     from_followup = bool(entities.get("promo_query"))
     candidate = _promo_name_candidate(effective_query, from_followup=from_followup)
     tokens = _promo_tokens(candidate)
@@ -387,3 +422,42 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         "total_active": len(active),
         "entities_used": entities,
     }
+
+
+def _promo_option(promo: dict[str, Any]) -> str:
+    """Вариант выбора: название, подзаголовок, срок и начало текста акции — как ведёт клиника в CRM."""
+
+    fields = _promo_public_fields(promo)
+    body = " ".join(fields["text"].split())[:_PROMO_OPTION_TEXT]
+    head = " — ".join(x for x in (fields["title"], fields["subtitle"]) if x)
+    until = f" (до {fields['end_display']})" if fields["end_display"] else ""
+    return f"{head}{until}: {body}" if body else f"{head}{until}"
+
+
+async def _promo_by_meaning(query: str, active: list[dict[str, Any]], entities: dict[str, Any]) -> dict[str, Any] | None:
+    """Какая акция отвечает на вопрос — выбор LLM среди действующих (`PROMO_TASK`); None — прежний путь (не об акциях, сбой
+    LLM, выбор без акции), и решение тогда лимит хода не тратит."""
+
+    if not active or not str(query or "").strip():
+        return None
+    spent = llm_runtime.turn_decisions_spent()
+    try:
+        choice = await choose(PROMO_TASK, query, [Option(id=str(i), text=_promo_option(p)) for i, p in enumerate(active, 1)])
+    except Exception:  # новый слой: его сбой не ломает ход — прежний путь
+        logger.warning("promo_by_llm_failed", exc_info=True)
+        choice = None
+    outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
+    picks = [active[int(i) - 1] for i in (choice.ids if choice is not None else ()) if str(i).isdigit() and 1 <= int(i) <= len(active)]
+    turn_telemetry.note(promo_by_llm=outcome or "none", promo_by_llm_picks=len(picks))
+    if outcome == "promo" and picks:
+        return {"news": [_promo_public_fields(p) for p in picks], "mode": "detail", "entities_used": entities}
+    if outcome in ("absent", "list"):
+        return {
+            "news": [_promo_public_fields(p) for p in active[:_PROMO_LIST_LIMIT]],
+            "mode": outcome,
+            "total_active": len(active),
+            "entities_used": entities,
+        }
+    if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(tu_promo_by_llm_refund=1)
+    return None
