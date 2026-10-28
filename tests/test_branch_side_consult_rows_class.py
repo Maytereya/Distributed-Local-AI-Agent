@@ -20,7 +20,7 @@ import pytest
 
 from evalbench import world as ev_world
 from tests.test_branch_side_price_class import _BRANCH_TAIL, _llm, side_price_source
-from tests.test_pending_buttons_class import _ON, _in_world
+from tests.test_pending_buttons_class import _SWITCHES, _in_world
 
 _SPECIALTIES = {"урологу": "уролог", "гинекологу": "гинеколог", "неврологу": "невролог"}
 _REPLIES = ("а сколько стоит приём?", "а цена?")
@@ -53,7 +53,7 @@ def many_rows_world(tmp_path_factory) -> Path:
 @pytest.mark.parametrize("target", sorted(_SPECIALTIES))
 def test_side_price_question_lists_every_consult_row_of_the_specialty(target, reply, many_rows_world, monkeypatch):
     own, book = _SPECIALTIES[target], f"хочу записаться к {target}"
-    asked, side, picked = _in_world(many_rows_world, monkeypatch, [book, reply, "1"], switches=_ON, llm=_llm(book))
+    asked, side, picked = _in_world(many_rows_world, monkeypatch, [book, reply, "1"], switches=_SWITCHES, llm=_llm(book))
 
     assert "appointment_branch_side_question" in side["flags"], side
     answer = side["text"].removesuffix("\n\n" + _BRANCH_TAIL)
@@ -69,7 +69,7 @@ def test_neurologist_prices_of_different_doctors_are_all_shown(many_rows_world, 
     """Пример владельца: первичный приём невролога — 20 000 у одного врача и 6 500 у другого; видны оба, не одна цена."""
 
     book = "хочу записаться к неврологу"
-    side = _in_world(many_rows_world, monkeypatch, [book, "а сколько стоит приём?"], switches=_ON, llm=_llm(book))[-1]
+    side = _in_world(many_rows_world, monkeypatch, [book, "а сколько стоит приём?"], switches=_SWITCHES, llm=_llm(book))[-1]
 
     for price in ("20 000 руб.", "6 500 руб.", "3 000 руб.", "2 700 руб."):
         assert price in side["text"], side["text"]
@@ -77,7 +77,7 @@ def test_neurologist_prices_of_different_doctors_are_all_shown(many_rows_world, 
 
 def test_one_consult_row_is_answered_as_before(one_row_world, monkeypatch):
     book = "хочу записаться к урологу"
-    side = _in_world(one_row_world, monkeypatch, [book, "а сколько стоит приём?"], switches=_ON, llm=_llm(book))[-1]
+    side = _in_world(one_row_world, monkeypatch, [book, "а сколько стоит приём?"], switches=_SWITCHES, llm=_llm(book))[-1]
 
     assert "appointment_branch_side_question" in side["flags"], side
     assert _HEADER not in side["text"] and "Прием (осмотр, консультация) врача-уролога — 3 100 руб." in side["text"], side["text"]
@@ -91,7 +91,7 @@ def test_own_service_in_the_reply_is_searched_by_its_words(many_rows_world, monk
     book = "хочу записаться к урологу"
     keep_llm_breaker_closed(monkeypatch)
     llm = SpansOracle(("приём гинеколога",), inner=_llm(book))
-    side = _in_world(many_rows_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_ON, llm=llm)[-1]
+    side = _in_world(many_rows_world, monkeypatch, [book, "а сколько стоит приём гинеколога?"], switches=_SWITCHES, llm=llm)[-1]
 
     assert "appointment_branch_side_question" in side["flags"], side
     assert _HEADER not in side["text"] and "гинеколог" in side["text"].lower(), side["text"]

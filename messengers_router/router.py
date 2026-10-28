@@ -1181,40 +1181,20 @@ def _catalog_refine_prompt(kind: str, label: str) -> str:
     return "Хорошо. Уточните, пожалуйста, точное название услуги."
 
 
-# Второй отказ на «Похоже, вы имели в виду …?» под `pending_buttons`: перевод — вопросом, решает пациент (решение
+# Второй отказ на «Похоже, вы имели в виду …?»: перевод — вопросом, решает пациент (решение
 # владельца 19.10: автоматически не переводить — участие операторов со временем сводим к минимуму).
 CATALOG_REJECTED_OFFER_TEXT = "Не удалось точно сопоставить запрос с каталогом. Перевести на оператора?"
 
 
 def _catalog_rejected_handoff(state: SessionState, memory: MemoryStore) -> tuple[RouteDecision, Plan, Evidence]:
-    """Второй отказ на «Похоже, вы имели в виду …?» — оператор; под `pending_buttons` — оффер оператора вопросом."""
+    """Второй отказ на «Похоже, вы имели в виду …?» — оффер оператора вопросом."""
 
     state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
-    if pending_answer.buttons_on():
-        mark_operator_offer_pending(state, memory)
-        return (
-            RouteDecision(label="OTHER", confidence=0.95, entities={}, flags={"catalog_confirm_rejected_offer"}, needs_handoff=False, source="catalog_confirm"),
-            Plan(label="OTHER"),
-            Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": CATALOG_REJECTED_OFFER_TEXT, "handoff": False}}),
-        )
+    mark_operator_offer_pending(state, memory)
     return (
-        RouteDecision(
-            label="OTHER",
-            confidence=0.95,
-            entities={},
-            flags={"catalog_confirm_rejected_handoff"},
-            needs_handoff=False,
-            source="catalog_confirm",
-        ),
+        RouteDecision(label="OTHER", confidence=0.95, entities={}, flags={"catalog_confirm_rejected_offer"}, needs_handoff=False, source="catalog_confirm"),
         Plan(label="OTHER"),
-        Evidence(
-            items={
-                "catalog_confirm_response": {
-                    "text": "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором.",
-                    "handoff": True,
-                }
-            }
-        ),
+        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": CATALOG_REJECTED_OFFER_TEXT, "handoff": False}}),
     )
 
 
@@ -1317,10 +1297,9 @@ async def _handle_catalog_confirm_pending(
             return _catalog_rejected_handoff(state, memory)
         missing_slots = _catalog_refine_missing_slots(kind, label)
         memory.set_pending(state, label=label, missing_slots=missing_slots)
-        if pending_answer.buttons_on():
-            # «Уточните название услуги» — вопрос со свободным ответом: второе «нет» на него («нет, не то») — второй отказ
-            # (`_catalog_second_no`), а не «Отменить процесс записи?» (BUG-2026-10-19-PENDING-BUTTONS-CLASS5, п. 4).
-            expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
+        # «Уточните название услуги» — вопрос со свободным ответом: второе «нет» на него («нет, не то») — второй отказ
+        # (`_catalog_second_no`), а не «Отменить процесс записи?» (BUG-2026-10-19-PENDING-BUTTONS-CLASS5, п. 4).
+        expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
         return (
             RouteDecision(
                 label="OTHER",
@@ -4084,10 +4063,10 @@ def _own_place_city(city: str | None, user_text: str) -> str | None:
 
 def _booking_city_from_reply(entities: dict[str, Any], user_text: str) -> dict[str, Any]:
     """Город записи из реплики — тем же правилом, что охрана города в начале хода (`pending_buttons`): «в Южном городе, на
-    Николаевском» давало «записи … в городе Николаевский» (BUG-2026-10-20-BRANCH-PERIMETER-UNOFFERED). Под off — как было."""
+    Николаевском» давало «записи … в городе Николаевский» (BUG-2026-10-20-BRANCH-PERIMETER-UNOFFERED)."""
 
     city = str(entities.get("city") or "").strip()
-    if not city or not pending_answer.buttons_on():
+    if not city:
         return entities
     return {**entities, "city": _own_place_city(city, user_text)}
 
@@ -4098,11 +4077,11 @@ def _offered_branch_for_place(branch: str | None, entities: dict[str, Any]) -> s
     Было (карточка деплоя 12, `pa_branch_hours_side_unoffered_gyn`): «давайте в Южном городе, на Николаевском» на список
     филиалов гинеколога без Южного города — «Да, можем записать на приём к гинекологу (Южный г. Николаевский пр. 2)»:
     подстановка места периметра шла мимо списка записи (BUG-2026-10-20-BRANCH-PERIMETER-UNOFFERED). Правило только сужает:
-    место есть среди пунктов — пункт списка; нет — филиала нет, вопрос звучит снова. Списка нет или под off — как было.
+    место есть среди пунктов — пункт списка; нет — филиала нет, вопрос звучит снова. Списка нет — как было.
     """
 
     offered = entities.get("appointment_branch_options")
-    if not branch or not pending_answer.buttons_on() or not isinstance(offered, list) or not offered:
+    if not branch or not isinstance(offered, list) or not offered:
         return branch
     _, picked = match_branch_hint(branch, build_branch_index(branch_options_to_indexable(offered)))
     return picked

@@ -50,7 +50,7 @@ class Kind(StrEnum):
 
     YES_NO = "yes_no"
     PICK = "pick"
-    FREE = "free"  # свободный ответ — значение слота (под `pending_buttons = on`, решает только `pending_answer`)
+    FREE = "free"  # свободный ответ — значение слота (решает только `pending_answer`)
 
 
 class QuestionType(StrEnum):

@@ -6,7 +6,7 @@
 вопросов-слотов `pending_answer` записи не было), функция ответа на висящий вопрос не звалась, и реплику судили правила смены
 темы предпроверки записи.
 
-Выключатель `[MESSENGER_ROUTER] booking_target_slot_llm = off | on` (по умолчанию off — как было) поверх `pending_buttons = on`.
+Выключатель `[MESSENGER_ROUTER] booking_target_slot_llm = off | on` (по умолчанию off — как было).
 Инвариант: под on ответ, который одна функция (LLM) признала ответом на вопрос цели записи, идёт в запись и вопроса об отмене не
 получает; ответ с условием, которого бот не выполняет (ДМС, ребёнок, онлайн), и другая тема, пока в записи ничего не выбрано, — тот же
 ответ, что на ту же реплику текстом (оффер оператора, без повтора «к какому врачу?» и без вопроса об отмене); сбой LLM и off — как
@@ -23,7 +23,7 @@ from tests.test_booking_slots_by_meaning import _LLM, booking_world  # noqa: F40
 from tests.test_pending_buttons_class import _FREE_MARK, _free, _in_world
 
 _BOOK_BUTTON = ("menu.appointment.book", "Записаться на приём")
-_BASE = {"MR_PENDING_BUTTONS": "on", "MR_CHOOSE_CACHE_TTL_S": 0}
+_BASE = {"MR_CHOOSE_CACHE_TTL_S": 0}
 _ON = {**_BASE, "MR_BOOKING_TARGET_SLOT_LLM": "on"}
 _OFF = {**_BASE, "MR_BOOKING_TARGET_SLOT_LLM": "off"}
 

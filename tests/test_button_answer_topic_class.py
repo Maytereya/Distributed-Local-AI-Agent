@@ -5,7 +5,7 @@
 интересует?») следующая реплика ждала LLM-классификатор в 35 % ходов, с 21.10 — в 59 % (p50 3,7 с, до 12 с), и в половине
 из них он возвращал ту же тему. Тему ответа пациент уже выбрал нажатием.
 
-Инвариант класса: под `button_answer_topic = on` (поверх `pending_buttons = on`) ответ на вопрос любой кнопки-темы, который
+Инвариант класса: под `button_answer_topic = on` ответ на вопрос любой кнопки-темы, который
 одна функция ответа на висящий вопрос признала ответом, — без вызова классификатора и в теме кнопки, и тогда, когда правило
 не сработало, и тогда, когда ветка правила в `topic_by_llm`; off — как было (классификатор решает). Встречные: та же
 реплика без кнопки, другая тема по решению функции, сбой LLM функции и медвопрос по правилу — как было; решение судьи темы
@@ -78,7 +78,6 @@ def _dialog(world_dir, monkeypatch, turns, *, switch: str, rules: str = "", free
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
         for key, value in {
-            "MR_PENDING_BUTTONS": "on",
             "MR_CHOOSE_CACHE_TTL_S": cache_ttl,
             "MR_TOPIC_BY_LLM": rules,
             "MR_BUTTON_ANSWER_TOPIC": switch,

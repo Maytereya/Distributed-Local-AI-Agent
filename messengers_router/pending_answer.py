@@ -27,8 +27,8 @@
 Выключатель `pending_reply` снят 24.10 (неделя `on` на проде с деплоя 10, STEP-2026-10-22-SWITCH-REMOVAL): функция решает
 всегда, все типы разом.
 
-Вопросы-слоты кнопок и остатки класса 5 (решение владельца 19.10, п. 5) — под `[MESSENGER_ROUTER] pending_buttons = on`
-(`buttons_on`), по умолчанию off — как было:
+Вопросы-слоты кнопок и остатки класса 5 (решение владельца 19.10, п. 5) — та же функция; выключатель `pending_buttons`
+снят 29.10 (неделя `on` на проде с деплоя 12, 21.10; STEP-2026-10-29-PENDING-BUTTONS-REMOVAL):
 - вопрос-слот со свободным ответом (`Question.SLOT_VALUE`, вид `free`: «К какой процедуре нужна подготовка?», «Для
   какой цели подобрать анализы?», реквизиты результата, «Уточните название услуги» после «нет» на «Похоже, вы имели в
   виду …?»): исход «это ответ на вопрос» (`ANSWER`) / «не могу ответить» (`NO`) / другая тема / пауза / ничего. Сужение без
@@ -111,7 +111,7 @@ class TypePolicy:
     :param veto_is_no: вопрос об отмене оформления: «да» модели гасит только отрицание («не отменяйте», «нет-нет») — до
         «нет» (собранное цело); слова «отмен…» здесь — согласие. Иначе «да» гасит отказ или оговорка
         (`policies._has_refusal_or_hedge`: «не», «передумал», «позже» …) — до «ничего из этого»
-    :param many: можно выбрать несколько показанных пунктов («обе» на составную цену) — под `pending_buttons = on`
+    :param many: можно выбрать несколько показанных пунктов («обе» на составную цену)
     """
 
     polarity: Polarity
@@ -133,9 +133,6 @@ POLICY: dict[str, TypePolicy] = {
     Question.APPOINTMENT_BRANCH.value: TypePolicy(Polarity.PICK),
     Question.SLOT_VALUE.value: TypePolicy(Polarity.FREE),
 }
-# Типы, которые функция решает только под `pending_buttons = on`.
-_BUTTON_TYPES = frozenset({Question.SLOT_VALUE.value})
-
 # Темы вопросов-слотов со свободным ответом (`pending_buttons`): тема `_pending` → слот, куда идёт реплика целиком, если
 # LLM признала её ответом, а правила значение не разобрали (название процедуры, цель подбора). Реквизиты результата
 # анализов разбирают правила формата — у `TEST_RESULT` такого слота нет, ответ только держит тему вопроса.
@@ -240,14 +237,6 @@ _TAIL_PUNCT = ",.!?;:"
 _TAIL_WORDS = ("а", "но", "—", "–")
 # Основы, которые на вопрос «Отменить текущий процесс записи?» значат согласие отменить, а не оговорку.
 _CANCEL_STEMS = ("отмен", "передума")
-
-
-def buttons_on() -> bool:
-    """Вопросы-слоты кнопок и остатки класса 5 — через функцию: `pending_buttons = on`."""
-
-    from .runtime_config import config as cfg
-
-    return str(getattr(cfg, "MR_PENDING_BUTTONS", "off") or "").strip().lower() == "on"
 
 
 def booking_target_on() -> bool:
@@ -486,11 +475,11 @@ async def answer(
 
     reply = str(text or "").strip()
     policy = POLICY.get(question_type)
-    if policy is None or not reply or (question_type in _BUTTON_TYPES and not buttons_on()):
+    if policy is None or not reply:
         return None
     if policy.polarity is Polarity.FREE:
         return await _free_answer(question_type, question, reply, filled=filled, confirm_topic=confirm_topic, button=button)
-    many = policy.many and buttons_on()
+    many = policy.many
 
     if question_type == Question.SHOW_ALL.value and number(reply) is not None:
         # Цифра на подсказку «напишите: "все"» — номер строки показанного списка, а не пункт подсказки (пункт один — «все»):
@@ -733,11 +722,10 @@ def slot_answer() -> Answer | None:
 
 def branch_side_question(found: Answer | None) -> bool:
     """На «Какой филиал вам удобен?» пациент не ответил, а спросил о самом вопросе («а какой ближе к …?», «а сколько стоит
-    приём?»): решение модели «ничего из этого» (правило 4 промпта), без хвоста — под `pending_buttons`."""
+    приём?»): решение модели «ничего из этого» (правило 4 промпта), без хвоста."""
 
     return (
-        buttons_on()
-        and found is not None
+        found is not None
         and found.type == Question.APPOINTMENT_BRANCH.value
         and found.source is Source.LLM
         and found.outcome is Outcome.NONE

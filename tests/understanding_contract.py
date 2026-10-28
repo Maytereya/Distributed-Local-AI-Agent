@@ -50,7 +50,6 @@ D21_CFG: dict[str, Any] = {
     "MR_BUTTON_REPLY_JUDGE": "on",
     "MR_BUTTON_SIDE_ANSWER": "on",
     "MR_BUTTON_PRICE_SCOPE": "doctor",
-    "MR_PENDING_BUTTONS": "on",
     "MR_LLM_DECISION_TURN_CALLS": 4,
     "MR_LLM_DECISION_TURN_SECONDS": 25,
     "MR_LLM_TURN_DEADLINE_S": 50,

@@ -200,7 +200,7 @@ def mark_question(pending: Any, button_id: str) -> None:
 
 def judges_answer(label: str, pending: Any) -> bool:
     """Вопрос кнопки этой темы получает свободный ответ одной функции под `button_answer_topic = on` (кнопки цены): вопрос
-    `SLOT_TOPICS` получает его и без выключателя (`pending_buttons`). Подсказка (`button_topic_hint`) судью кнопкам цены не
+    `SLOT_TOPICS` получает его всегда (`pending_buttons`). Подсказка (`button_topic_hint`) судью кнопкам цены не
     добавляет: под `slot` классификатор там остаётся, и судья был бы лишней секундой (карточка 25.10: p50 2,5 → 3,3 с)."""
 
     return _judges_price() and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))

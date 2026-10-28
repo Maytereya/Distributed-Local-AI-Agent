@@ -273,7 +273,7 @@ def _extract_pending_response(
         return None
     # Первое «нет» на «Похоже, вы имели в виду …?» — свой вопрос уточнения («Уточните название услуги для записи»), а не
     # общий «Уточните детали запроса» (`pending_buttons`: на него ждём свободный ответ — BUG-2026-10-19-PENDING-BUTTONS-CLASS5).
-    if plan.label == "OTHER" and pending_answer.buttons_on() and isinstance(evidence.get(ek.CATALOG_CONFIRM_RESPONSE), dict):
+    if plan.label == "OTHER" and isinstance(evidence.get(ek.CATALOG_CONFIRM_RESPONSE), dict):
         return None
     # Названия услуг на выбор в записи (`router._maybe_ask_booking_service_choice`): ответ — список названий, а не
     # общий переспрос по пустому слоту услуги (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
@@ -340,7 +340,6 @@ def _extract_pending_response(
         expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS)
     elif (
         (plan.label in pending_answer.slot_topics() or button_flow.judges_answer(plan.label, pending))
-        and pending_answer.buttons_on()
         and (plan.label != "APPOINTMENT" or (isinstance(missing, list) and REQUIRED_SLOTS["APPOINTMENT"][0] in missing))
     ):
         # Вопрос-слот темы (кнопки «Подготовка к процедуре», «Подобрать анализы», «Записаться на приём» — вопрос цели записи,

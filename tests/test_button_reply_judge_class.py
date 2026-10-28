@@ -6,7 +6,7 @@
 теме кнопки («Сколько стоит общий анализ крови?») звал «другой темой» — на «Цене анализа» 214 из 343, — и тему снова решал
 общий путь (правила → классификатор).
 
-Инвариант класса: под `button_reply_judge = on` (поверх `pending_buttons = on`) ответ на вопрос любой кнопки-темы судит
+Инвариант класса: под `button_reply_judge = on` ответ на вопрос любой кнопки-темы судит
 судья, которому даны подпись, раздел и тема нажатой кнопки (задача `pending_free_reply_button`); его «ответ» — решение
 одной функции, и тема кнопки держится, как у любого ответа на её вопрос (`button_answer_topic`). Встречные: off и вопрос не
 кнопки — прежний судья (задача `pending_free_reply`, данные — только вопрос бота); «другая тема» этого судьи и его сбой —
@@ -78,7 +78,6 @@ def _dialog(
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
         for key, value in {
-            "MR_PENDING_BUTTONS": "on",
             "MR_CHOOSE_CACHE_TTL_S": 0,
             "MR_TOPIC_BY_LLM": "",
             "MR_BUTTON_ANSWER_TOPIC": topic,

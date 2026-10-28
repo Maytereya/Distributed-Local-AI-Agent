@@ -50,7 +50,6 @@ def _dialog(world_dir, monkeypatch, turns, *, full: str, free: str = "answer") -
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
         for key, value in {
-            "MR_PENDING_BUTTONS": "on",
             "MR_CHOOSE_CACHE_TTL_S": 0,
             "MR_BUTTON_ANSWER_TOPIC": "frame",
             "MR_TURN_UNDERSTANDING_FULL": full,

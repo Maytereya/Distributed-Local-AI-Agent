@@ -32,7 +32,6 @@ _FREE_MARK = "Бот попросил назвать что-то своими с
 _FRAME_MARK = "остаётся ли сообщение в теме нажатой кнопки"  # вопрос рамки листа без своего вопроса
 # Ключи кнопок деплоя 21 (`release` = d6139b02).
 _DEPLOY21 = {
-    "MR_PENDING_BUTTONS": "on",
     "MR_CHOOSE_CACHE_TTL_S": 0,
     "MR_BUTTON_ANSWER_TOPIC": "frame",
     "MR_BUTTON_FRAME_CHECK": "judge",

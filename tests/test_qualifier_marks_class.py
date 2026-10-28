@@ -208,7 +208,7 @@ def test_reply_to_the_price_button_is_checked_too(answer_topic, mini_prod_world,
     _deploy(monkeypatch)
     keep_llm_breaker_closed(monkeypatch)
     for key, value in {
-        "MR_POSITION_QUALIFIERS": "on", "MR_QUALIFIER_MARKS": "on", "MR_PENDING_BUTTONS": "on", "MR_BUTTON_ANSWER_TOPIC": answer_topic,
+        "MR_POSITION_QUALIFIERS": "on", "MR_QUALIFIER_MARKS": "on", "MR_BUTTON_ANSWER_TOPIC": answer_topic,
     }.items():
         monkeypatch.setattr(cfg, key, value, raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle((_PHRASE,), inner=rows, qualifiers=[(_PHRASE, _QUALIFIER, "method")]))
