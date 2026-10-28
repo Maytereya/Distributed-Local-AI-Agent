@@ -1105,10 +1105,12 @@ def quick_fill_entities_from_text(
     out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
     target_parse = booking_target.acting(text)
     if target_parse is not None:
-        # Цель, филиал и дату этой реплики разметила LLM (`booking_target`): разрез по буквам их не пишет. Цель уже в решении хода
-        # (её судят роль и заземление); филиал и дата — из разметки здесь: заземление ответа на вопрос цели их не принимает.
+        # Цель, филиал и дату этой реплики разметила LLM (`booking_target`): разрез по буквам их не пишет — те же слоты пишутся из слов
+        # ролей и при тех же условиях, что у разреза (цель — когда её ждут; филиал и дата — заземление ответа на вопрос цели их не
+        # принимает). Значение цели по смыслу решают роль и заземление решения хода, как раньше.
         for key in [key for key in out if booking_target.owned(key)]:
             out.pop(key, None)
+        out.update(_booking_target_words(target_parse, state_entities, missing_rules))
         out.update(_booking_branch_and_date(target_parse, state_entities, services))
 
     price_service_slot = target_parse is None and any("service_name" in str(rule or "") for rule in missing_rules) and (
@@ -1203,26 +1205,40 @@ def booking_target_slots(
     state_entities: dict[str, Any],
     services: Services | None,
 ) -> dict[str, Any]:
-    """Цель, филиал и дата хода записи — из слов разметки LLM (`booking_target`); значения — данные.
+    """Цель, филиал и дата хода записи — из слов разметки LLM (`booking_target`); значения — данные."""
 
-    Цель — кандидаты по словам группы (специальность, врач справочника, фраза услуги); значение по смыслу решают роль
-    (`role_pick`) и суд услуги (`judge_booking_service`). Несколько целей — одной фразой через «и» (суд услуги покажет варианты).
-    """
+    out = _booking_target_words(parse, state_entities, None)
+    out.update(_booking_branch_and_date(parse, state_entities, services))
+    return out
 
-    out: dict[str, Any] = {}
+
+def _booking_target_words(
+    parse: booking_target.BookingParse,
+    state_entities: dict[str, Any],
+    missing_rules: list[str] | None,
+) -> dict[str, Any]:
+    """Цель — кандидаты по словам группы `target` (специальность, врач справочника, фраза услуги), при тех же условиях, что у
+    разреза по буквам (`policies._fill_appointment_entities`): специальность — всегда, врач и услуга — когда их ждут (`missing_rules`;
+    None — решение хода, ждут всё). Значение по смыслу решают роль (`role_pick`) и суд услуги (`judge_booking_service`).
+    Несколько целей — одной фразой через «и» (суд услуги покажет варианты)."""
+
     target = " и ".join(part.strip() for part in parse.target if part.strip())
-    if target:
-        specialty = extract_specialty(target.lower())
-        if specialty:
-            out["specialty"] = specialty
-        if not (state_entities.get("doctor_name") or state_entities.get("doctor_id")):
-            doctor = resolve_cached_doctor_name_candidate(target)
-            if doctor:
-                out["doctor_name"] = doctor
+    if not target:
+        return {}
+    rules = [str(rule or "") for rule in missing_rules] if missing_rules is not None else None
+    out: dict[str, Any] = {}
+    specialty = extract_specialty(target.lower())
+    if specialty:
+        out["specialty"] = specialty
+    wants_doctor = rules is None or any(part in rule for rule in rules for part in ("doctor", "specialty"))
+    if wants_doctor and not (state_entities.get("doctor_name") or state_entities.get("doctor_id")):
+        doctor = resolve_cached_doctor_name_candidate(target)
+        if doctor:
+            out["doctor_name"] = doctor
+    if rules is None or any("service_name" in rule for rule in rules):
         service = (extract_service_phrase(target) or target).strip()
         if service and not service_name_conflicts_with_doctor(service, out.get("doctor_name")):
             out["service_name"] = service
-    out.update(_booking_branch_and_date(parse, state_entities, services))
     return out
 
 

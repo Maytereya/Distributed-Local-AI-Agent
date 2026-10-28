@@ -280,3 +280,40 @@ def test_judge_reads_groups_by_role():
         "book",
         {"target": [(1, 1)], "branch": [(3, 4)], "date": [(5, 7)]},
     )
+
+
+_ABDOMEN = "Ультразвуковое исследование органов брюшной полости (комплексное)"
+
+
+@pytest.fixture
+def uzi_synonym(monkeypatch):
+    """Синоним клиники «узи» → одна строка (как в живом срезе МИС: «запишите на узи» сильно сводится к УЗИ брюшной полости)."""
+
+    from messengers_router.services import _biomaterial as _bio
+
+    hermetic = _bio._vocabularies
+
+    def _with_uzi():
+        vocab = hermetic()
+        vocab.synonym_candidates = {"узи": (_ABDOMEN,)}
+        vocab.synonym_to_service = {"узи": _ABDOMEN}
+        return vocab
+
+    monkeypatch.setattr(_bio, "_vocabularies", _with_uzi)
+
+
+@pytest.mark.parametrize(
+    "reply,target",
+    [("Запись на УЗИ", ("УЗИ",)), ("Могу ли я завтра пройти гинекологическое УЗИ?", ("гинекологическое УЗИ",))],
+)
+def test_target_value_on_the_target_step_is_as_without_parse(reply, target, uzi_synonym, monkeypatch):
+    """Разметка меняет роли слов, а не значение цели: на шаге цели слот услуги — слова пациента, как у разреза по буквам; общее
+    «УЗИ» не становится одной строкой синонима клиники («гинекологическое УЗИ» — не брюшной полости)."""
+
+    roles = {"target": target, "date": ("завтра",) if "завтра" in reply else ()}
+    off = _dialog(monkeypatch, _press_then(reply), _Oracle(roles), on=False)[-1]
+    oracle = _Oracle(roles)
+    on = _dialog(monkeypatch, _press_then(reply), oracle)[-1]
+    assert "booking" in oracle.asked
+    assert on["entities"].get("service_name") == off["entities"].get("service_name"), (on["entities"], off["entities"])
+    assert "брюшной" not in on["text"].lower(), on["text"]
