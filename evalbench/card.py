@@ -378,7 +378,8 @@ def main(argv: list[str] | None = None) -> int:
         score_specialties(header, turns)
         loaded.append((header, metrics(turns, labels)))
         by_button.append((header, buttons.button_metrics(turns, buttons.load_cases(header), labels, judged)))
-    print("\n".join([render(loaded, diff), *buttons.render_buttons(by_button)]))
+    press = buttons.render_press(runs[0][0]["name"], runs[1][0]["name"], buttons.press_changes(runs[0][1], runs[1][1])) if len(runs) == 2 else []
+    print("\n".join([render(loaded, diff), *buttons.render_buttons(by_button), *press]))
     return 0
 
 
