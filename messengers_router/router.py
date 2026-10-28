@@ -70,8 +70,6 @@ from .response_builder import (
     build_doctor_info_response as response_build_doctor_info_response,
     build_doctor_schedule_response as response_build_doctor_schedule_response,
     build_first_structured_response as response_build_first_structured_response,
-    build_main_index_info_response as response_build_main_index_info_response,
-    build_news_response as response_build_news_response,
     build_price_response as response_build_price_response,
     build_service_bundle_response as response_build_service_bundle_response,
     build_test_result_response as response_build_test_result_response,
@@ -3888,7 +3886,6 @@ async def route_patient_message(
     )
 
 
-
 def _debug_meta(
     decision: RouteDecision,
     plan: Plan,
@@ -3976,14 +3973,6 @@ def _build_address_response(
     user_text: str,
 ) -> ResponseEnvelope | None:
     return response_build_address_response(flow_label, evidence, state, memory, decision, user_text)
-
-
-def _build_news_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
-    return response_build_news_response(flow_label, evidence, state)
-
-
-def _build_main_index_info_response(evidence: Evidence) -> ResponseEnvelope | None:
-    return response_build_main_index_info_response(evidence)
 
 
 def _build_appointment_schedule_preview_response(

@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from .mess_types import PATIENT_LABEL_PRIORITY
@@ -20,30 +19,6 @@ ALLOWED_CONTEXT_ACTIONS = {"continue", "overwrite_doctor", "new_topic", "cancel_
 
 # Single source of truth lives in russian_nlu.ENTITY_WHITELIST.
 ALLOWED_ENTITY_KEYS = ENTITY_WHITELIST
-
-
-@dataclass(frozen=True)
-class PromptSchemaVersion:
-    name: str
-    version: str
-    required_top_keys: tuple[str, ...]
-
-
-CLASSIFIER_SCHEMA_V2 = PromptSchemaVersion(
-    name="classifier_patient",
-    version="v2",
-    required_top_keys=(
-        "label",
-        "confidence",
-        "context_action",
-        "entities",
-        "flags",
-        "clarify_needed",
-        "clarify_reason",
-        "clarify_slots",
-        "intent_candidates",
-    ),
-)
 
 
 def sanitize_classifier_json(payload: dict[str, Any]) -> dict[str, Any]:
