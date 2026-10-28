@@ -1442,24 +1442,6 @@ async def deterministic_rule_decision(
             if allow_refine
             else base
         )
-    elif detect_doctor_info_intent(text):
-        entities: dict[str, Any] = {}
-        doctor_name = _extract_doctor_name(text, mode="appointment")
-        if doctor_name:
-            entities["doctor_name"] = doctor_name
-        base = RouteDecision(
-            label="DOCTOR_INFO",
-            confidence=0.72,
-            entities=entities,
-            flags=local_flags | {"rule_doctor_info"},
-            needs_handoff=False,
-            context_action=_derive_context_action(text, "DOCTOR_INFO", entities, last_entities),
-        )
-        decision = (
-            await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
-            if allow_refine
-            else base
-        )
     elif _is_procedure_doctor_info_query(text, _extract_service_keyword(text)):
         svc = _extract_service_keyword(text)
         entities = {}
