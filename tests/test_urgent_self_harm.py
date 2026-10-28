@@ -19,11 +19,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 
-from messengers_router import renderer
+from messengers_router import llm_runtime, renderer
 from messengers_router import router as router_mod
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import Evidence, RouteDecision, SessionState
@@ -33,6 +34,7 @@ from messengers_router.policies import detect_urgent
 from messengers_router.services import Services
 from messengers_router.services import _symptom_specialists as S
 from messengers_router.services._regions import _normalize_region_text
+from tests.spans_oracle import keep_llm_breaker_closed
 
 _REAL_ADVISE = S.advise  # до подмены фикстурой conftest: совет идёт настоящим путём
 _ROOT = Path(__file__).resolve().parents[1]
@@ -161,12 +163,15 @@ def test_accepted_false_alarms_err_on_the_safe_side(text):
 
 
 def test_advice_prompt_names_self_harm_as_urgent():
+    """Совет по жалобе — промпт выбора на модуле `choose()` (`choose_symptom_specialists`, две локации): исход «срочно»
+    называет самоповреждение (прежний промпт `symptom_specialists` снят 28.10 вместе с выключателем `choose_symptom`)."""
+
     for path in (
-        _ROOT / "messengers_router" / "prompts" / "symptom_specialists.txt",
-        _ROOT / "app_data" / "prompts" / "mr_symptom_specialists.txt",
+        _ROOT / "messengers_router" / "prompts" / "choose_symptom_specialists.txt",
+        _ROOT / "app_data" / "prompts" / "mr_choose_symptom_specialists.txt",
     ):
         prompt = path.read_text(encoding="utf-8")
-        urgent_rule = prompt[prompt.index("Признаки неотложного") : prompt.index("→ ответь: СРОЧНО")]
+        urgent_rule = prompt[prompt.index('"outcome": "urgent"') : prompt.index('"outcome": "not_complaint"')]
         urgent_rule = " ".join(urgent_rule.split())
         assert "самоубийств" in urgent_rule, path
         assert "самоповрежд" in urgent_rule, path
@@ -258,10 +263,23 @@ def _wire(monkeypatch, *, llm_label: str, advice_answer) -> list[str]:
     async def fake_execute_plan(_plan, _state, _services):
         return Evidence()
 
-    async def fake_generate_text(_prompt, **_kwargs):
-        if isinstance(advice_answer, Exception):
-            raise advice_answer
-        return advice_answer
+    class _AdviceLLM:
+        """LLM совета на модуле выбора (`choose_symptom_specialists`): «1» — терапевт, «СРОЧНО» — исход urgent, «НЕТ» — не жалоба,
+        исключение — сбой; прочие места LLM — «недоступна»."""
+
+        async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+            from ollama import GenerateResponse
+
+            if "к каким врачам из списка" not in (system or ""):
+                raise ConnectionError("тест: LLM недоступна для этого места")
+            if isinstance(advice_answer, Exception):
+                raise advice_answer
+            answer = {
+                "1": {"picks": ["терапевт"], "outcome": "none"},
+                "СРОЧНО": {"picks": [], "outcome": "urgent"},
+                "НЕТ": {"picks": [], "outcome": "not_complaint"},
+            }[advice_answer]
+            return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
     advised: list[str] = []
 
@@ -279,10 +297,9 @@ def _wire(monkeypatch, *, llm_label: str, advice_answer) -> list[str]:
         "_env_flag",
         lambda name, default: True if name == "MR_ROUTER_V2_ENABLE" else (False if name == "MR_ROUTER_V2_SHADOW" else default),
     )
-    # LLM совета подделана на прежнем вызове (`generate_text`) — путь `choose_symptom = off`; режим явно, а не
-    # умолчанием кода (STEP-2026-10-15-DEFAULTS-A): под `on` подделка не вызывается.
-    monkeypatch.setattr(S._cfg, "MR_CHOOSE_SYMPTOM", "off", raising=False)
-    monkeypatch.setattr(S, "generate_text", fake_generate_text)
+    # LLM совета — на модуле выбора (путь прода; выключатель `choose_symptom` снят 28.10).
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _AdviceLLM())
+    keep_llm_breaker_closed(monkeypatch)
     monkeypatch.setattr(S, "advise", real_advice_on_fake_catalog)
     monkeypatch.setattr(renderer, "render_stream", free_stream)
     return advised

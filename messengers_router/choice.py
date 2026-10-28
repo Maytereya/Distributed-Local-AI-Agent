@@ -28,9 +28,6 @@ LLM-слоёв делали это каждый по-своему: три спо
 строкой `<<DATA>>` — инструкция (роль system), под ней — данные хода с `<<QUESTION>>` и
 `<<OPTIONS>>`. Место вызова в телеметрии и на стенде — имя промпта.
 
-Перенос клиента без смены промпта (`LegacyWire`): прежний промпт и прежняя форма ответа, механика —
-модуля. Так перенос доказывается на записанных ответах прод-LLM: на стенде (`replay`) ответы обязаны
-совпасть с прежним путём. Удаляется вместе с прежним путём клиента.
 """
 
 from __future__ import annotations
@@ -40,9 +37,9 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from . import llm_runtime, turn_telemetry
 from .prompt_registry import load_prompt_text
@@ -132,23 +129,6 @@ class Task:
     @property
     def site(self) -> str:
         return f"choose_{self.name}"
-
-
-@dataclass(frozen=True)
-class LegacyWire:
-    """Прежний промпт и прежняя форма ответа клиента (только для доказательства переноса).
-
-    :param prompt: (реплика, варианты) → прежний промпт одной строкой
-    :param answer: (сырой ответ, варианты) → ответ в форме модуля (`picks`, `outcome`, `reason`,
-        `search_terms`) или None, если прежний разбор его не принял бы; строгость — модуля
-    :param fmt: прежний формат ответа ("json" или None)
-    :param options: прежние параметры генерации — поверх общих настроек, как было
-    """
-
-    prompt: Callable[[str, Sequence[Option]], str]
-    answer: Callable[[str, Sequence[Option]], dict[str, Any] | None]
-    fmt: str | None = "json"
-    options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -349,7 +329,6 @@ async def choose(
     question: str,
     options: Sequence[Option],
     *,
-    legacy: LegacyWire | None = None,
     shadow: bool = False,
     asked: str = "",
 ) -> Choice:
@@ -358,7 +337,6 @@ async def choose(
     :param task: задача выбора
     :param question: реплика пациента (как написал он сам)
     :param options: кандидаты, найденные правилами и поиском по данным
-    :param legacy: прежний промпт клиента — перенос без смены промпта
     :param shadow: решение тени — вне бюджета хода и предохранителя, в телеметрии `shadow: true`
     :param asked: вопрос бота, на который отвечает реплика (данные хода, `render`)
     :return: выбор; при сбое — UNAVAILABLE / INVALID, политику выбирает вызывающий
@@ -366,13 +344,9 @@ async def choose(
 
     options = tuple(options)
     try:
-        if legacy is None:
-            system, user = render(task, question, options, asked=asked)
-            schema: Any = answer_schema(task, options)
-            gen_options: dict[str, Any] = {"temperature": 0, "num_predict": task.num_predict}
-        else:
-            system, user = None, legacy.prompt(question, options)
-            schema, gen_options = legacy.fmt, dict(legacy.options)
+        system, user = render(task, question, options, asked=asked)
+        schema: Any = answer_schema(task, options)
+        gen_options: dict[str, Any] = {"temperature": 0, "num_predict": task.num_predict}
     except (OSError, ValueError) as exc:  # промпт задачи сломан или пропал на хосте — ход не роняем
         logger.error("choose_prompt_broken: %s %s", task.name, exc)
         return _noted(task, Choice(Status.UNAVAILABLE), len(options), shadow=shadow)
@@ -390,7 +364,6 @@ async def choose(
             options=gen_options,
             timeout_s=task.timeout_s,
             queue_timeout_ms=task.queue_timeout_ms,
-            inherit_options=legacy is not None,
             shadow=shadow,
         )
     except Exception as exc:  # сбой LLM — UNAVAILABLE; что ответить пациенту, решает вызывающий
@@ -399,13 +372,10 @@ async def choose(
         # (ход (е), DESIGN-2026-10-22-TURN-DECISION-BUDGET); статус прежний — политика вызывающих не меняется.
         reason = "budget" if isinstance(exc, llm_runtime.LLMBudgetExhaustedError) else ""
         return _noted(task, Choice(Status.UNAVAILABLE, reason=reason, latency_ms=_ms(started)), len(options), shadow=shadow)
-    if legacy is None:
-        try:
-            data = json.loads(str(raw or "").strip())
-        except (TypeError, ValueError):
-            data = None
-    else:
-        data = legacy.answer(str(raw or ""), options)
+    try:
+        data = json.loads(str(raw or "").strip())
+    except (TypeError, ValueError):
+        data = None
     verdict = _judge(task, options, data)
     if verdict.status is Status.INVALID:
         logger.warning("choose_invalid: %s %r", task.name, str(raw or "")[:200])

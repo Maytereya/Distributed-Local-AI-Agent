@@ -200,7 +200,6 @@ class MessengerRouterConfig:
     llm_fail_offer: str
     classifier_compact: str
     choose_cache_ttl_s: int
-    choose_symptom: str
     parse_fail_variants: int
     topic_override_llm: str
     topic_shadow_llm: str
@@ -514,11 +513,8 @@ settings = Settings(
         # Выбор строки прайса на модуле choose() (ход (в), клиент 1) — единственный путь с 17.10: ключ [MESSENGER_ROUTER]
         # choose_price (off — прежний вызов, legacy — прежний промпт через модуль) снят и больше не читается (в config.ini
         # прода безвреден; STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE).
-        # Симптом → врач на модуле choose() (ход (в), клиент 2): off — прежний вызов и разбор; legacy —
-        # прежний промпт через модуль; on — врач названием из перечня ролей МИС (не больше двух), исходы
-        # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
-        # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_symptom
-        choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="on", allowed={"off", "legacy", "on"}),
+        # Симптом → врач — всегда выбор на модуле choose() (ход (в), клиент 2): ключ [MESSENGER_ROUTER] choose_symptom снят 28.10
+        # (on на проде с 14.10) и больше не читается (в config.ini прода безвреден).
         # Срок готовности при слабом совпадении — всегда выбор LLM (ход (в)): ключ [MESSENGER_ROUTER] choose_readiness снят
         # 28.10 (on на проде с 14.10) и больше не читается (в config.ini прода безвреден).
         # Разбор ценовой реплики на фразы-услуги (L-15b, контракт C) — единственный режим с T7 шага 3б (16.10): ключ
@@ -932,7 +928,6 @@ MR_LLM_TURN_DEADLINE_S = settings.messenger_router.llm_turn_deadline_s
 MR_LLM_FAIL_OFFER = settings.messenger_router.llm_fail_offer
 MR_CLASSIFIER_COMPACT = settings.messenger_router.classifier_compact
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
-MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm

@@ -70,7 +70,6 @@ def test_adversary_never_raises_urgency():
 
     for prompt in ("задыхаюсь", "боль в груди", "не хочу жить"):
         assert json.loads(ev_llm.adversary_answer("classifier_patient", prompt))["label"] != "URGENT"
-    assert ev_llm.adversary_answer("symptom_specialists", "задыхаюсь") == "НЕТ"
 
 
 def test_adversary_choice_picks_the_last_option_and_never_an_outcome():
