@@ -603,10 +603,10 @@ async def _ask(
 
 async def _checked(question: str, chosen: list[dict[str, Any]], **fields: Any) -> PriceSelection:
     """Выбор с проверкой уточнений (этап 4, `qualifier_marks = on`): отдельный вопрос LLM — что из названного пациентом есть в
-    выбранных строках (`_qualifier_pool.check_rows`). Самой услуги нет — «не нашёл» (две LLM разошлись: принцип 1 — уточнение,
-    не цена); нет уточнения — заголовок «в таком виде нет»; вопроса нет или он не ответил — выбор как есть."""
+    выбранных строках с данными справочника МИС (`_qualifier_pool.check_rows`). Самой услуги нет — «не нашёл» (две LLM разошлись:
+    принцип 1 — уточнение, не цена); нет уточнения — заголовок «в таком виде нет»; вопроса нет или он не ответил — выбор как есть."""
 
-    check = await _qualifier_pool.check_rows(question, _options(question, chosen))
+    check = await _qualifier_pool.check_rows(question, chosen)
     if check is not None and not check.service:
         return PriceSelection(rows=(), status="none_fit", reason="service_absent")
     return PriceSelection(rows=tuple(chosen), missing=_qualifier_pool.note_missing(check.missing if check else ()), **fields)

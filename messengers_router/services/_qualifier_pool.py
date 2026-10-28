@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from .. import llm_runtime, turn_parse, turn_telemetry
+from .. import turn_parse, turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from . import _biomaterial
@@ -26,7 +26,16 @@ _ADDED_LIMIT = 12  # строк с материалом сверх кандид�
 _MIN_STEM = 3  # «кал», «моч», «вен»: короче — не основа
 # Этап 4 — проверка выбора отдельным вопросом (карточка кнопок цены 28.10, `c3kb*`): отметка «есть в строках» тем же вызовом, что
 # выбор строки, защищала выбор — «суммарные» «есть» в IgG и IgM, «ПЦР» — в «Аскарида (p1)», спермограмма — на «пероксидазный тест».
-CHECK_TASK = Task(name="qualifier_in_rows", num_predict=48, timeout_s=4.0, queue_timeout_ms=1500)
+# Данные справочника под строкой (другое название, материал, выдержка описания) удлиняют запрос — тайм-аут на секунду больше.
+CHECK_TASK = Task(name="qualifier_in_rows", num_predict=48, timeout_s=5.0, queue_timeout_ms=1500, verdict=True)
+# Данные справочника МИС под строкой проверки: названий каждого вида — не больше двух, из описания — не больше двух выдержек по
+# `_EXCERPT_WORDS` слов вокруг слов пациента (окно начинается за `_EXCERPT_BEFORE` слов до совпадения); строк в запросе — не больше
+# `_CHECK_ROWS` (разных названий).
+_MIS_NAMES = 2
+_EXCERPTS = 2
+_EXCERPT_WORDS = 32
+_EXCERPT_BEFORE = 10
+_CHECK_ROWS = 6
 
 
 def enabled() -> bool:
@@ -126,23 +135,86 @@ def named(question: str) -> str:
     return " ".join(text.split()).strip(" ,.;:()")
 
 
-async def check_rows(question: str, rows: Sequence[Option]) -> RowsCheck | None:
-    """Проверка выбора строки (этап 4, `qualifier_marks = on`): отдельный вопрос LLM — какие из слов пациента (название услуги и каждое
-    уточнение позиции, кроме оплаты) есть в выбранных строках по смыслу. Строки — данные хода (`context`), варианты — слова пациента.
-    Решение хода вопрос не тратит (возврат, как у ответа на висящий вопрос — решение владельца Q5 18.10): иначе второму кругу выбора
-    не хватало решения. None — уточнений нет, строк нет или вопрос не ответил (выбор как есть, заголовок прежний)."""
+def _row_name(row: dict[str, Any]) -> str:
+    return " ".join(str(row.get("serviceName") or row.get("name") or "").split())
+
+
+def _matching(texts: Sequence[str], wanted: Sequence[str], limit: int) -> list[str]:
+    """Тексты справочника (названия или предложения описания), в которых больше всего слов пациента (по основам, `_same_word`),
+    лучшие первыми, не больше `limit`; ни одного слова — пусто. Сужение кандидатов для LLM, не вердикт: судит проверка."""
+
+    scored = []
+    for k, text in enumerate(texts):
+        have = _stems(text)
+        score = sum(1 for want in wanted if any(_same_word(want, word) for word in have))
+        if score:
+            scored.append((-score, k, text))
+    return [text for _score, _k, text in sorted(scored)[:limit]]
+
+
+def _excerpts(description: str, wanted: Sequence[str]) -> list[str]:
+    """Выдержки описания МИС вокруг слов пациента: окна по `_EXCERPT_WORDS` слов, в которых больше всего разных слов пациента
+    (по основам), не больше `_EXCERPTS`, без пересечений, в порядке текста; ни одного слова — пусто. Сужение для LLM, не вердикт."""
+
+    words = description.split()
+    stems = [_stems(word) for word in words]
+    hits = [k for k, found in enumerate(stems) if any(_same_word(want, have) for want in wanted for have in found)]
+    windows = []
+    for k in hits:
+        start = max(0, k - _EXCERPT_BEFORE)
+        covered = {want for found in stems[start : start + _EXCERPT_WORDS] for have in found for want in wanted if _same_word(want, have)}
+        windows.append((-len(covered), start))
+    chosen: list[int] = []
+    for _score, start in sorted(windows):
+        if len(chosen) < _EXCERPTS and all(abs(start - other) >= _EXCERPT_WORDS for other in chosen):
+            chosen.append(start)
+    return [
+        ("… " if start else "") + " ".join(words[start : start + _EXCERPT_WORDS]) + (" …" if start + _EXCERPT_WORDS < len(words) else "")
+        for start in sorted(chosen)
+    ]
+
+
+def rows_context(rows: Sequence[dict[str, Any]], words: Sequence[str]) -> str:
+    """Строки для проверки выбора: «номер. название» и под ним — что справочник МИС знает о строке и назвал пациент (другие
+    названия `serviceSynonyms`, материалы `biomatNames`, выдержки описания `description` вокруг слов пациента). Повтор названия
+    (одна услуга разных филиалов и цен) — одной строкой. Данных нет — только название, как в прайсе."""
+
+    wanted = [stem for text in words for stem in _stems(text)]
+    vocab = _biomaterial._vocabularies() if wanted else None  # один раз на запрос: у словаря — проверка среза на диске
+    names = list(dict.fromkeys(name for name in (_row_name(row) for row in rows) if name))[:_CHECK_ROWS]
+    lines: list[str] = []
+    for number, name in enumerate(names, 1):
+        lines.append(f"{number}. {name}")
+        if not wanted:
+            continue
+        materials, synonyms = _biomaterial.service_mis_names(name, vocab=vocab)
+        for label, found in (
+            ("другое название в справочнике клиники", _matching(synonyms, wanted, _MIS_NAMES)),
+            ("материал по справочнику клиники", _matching(materials, wanted, _MIS_NAMES)),
+            ("из описания исследования в справочнике клиники", _excerpts(_biomaterial.service_mis_description(name, vocab=vocab), wanted)),
+        ):
+            if found:
+                lines.append(f"- {label}: {' / '.join(found)}")  # чистка запроса снимает отступы — данные строки под ней с дефисом
+    return "\n".join(lines)
+
+
+async def check_rows(question: str, rows: Sequence[dict[str, Any]]) -> RowsCheck | None:
+    """Проверка выбора строки (`qualifier_marks = on`): отдельный вопрос LLM — какие из слов пациента (название услуги и каждое
+    уточнение позиции, кроме оплаты) есть в выбранных строках по смыслу. Строки с данными справочника МИС (`rows_context`) — данные
+    хода (`context`), варианты — слова пациента. Один механизм для цены (`_price_select_llm._checked`) и подбора анализов
+    (`test_assist_answer`): «в таком виде нет» пишет код по этому ответу, а не вызов, который выбирал строки.
+    Решение хода вопрос не тратит и отказа лимита числа решений не получает (`Task.verdict`; прецедент — решение владельца Q5 18.10):
+    с возвратом решения после вызова проверка на ходе подбора анализов упиралась в исчерпанный лимит и молча не шла. None —
+    уточнений нет, строк нет или вопрос не ответил (выбор как есть, заголовок прежний)."""
 
     marks = to_mark(question)
     if not marks or not rows:
         return None
     service = named(question)
     words = ([("service", service)] if service else []) + [(f"q{k}", text) for k, text in enumerate(marks)]
-    spent = llm_runtime.turn_decisions_spent()
     choice = await choose(
-        CHECK_TASK, question, [Option(id=key, text=text) for key, text in words], context="\n".join(f"{k}. {row.text}" for k, row in enumerate(rows, 1))
+        CHECK_TASK, question, [Option(id=key, text=text) for key, text in words], context=rows_context(rows, [text for _key, text in words])
     )
-    if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
-        turn_telemetry.note(price_qual_check_refund=1)
     if choice.failed:
         turn_telemetry.note(price_qual_check="unavailable")
         return None

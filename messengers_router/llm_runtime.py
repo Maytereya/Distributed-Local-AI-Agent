@@ -593,6 +593,7 @@ async def generate_structured(
     inherit_options: bool = False,
     llm: str | None = None,
     shadow: bool = False,
+    verdict: bool = False,
 ) -> tuple[str, dict[str, int]]:
     """Короткое решение по закрытому списку (ход (в) рефакторинга, `choose()`).
 
@@ -616,6 +617,10 @@ async def generate_structured(
         его бюджета и предохранителя: бюджет не проверяется и не тратится, предохранитель только
         читается (разомкнут — вызова нет), ни сбой, ни успех тени его не двигают; в телеметрии хода —
         `shadow: true`. Так тень не меняет ни одного ответа хода
+    :param verdict: вопрос-проверка уже принятого решения (STEP-2026-10-28-POSITION-QUALIFIERS-8; прецедент — решение владельца
+        Q5 18.10: проверка решения хода не тратит): число решений хода не проверяется и не тратится — иначе на ходе, где выбор
+        израсходовал лимит (классификатор, разметка, свойство вопроса, выбор строки), проверка молча не шла; секунды хода, дедлайн
+        и предохранитель — как у решения
     :return: (сырой текст ответа модели, счётчики токенов)
     :raises: `LLM_UNAVAILABLE_ERRORS` и `asyncio.TimeoutError` — их ловит вызывающий; бюджет хода
         и предохранитель (L-11) — без вызова модели
@@ -629,10 +634,11 @@ async def generate_structured(
     budget = None if shadow else _TURN_BUDGET.get()
     if budget is not None:
         left_s = max_turn_s - budget.spent_s if max_turn_s else timeout
-        if (max_calls and budget.calls >= max_calls) or left_s < 1.0:
+        if (not verdict and max_calls and budget.calls >= max_calls) or left_s < 1.0:
             turn_telemetry.note_llm(site, "budget", 0)
             raise LLMBudgetExhaustedError(site)
-        budget.calls += 1
+        if not verdict:
+            budget.calls += 1
         timeout = min(timeout, left_s)
     request: dict[str, Any] = {
         "model": llm or LLMName.get(),

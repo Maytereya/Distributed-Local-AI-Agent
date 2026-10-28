@@ -72,8 +72,11 @@ def ta_world(tmp_path_factory) -> Path:
     return root
 
 
-def turns(world_dir, monkeypatch, replies: list[str], *, switch: str, answers: dict[str, Any], cfg_extra: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Ходы одной сессии; у каждого — текст, телеметрия, вызовы LLM, промпты и висящий оффер оператора."""
+def turns(
+    world_dir, monkeypatch, replies: list[str], *, switch: str, answers: dict[str, Any], cfg_extra: dict[str, Any] | None = None, wrap: Any = None
+) -> list[dict[str, Any]]:
+    """Ходы одной сессии; у каждого — текст, телеметрия, вызовы LLM, промпты и висящий оффер оператора. `wrap` — обёртка
+    подделки LLM (оракул разметки хода `tests.spans_oracle.SpansOracle`: уточнения позиции)."""
 
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
@@ -105,7 +108,7 @@ def turns(world_dir, monkeypatch, replies: list[str], *, switch: str, answers: d
         patch.setattr(Services, "_ensure_regions_loaded", regions)
         for reply in replies:
             fake = _LLM(answers)
-            patch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
+            patch.setattr(llm_runtime, "_OLLAMA_CLIENT", wrap(fake) if wrap is not None else fake)
             choice._CACHE.clear()
             result = asyncio.run(run(reply))
             result["telemetry"] = world.take_telemetry() or {}

@@ -165,8 +165,18 @@ def test_method_without_its_row_has_no_operator_line(mini_prod_world, monkeypatc
 
 
 def test_check_spends_no_turn_decision(mini_prod_world, monkeypatch):  # noqa: F811
-    turn, row = _run(_Rows({_SERVICE}), mini_prod_world, monkeypatch, "qm-refund")
-    assert row["price_qual_check_refund"] == 1, row
+    """Проверка — вопрос о принятом решении (`Task.verdict`): решений хода не тратит и идёт, даже когда выбор израсходовал лимит
+    (ход подбора анализов: классификатор, разметка, свойство вопроса, выбор — проверка молча не шла)."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    _turn, before = _run(_Rows({_SERVICE}), mini_prod_world, monkeypatch, "qm-spent")
+    on, off = before["tu_decisions_spent"], _run(_Rows({_SERVICE}), mini_prod_world, monkeypatch, "qm-spent-off", marks_on=False)[1]
+    assert on == off["tu_decisions_spent"], (before, off)
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_TURN_CALLS", on, raising=False)  # после выбора строки лимит исчерпан
+    rows = _Rows({_SERVICE})
+    turn, row = _run(rows, mini_prod_world, monkeypatch, "qm-spent-limit")
+    assert rows.checks and row["price_qual_check"] == "missing" and turn["text"].startswith(_PARTLY), (row, turn["text"])
 
 
 # --------------------------------------------------------------------------- контракт `choose()`: данные задачи (`context`)

@@ -116,6 +116,8 @@ class Task:
     :param max_terms: сколько терминов второго круга поиска просить (не больше 3)
     :param disjoint: выбранные варианты не пересекаются по `Option.span` (куски одной реплики);
         пересечение — INVALID
+    :param verdict: вопрос-проверка уже принятого решения (проверка выбора строки): число решений хода не тратит и отказом лимита
+        числа не получает — секунды хода, дедлайн и предохранитель как у всех (`llm_runtime.generate_structured`)
     """
 
     name: str
@@ -128,6 +130,7 @@ class Task:
     num_predict: int = 128
     timeout_s: float = 8.0
     queue_timeout_ms: int = 2000
+    verdict: bool = False
 
     @property
     def site(self) -> str:
@@ -397,6 +400,7 @@ async def choose(
             queue_timeout_ms=task.queue_timeout_ms,
             inherit_options=legacy is not None,
             shadow=shadow,
+            verdict=task.verdict,
         )
     except Exception as exc:  # сбой LLM — UNAVAILABLE; что ответить пациенту, решает вызывающий
         logger.warning("choose_unavailable: %s %s %s", task.name, type(exc).__name__, llm_runtime.error_detail(exc) or "-")
