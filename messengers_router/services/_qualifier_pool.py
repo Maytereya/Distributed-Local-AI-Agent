@@ -13,15 +13,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Sequence
 
-from .. import turn_parse, turn_telemetry
+from .. import llm_runtime, turn_parse, turn_telemetry
+from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from . import _biomaterial
 from ._common import _normalise_catalog_text
 
 _ADDED_LIMIT = 12  # строк с материалом сверх кандидатов: пул выбора — до 24 строк, половина — на материал
 _MIN_STEM = 3  # «кал», «моч», «вен»: короче — не основа
+# Этап 4 — проверка выбора отдельным вопросом (карточка кнопок цены 28.10, `c3kb*`): отметка «есть в строках» тем же вызовом, что
+# выбор строки, защищала выбор — «суммарные» «есть» в IgG и IgM, «ПЦР» — в «Аскарида (p1)», спермограмма — на «пероксидазный тест».
+CHECK_TASK = Task(name="qualifier_in_rows", num_predict=48, timeout_s=4.0, queue_timeout_ms=1500)
 
 
 def enabled() -> bool:
@@ -94,6 +99,57 @@ def addons(question: str) -> frozenset[str]:
     if parse is None or not parse.decided or len(parse.items) != 1:
         return frozenset()
     return frozenset(q.text for q in parse.items[0].qualifiers if q.kind == turn_parse.QualifierKind.ADDON)
+
+
+@dataclass(frozen=True)
+class RowsCheck:
+    """Что из названного пациентом есть в выбранных строках: сама услуга (`service`; не спрашивали — True) и уточнения, которых нет."""
+
+    service: bool
+    missing: tuple[str, ...] = ()
+
+
+def named(question: str) -> str:
+    """Название услуги единственной позиции разбора без её уточнений внутри фразы («антитела к аннексину» из «антитела к аннексину
+    суммарные»); позиция не одна или разбора нет — пусто."""
+
+    from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
+
+    parse = turn_understanding.parse_for(question)
+    if parse is None or not parse.decided or len(parse.items) != 1:
+        return ""
+    item = parse.items[0]
+    text = str(item.text or "")
+    for qualifier in sorted((q for q in item.qualifiers if q.inside), key=lambda q: q.start, reverse=True):
+        local = qualifier.start - item.start
+        text = text[:local] + " " + text[local + qualifier.end - qualifier.start :]
+    return " ".join(text.split()).strip(" ,.;:()")
+
+
+async def check_rows(question: str, rows: Sequence[Option]) -> RowsCheck | None:
+    """Проверка выбора строки (этап 4, `qualifier_marks = on`): отдельный вопрос LLM — какие из слов пациента (название услуги и каждое
+    уточнение позиции, кроме оплаты) есть в выбранных строках по смыслу. Строки — данные хода (`context`), варианты — слова пациента.
+    Решение хода вопрос не тратит (возврат, как у ответа на висящий вопрос — решение владельца Q5 18.10): иначе второму кругу выбора
+    не хватало решения. None — уточнений нет, строк нет или вопрос не ответил (выбор как есть, заголовок прежний)."""
+
+    marks = to_mark(question)
+    if not marks or not rows:
+        return None
+    service = named(question)
+    words = ([("service", service)] if service else []) + [(f"q{k}", text) for k, text in enumerate(marks)]
+    spent = llm_runtime.turn_decisions_spent()
+    choice = await choose(
+        CHECK_TASK, question, [Option(id=key, text=text) for key, text in words], context="\n".join(f"{k}. {row.text}" for k, row in enumerate(rows, 1))
+    )
+    if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(price_qual_check_refund=1)
+    if choice.failed:
+        turn_telemetry.note(price_qual_check="unavailable")
+        return None
+    found = set(choice.ids)
+    check = RowsCheck(service=not service or "service" in found, missing=tuple(text for key, text in words if key != "service" and key not in found))
+    turn_telemetry.note(price_qual_check="service_absent" if not check.service else "missing" if check.missing else "found")
+    return check
 
 
 def note_missing(missing: Sequence[str]) -> tuple[str, ...]:

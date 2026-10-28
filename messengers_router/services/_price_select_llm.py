@@ -589,23 +589,27 @@ def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
 
 
 async def _ask(
-    question: str,
-    pool: list[dict[str, Any]],
-    *,
-    judge_qualifier: bool = False,
-    price_answer: bool = True,
-    qualifiers: Sequence[str] = (),
-) -> tuple[list[dict[str, Any]], list[str], str, tuple[str, ...]] | None:
+    question: str, pool: list[dict[str, Any]], *, judge_qualifier: bool = False, price_answer: bool = True
+) -> tuple[list[dict[str, Any]], list[str], str] | None:
     """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
-    выбора, уточнения пациента, которых в выбранных строках нет) или None — сбой. Уточнения (`qualifiers`, этап 4) LLM отмечает
-    тем же вызовом; без отметок (не спрашивали, ответ не по контракту) — ненайденных нет, заголовок прежний."""
+    выбора) или None — сбой."""
 
     options = _options(question, pool)
-    choice = await choose(price_task(judge_qualifier=judge_qualifier, price_answer=price_answer), question, options, qualifiers=qualifiers)
+    choice = await choose(price_task(judge_qualifier=judge_qualifier, price_answer=price_answer), question, options)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
-    missing = tuple(text for text, found in zip(qualifiers, choice.in_rows) if not found) if choice.in_rows else ()
-    return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason, missing
+    return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
+
+
+async def _checked(question: str, chosen: list[dict[str, Any]], **fields: Any) -> PriceSelection:
+    """Выбор с проверкой уточнений (этап 4, `qualifier_marks = on`): отдельный вопрос LLM — что из названного пациентом есть в
+    выбранных строках (`_qualifier_pool.check_rows`). Самой услуги нет — «не нашёл» (две LLM разошлись: принцип 1 — уточнение,
+    не цена); нет уточнения — заголовок «в таком виде нет»; вопроса нет или он не ответил — выбор как есть."""
+
+    check = await _qualifier_pool.check_rows(question, _options(question, chosen))
+    if check is not None and not check.service:
+        return PriceSelection(rows=(), status="none_fit", reason="service_absent")
+    return PriceSelection(rows=tuple(chosen), missing=_qualifier_pool.note_missing(check.missing if check else ()), **fields)
 
 
 # Условия, которые меняют саму услугу для пациента. «Комплекс/программа» сюда не входят:
@@ -871,14 +875,12 @@ async def select_price_rows(
         if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons) and journal_phrase:
             _record_synonym_suggestion(journal_phrase, found_terms, [], source=journal_source)
 
-    marks = _qualifier_pool.to_mark(question)
-    first = await _ask(question, pool, judge_qualifier=judge_qualifier, price_answer=price_answer, qualifiers=marks)
+    first = await _ask(question, pool, judge_qualifier=judge_qualifier, price_answer=price_answer)
     if first is None:
         return settle(*unavailable())
-    chosen, terms, reason, missing = first
+    chosen, terms, reason = first
     if chosen:
-        picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)), missing=_qualifier_pool.note_missing(missing))
-        return settle(picked)
+        return settle(await _checked(question, _prefer_base_variants(chosen, question)))
     # Суд условия (`judge_qualifier`): «условия нет» (`qualifier_absent`, правило 3 промпта) — вердикт окончательный.
     # Второй круг искал бы «почти то» (это и запрещает П2), а у класса A под `turn_parse = on` упирался в лимит
     # решений хода (`budget`) и превращал «не нашёл» в ответ правил (BUG-2026-10-16-QUALIFIER-ROUND-TWO-BUDGET).
@@ -912,7 +914,7 @@ async def select_price_rows(
     if not pool_by_terms:
         journal_miss(terms, reason)
         return settle(none_fit(reason))
-    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier, price_answer=price_answer, qualifiers=marks)
+    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier, price_answer=price_answer)
     if second is None:
         return settle(*unavailable())
     if not second[0]:
@@ -921,8 +923,7 @@ async def select_price_rows(
     chosen = _prefer_base_variants(second[0], question)
     if journal_phrase:
         _record_synonym_suggestion(journal_phrase, terms, chosen, source=journal_source)
-    picked = PriceSelection(rows=tuple(chosen), search_terms=tuple(terms), missing=_qualifier_pool.note_missing(second[3]))
-    return settle(picked)
+    return settle(await _checked(question, chosen, search_terms=tuple(terms)))
 
 
 def distinct_services(rows: Sequence[dict[str, Any]]) -> bool:
