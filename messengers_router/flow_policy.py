@@ -1251,7 +1251,7 @@ def _booking_branch_and_date(
     (принцип 1 — «осетинской 4» не филиал, бот спросит филиал списком по данным). Дата — структурный разбор слов даты."""
 
     out: dict[str, Any] = {}
-    branch = parse.branch[0].strip() if parse.branch else ""
+    branch = " ".join(part.strip() for part in parse.branch if part.strip())
     if branch and services is not None and not state_entities.get("branch_id"):
         hint = extract_branch_hint(branch, state_entities) or branch
         out.update(_branch_slots(hint, state_entities, state_entities.get("city"), services, raw_fallback=False))

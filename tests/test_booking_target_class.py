@@ -264,6 +264,7 @@ def test_switch_off_and_later_steps_do_not_ask_the_parse(monkeypatch):
         {"action": "book", "target": [[0]], "branch": [], "date": []},  # номер вне списка
         {"action": "maybe", "target": [], "branch": [], "date": []},  # действие вне контракта
         {"action": "book", "target": [[3, 1]], "branch": [], "date": []},  # первое больше последнего
+        {"action": "book", "target": [[1, 3, 2]], "branch": [], "date": []},  # перечень не по возрастанию
         {"action": "book", "target": "1", "branch": [], "date": []},
     ],
 )
@@ -279,6 +280,11 @@ def test_judge_reads_groups_by_role():
     assert judge({"action": "book", "target": [[2]], "branch": [[4, 5]], "date": [[6, 7, 8]]}, 8) == (
         "book",
         {"target": [(1, 1)], "branch": [(3, 4)], "date": [(5, 7)]},
+    )
+    # Перечень с пропуском предлога («8 октября в 10 утра» без «в») — сплошные группы, а не нарушение контракта.
+    assert judge({"action": "book", "target": [], "branch": [], "date": [[1, 2, 4, 5]]}, 5) == (
+        "book",
+        {"target": [], "branch": [], "date": [(0, 1), (3, 4)]},
     )
 
 

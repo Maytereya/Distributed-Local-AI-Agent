@@ -144,7 +144,8 @@ def prompt(reply: str, toks: Sequence[Any]) -> tuple[str, str]:
 def judge(raw: Any, n_words: int) -> tuple[str, dict[str, list[tuple[int, int]]]] | None:
     """Ответ → (действие, отрезки ролей с нуля); None — ответ нарушил контракт.
 
-    Группа — `[первое, последнее]`, `[k]` или перечень подряд; номера 1..n; группы не пересекаются ни внутри роли, ни между ролями.
+    Группа — `[первое, последнее]`, `[k]` или возрастающий перечень номеров; перечень с пропуском («8 октября в 10» без «в» —
+    `[7, 8, 10]`) — несколько сплошных групп. Номера 1..n; группы не пересекаются ни внутри роли, ни между ролями.
     """
 
     if not isinstance(raw, dict):
@@ -162,22 +163,33 @@ def judge(raw: Any, n_words: int) -> tuple[str, dict[str, list[tuple[int, int]]]
         for group in groups:
             if not isinstance(group, list) or not group or not all(isinstance(k, int) and not isinstance(k, bool) for k in group):
                 return None
-            if len(group) == 1:
-                first = last = group[0]
-            elif len(group) == 2:
-                first, last = group
-            elif group == list(range(group[0], group[0] + len(group))):
-                first, last = group[0], group[-1]
+            if len(group) <= 2:
+                runs = [(group[0], group[-1])]
+            elif all(nxt > cur for cur, nxt in zip(group, group[1:])):
+                runs = _runs(group)
             else:
                 return None
-            if not 1 <= first <= last <= n_words:
-                return None
-            spans[role].append((first - 1, last - 1))
-            taken.append((first - 1, last - 1))
+            for first, last in runs:
+                if not 1 <= first <= last <= n_words:
+                    return None
+                spans[role].append((first - 1, last - 1))
+                taken.append((first - 1, last - 1))
     taken.sort()
     if any(prev[1] >= cur[0] for prev, cur in zip(taken, taken[1:])):
         return None
     return str(action), {role: sorted(found) for role, found in spans.items()}
+
+
+def _runs(numbers: Sequence[int]) -> list[tuple[int, int]]:
+    """Возрастающий перечень номеров → сплошные отрезки (первый, последний)."""
+
+    runs: list[tuple[int, int]] = []
+    for number in numbers:
+        if runs and number == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], number)
+        else:
+            runs.append((number, number))
+    return runs
 
 
 async def understand(reply: str) -> BookingParse:
