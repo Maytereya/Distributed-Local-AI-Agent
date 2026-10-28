@@ -4,9 +4,10 @@
 
 * BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE — на ходе нажатия LLM-судья судит слова пациента, которых нет. «Нужно ли
   записываться» (раздел «Сдать анализы», смысл — запись на анализы) под `walkin_by_llm = on` (строка конфига деплоя 19)
-  спрашивает судью «без записи?» о пустом сообщении (подпись кнопки, верно, не содержание — `OrchestratorContext.text`),
+  спрашивает судью «без записи?» о пустом сообщении (подпись кнопки, верно, не содержание — `OrchestratorContext.content_text`),
   судья отвечает «нет», и ответ кнопки теряет главное — «Анализы выполняются без записи» (стенд: деплой 18 — 29 нажатий из
-  29 с фразой, деплой 19 — 0 из 29).
+  29 с фразой, деплой 19 — 0 из 29). Исправлено классом (решение владельца 28.10): без слов пациента `choice.choose` LLM не
+  зовёт (`NO_WORDS`), вызывающий делает то же, что без решения LLM.
   Инвариант: на ходе нажатия листа `slot` / `handoff` / `hint` LLM не зовётся — тему и смысл задаёт кнопка, судить нечего;
   ответ кнопки «Нужно ли записываться» — фраза «без записи» при любом ответе судьи.
 * BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT — анти-залип считает нажатие другой кнопки с тем же вопросом «другой репликой
@@ -114,19 +115,10 @@ def _press(button_id: str) -> tuple[str, str]:
 
 # --- класс 1: на ходе нажатия листа со своим смыслом LLM не судит слова пациента — их нет --------------------------------
 
-_JUDGED_ON_PRESS = {"menu.tests.booking_needed"}  # BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE, открыт
 _OWN_MEANING = sorted(b for b, a in button_menu.BUTTONS.items() if a.mode in ("slot", "handoff", "hint"))
 
 
-@pytest.mark.parametrize(
-    "button_id",
-    [
-        pytest.param(b, marks=pytest.mark.xfail(strict=True, reason="BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE"))
-        if b in _JUDGED_ON_PRESS
-        else b
-        for b in _OWN_MEANING
-    ],
-)
+@pytest.mark.parametrize("button_id", _OWN_MEANING)
 def test_press_asks_llm_nothing(button_id, monkeypatch):
     (press,) = _dialog(monkeypatch, [_press(button_id)], _RecordingLLM())
 
@@ -134,7 +126,6 @@ def test_press_asks_llm_nothing(button_id, monkeypatch):
     assert not press["prompts"], f"на ходе нажатия LLM судила слова пациента, которых нет: {asked}"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE")
 def test_booking_needed_press_says_walkin_whatever_judge_says(monkeypatch):
     (press,) = _dialog(monkeypatch, [_press("menu.tests.booking_needed")], _RecordingLLM({_WALKIN_MARK: _WALKIN_OTHER}))
 

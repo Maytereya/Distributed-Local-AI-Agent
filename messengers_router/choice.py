@@ -13,6 +13,9 @@ LLM-слоёв делали это каждый по-своему: три спо
   числа, неизвестный код → INVALID (такому ответу не верим целиком, и при исходе); пусто → NONE_FIT;
   исход → OUTCOME: исход побеждает выбор, а номера, названные вместе с ним, остаются — те же `ids`, что
   у PICKED («да, второй» на вопрос-список); сбой, тайм-аут, бюджет хода, предохранитель → UNAVAILABLE;
+- слов пациента нет (ход нажатия листа меню: подпись — не содержание, `OrchestratorContext.content_text`) → UNAVAILABLE с
+  причиной `no_words`, LLM не зовётся: судить нечего, тему и смысл задала кнопка — вызывающий делает то же, что без решения
+  LLM (BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE: судья walk-in на пустом сообщении снимал «без записи» с кнопки);
 - что делать при UNAVAILABLE / INVALID / NONE_FIT, решает вызывающий: модуль даёт механику,
   политику задаёт клиент;
 - кэшируются только внятные ответы (PICKED, NONE_FIT, OUTCOME), коротко (`choose_cache_ttl_s`);
@@ -56,6 +59,7 @@ _MAX_TERMS = 3
 _MAX_TERM_LEN = 60
 _MAX_QUESTION_LEN = 1000
 _CACHE_MAX = 512
+NO_WORDS = "no_words"  # причина UNAVAILABLE: реплики пациента нет — LLM не звали
 
 
 class Strength(str, Enum):
@@ -361,10 +365,12 @@ async def choose(
     :param legacy: прежний промпт клиента — перенос без смены промпта
     :param shadow: решение тени — вне бюджета хода и предохранителя, в телеметрии `shadow: true`
     :param asked: вопрос бота, на который отвечает реплика (данные хода, `render`)
-    :return: выбор; при сбое — UNAVAILABLE / INVALID, политику выбирает вызывающий
+    :return: выбор; при сбое — UNAVAILABLE / INVALID, политику выбирает вызывающий; без реплики — UNAVAILABLE (`NO_WORDS`)
     """
 
     options = tuple(options)
+    if not _clean_question(question):
+        return _noted(task, Choice(Status.UNAVAILABLE, reason=NO_WORDS), len(options), shadow=shadow)
     try:
         if legacy is None:
             system, user = render(task, question, options, asked=asked)
