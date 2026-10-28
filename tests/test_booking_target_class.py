@@ -323,3 +323,36 @@ def test_target_value_on_the_target_step_is_as_without_parse(reply, target, uzi_
     assert "booking" in oracle.asked
     assert on["entities"].get("service_name") == off["entities"].get("service_name"), (on["entities"], off["entities"])
     assert "брюшной" not in on["text"].lower(), on["text"]
+
+
+_GYN_UZI = "УЗИ гинекологическое (трансвагинальное)"
+
+
+@pytest.fixture
+def gyn_synonym(monkeypatch):
+    """Синоним клиники на слово специальности: «гинеколог» → строка процедуры (так совпадало «гинекологу» в свипе 28.10)."""
+
+    from messengers_router.services import _biomaterial as _bio
+
+    hermetic = _bio._vocabularies
+
+    def _with_gyn():
+        vocab = hermetic()
+        vocab.synonym_candidates = {"гинеколог": (_GYN_UZI,), "гинекологу": (_GYN_UZI,)}
+        vocab.synonym_to_service = {"гинеколог": _GYN_UZI, "гинекологу": _GYN_UZI}
+        return vocab
+
+    monkeypatch.setattr(_bio, "_vocabularies", _with_gyn)
+
+
+@pytest.mark.parametrize("via_button", [False, True], ids=["text", "button"])
+def test_specialty_word_is_a_reception_not_a_procedure(via_button, gyn_synonym, monkeypatch):
+    """Слово специальности в цели — приём врача (роль каталога МИС), а не строка процедуры по синониму клиники."""
+
+    reply = "Хочу гинекологу на прием"
+    oracle = _Oracle({"target": ("гинекологу",)})
+    last = _dialog(monkeypatch, _press_then(reply) if via_button else [reply], oracle)[-1]
+    assert "booking" in oracle.asked
+    for slots in (last["entities"], last["decision"].get("entities") or {}, last["planned"]):
+        assert str(slots.get("service_name") or "") != _GYN_UZI, slots
+    assert "узи" not in last["text"].lower(), last["text"]

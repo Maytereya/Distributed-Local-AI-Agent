@@ -426,6 +426,8 @@ async def prelock_active_appointment_turn(
     if parse is not None and parse.ok:
         target_slots = booking_target_slots(parse, state_entities, services)
         slot_updates.update(target_slots)
+        if "service_name" in slot_updates and await booking_target.names_reception_role(parse, services):
+            slot_updates.pop("service_name")  # цель — приём врача: его решает роль, а не суд услуги по строкам прайса
         booking_target.note(parse, target_slots, "slots")
     elif parse is not None:
         booking_target.note(parse, {}, "rules")

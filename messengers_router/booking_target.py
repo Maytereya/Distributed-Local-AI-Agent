@@ -293,6 +293,25 @@ def note(parse: BookingParse, slots: dict[str, Any], acted: str) -> None:
     )
 
 
+async def names_reception_role(parse: BookingParse, services: "Services | None") -> bool:
+    """Слова цели называют только роль приёма врача из каталога ролей МИС («к терапевту», «гинекологу») — цель хода приём, его
+    решает роль (`role_pick`), а не суд услуги по строкам прайса: одно слово специальности сильно совпадало с процедурой по
+    синониму клиники («гинекологу» → «УЗИ гинекологическое», свип 28.10). Процедура в словах («гинекологическое УЗИ») — услуга."""
+
+    target = " ".join(part for part in parse.target if part.strip())
+    if not target or services is None:
+        return False
+    from . import role_pick
+
+    try:
+        found = (await role_pick.catalog(services)).find(target)
+    except Exception:  # каталог ролей недоступен — как без этого слоя: слова цели остаются кандидатом услуги
+        logger.warning("booking_target_role_catalog_failed", exc_info=True)
+        return False
+    roles = [*found.exact, *found.partial]
+    return bool(roles) and all(role.reception for role in roles)
+
+
 def fail_offer_decision(decision: "RouteDecision") -> "RouteDecision":
     """Сбой разметки под узлом `booking_target` — честный оффер оператора (как узлы `topic`, `facet`, `role_pick`)."""
 
@@ -342,6 +361,8 @@ async def apply(
         if not owned(key) or (verified_doctor and key in _DOCTOR_KEYS)
     }
     slots = booking_target_slots(parse, state_entities, services)
+    if "service_name" in slots and await names_reception_role(parse, services):
+        slots.pop("service_name")
     if verified_doctor and any(entities.get(key) for key in _DOCTOR_KEYS):
         for key in _DOCTOR_KEYS:
             slots.pop(key, None)
