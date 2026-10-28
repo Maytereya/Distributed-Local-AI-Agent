@@ -61,3 +61,15 @@ def test_typed_question_without_button_is_untouched(reply, mini_prod_world, monk
     off = _dialog(mini_prod_world, monkeypatch, [reply], switch="off")[0]
     frame = _dialog(mini_prod_world, monkeypatch, [reply], switch="frame")[0]
     assert frame["text"] == off["text"] and frame["label"] == off["label"]
+
+
+@pytest.mark.parametrize("button_id", _BUTTONS)
+def test_price_leaf_domain_names_availability_for_the_judge(button_id, monkeypatch):
+    """Судья ответа видит домен листа цены — каталог услуг: «есть ли услуга / врач» — вопрос в теме кнопки."""
+
+    from messengers_router import button_flow
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_BUTTON_REPLY_JUDGE", "on", raising=False)
+    context = button_flow.judge_context({"button": button_id}, "Какой анализ интересует?")
+    assert "есть ли" in context and "цену" in context, context
