@@ -1051,7 +1051,7 @@ def find_doctor_schedule(
     if region_name:
         region_id = next((r["id"] for r in regions if region_name.lower() in r["name"].lower()), None)
         if not region_id:
-            if not regions and regions_failed() and str(getattr(c, "MR_MIS_HONEST_DEGRADATION", "off")).lower() == "on":
+            if not regions and regions_failed():
                 # Справочник филиалов не получен — это сбой МИС, а не «такого региона нет» (DATA-2): строка с маркером
                 # сбоя → `ScheduleSourceUnavailable` → честный перевод `service_error_schedule`.
                 return "Не удалось получить список регионов: справочник филиалов МИС недоступен."

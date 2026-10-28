@@ -202,7 +202,6 @@ class MessengerRouterConfig:
     choose_cache_ttl_s: int
     choose_symptom: str
     parse_fail_variants: int
-    mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
     p1_facet_none_offer: str
@@ -625,11 +624,8 @@ settings = Settings(
         names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="on", allowed={"off", "on"}),
         # Вариант B L-13 — словоформы различающего слова всегда: ключ [MESSENGER_ROUTER] variant_b_wordforms снят 28.10 (on на
         # проде с 18.10) и больше не читается (в config.ini прода безвреден).
-        # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
-        # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
-        # приписка «по данным на ДД.ММ» или оператор. off — как было. По умолчанию on — как на проде с 18.10 (деплой 8;
-        # STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] mis_honest_degradation
-        mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="on", allowed={"off", "on"}),
+        # Ход (д), видимая деградация МИС — единственный путь: ключ [MESSENGER_ROUTER] mis_honest_degradation снят 28.10 (on на
+        # проде с 18.10) и больше не читается (в config.ini прода безвреден).
         # Тема реестра перебивает метку OTHER только после подтверждения LLM по смыслу (решение владельца 18.10:
         # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
         # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
@@ -938,7 +934,6 @@ MR_CLASSIFIER_COMPACT = settings.messenger_router.classifier_compact
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
-MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer

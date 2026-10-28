@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import address_flow, booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import address_flow, booking_slots, button_flow, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -278,35 +278,12 @@ def _catalog_health_degraded_text(
     need_service_catalog: bool,
     need_doctors_catalog: bool,
 ) -> str:
-    if degradation.honest():
-        # Ход (д), принцип 3 («уточните у оператора» — только с настоящим переводом): каталог пуст — перевод, а не
-        # «попробуйте через 5 минут или напишите «оператор»» (решение владельца 18.10: сбой МИС → оператор).
-        # Каталог услуг нужен и цене, и записи — общий текст (не «цены» на вопрос о записи).
-        if need_doctors_catalog and not need_service_catalog:
-            return handoff_message("service_error_doctors_list")
-        return handoff_message("service_error")
-    if need_service_catalog and need_doctors_catalog:
-        return (
-            "Сейчас временно недоступен каталог услуг и врачей. "
-            "Я не смогу надежно подобрать услугу или врача. "
-            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-        )
-    if need_service_catalog:
-        return (
-            "Сейчас временно недоступен каталог услуг. "
-            "Я не смогу надежно подобрать нужную услугу. "
-            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-        )
-    if need_doctors_catalog:
-        return (
-            "Сейчас временно недоступен каталог врачей. "
-            "Я не смогу надежно подобрать врача или расписание. "
-            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-        )
-    return (
-        "Сейчас временно недоступен каталог клиники. "
-        "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
-    )
+    # Ход (д), принцип 3 («уточните у оператора» — только с настоящим переводом): каталог пуст — перевод, а не
+    # «попробуйте через 5 минут или напишите «оператор»» (решение владельца 18.10: сбой МИС → оператор).
+    # Каталог услуг нужен и цене, и записи — общий текст (не «цены» на вопрос о записи).
+    if need_doctors_catalog and not need_service_catalog:
+        return handoff_message("service_error_doctors_list")
+    return handoff_message("service_error")
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -3584,7 +3561,7 @@ async def _complete_route_after_doctor_guard(
                                 need_service_catalog=need_service_catalog,
                                 need_doctors_catalog=need_doctors_catalog,
                             ),
-                            "handoff": degradation.honest(),
+                            "handoff": True,
                             "status": str(health.get("status") or "degraded"),
                             "reason": str(health.get("reason") or "").strip(),
                             "need_service_catalog": need_service_catalog,

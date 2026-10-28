@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .. import degradation
 from ..policies import handoff_message
 from ._common import _service_fallback
 
@@ -30,12 +29,12 @@ def _source(payload: dict[str, Any]) -> str:
 
 
 def apply(payload: Any, last_snapshot: Callable[[str], Any]) -> Any:
-    """Ответ с ценами под `mis_honest_degradation`: приписка давности (`data_as_of`) или перевод; иначе — как есть.
+    """Ответ с ценами (ход (д)): приписка давности (`data_as_of`) или перевод; иначе — как есть.
 
     :param last_snapshot: `snapshots.last` — передаёт `core` (сервисный слой не множит прямых импортов клиента МИС)
     """
 
-    if not degradation.honest() or not isinstance(payload, dict) or payload.get("handoff_required") or not _has_prices(payload):
+    if not isinstance(payload, dict) or payload.get("handoff_required") or not _has_prices(payload):
         return payload
     snap = last_snapshot(_source(payload))
     if snap is None or snap.status == "fresh":

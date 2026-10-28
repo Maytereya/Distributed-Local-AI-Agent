@@ -24,7 +24,7 @@ from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info, snap
 from converters import html_cleaner  # noqa: F401 — tests patch svc_mod.html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
-from .. import degradation, turn_telemetry
+from .. import turn_telemetry
 from ..schedule_parse_watch import normalize_schedule
 from ._common import (
     _as_int,
@@ -320,7 +320,7 @@ class Services:
             key,
             lambda: self._fetch_schedule_source(last_name, region_name),
             key_details={"last_name": key[0], "region": key[1]},
-            allow_stale=not degradation.honest(),  # под `mis_honest_degradation` — только живое (решение 08.10)
+            allow_stale=False,  # расписание — только живое (ход (д), решение 08.10)
         )
 
     async def _ensure_doctors_cache_loaded(self) -> list[dict[str, Any]]:
@@ -369,7 +369,7 @@ class Services:
                 regions = await asyncio.to_thread(api_nayka.site_regions, realtime=True)
                 if not isinstance(regions, list):
                     regions = []
-                if not regions and degradation.honest() and api_nayka.regions_failed():
+                if not regions and api_nayka.regions_failed():
                     # Сбой справочника филиалов (DATA-2): хороший кэш не затираем, сбой видят потребители
                     # (`_regions_last_failed` → честная ветка `tech_unavailable` в адресах).
                     self._regions_last_failed = True
@@ -706,7 +706,7 @@ from .prices import (  # noqa: E402
     service_bundle_info as _service_bundle_info_impl,
 )
 async def _price_info_checked(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
-    """Цена — с правилом давности прайса под `mis_honest_degradation` (ход (д), шаг 3; под off — как есть)."""
+    """Цена — с правилом давности прайса (ход (д) (ход (д), шаг 3; под off — как есть)."""
 
     from . import _freshness
 

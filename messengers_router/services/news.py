@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_nayka
 
-from .. import degradation
 from .. import resilience as _R
 from ._common import _service_fallback
 
@@ -255,7 +254,7 @@ PROMOTIONS_UNAVAILABLE_TEXT = "Не получилось загрузить вс
 
 
 def _promotions_unavailable(entities: dict[str, Any]) -> dict[str, Any]:
-    """Сбой акций или справочника филиалов под `mis_honest_degradation` — перевод (решение владельца 18.10)."""
+    """Сбой акций или справочника филиалов — перевод (ход (д), решение владельца 18.10)."""
 
     payload = _service_fallback(
         note="news source unavailable",
@@ -281,10 +280,7 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         promos_raw = await asyncio.to_thread(api_nayka.site_promotions, realtime=True)
     except Exception:
         _R.log_degraded(upstream="promotions", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
-        if degradation.honest():
-            return _promotions_unavailable(entities)
-        # Под off — как было: пустой ответ без handoff.
-        return {"news": [], "mode": "list", "note": "news source unavailable", "entities_used": entities}
+        return _promotions_unavailable(entities)
     try:
         # Дерево регионов через общий TTL-кэш справочников (шарится с шапкой
         # расписания) — не ходим в CRM за /regions на каждый промо-ход.
@@ -295,8 +291,7 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         # Справочник филиалов пуст — это сбой (`site_regions` при сбое отдаёт []): акции, привязанные к филиалам
         # региона, отбросились бы молча — «акций нет» (DATA-14).
         _R.log_degraded(upstream="regions", failure_mode=_R.FM_EMPTY_DATA, fallback_used=False)
-        if degradation.honest():
-            return _promotions_unavailable(entities)
+        return _promotions_unavailable(entities)
 
     now_utc = datetime.now(timezone.utc)
     relevant = _samara_relevant_region_ids(regions if isinstance(regions, list) else [])

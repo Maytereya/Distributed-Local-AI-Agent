@@ -87,16 +87,10 @@ async def _play(turns: tuple[str, ...], session: str, tpl: Templates, catalog: P
     return out
 
 
-def run(world_root: Path, *, honest: bool = False) -> list[dict[str, Any]]:
+def run(world_root: Path) -> list[dict[str, Any]]:
     from messengers_router import llm_runtime
-    from messengers_router.runtime_config import config as cfg
 
-    prev_honest = getattr(cfg, "MR_MIS_HONEST_DEGRADATION", "off")
-    cfg.MR_MIS_HONEST_DEGRADATION = "on" if honest else "off"
-    try:
-        return _run(world_root, llm_runtime)
-    finally:
-        cfg.MR_MIS_HONEST_DEGRADATION = prev_honest
+    return _run(world_root, llm_runtime)
 
 
 def _run(world_root: Path, llm_runtime: Any) -> list[dict[str, Any]]:
@@ -140,8 +134,7 @@ def summary(rows: list[dict[str, Any]], header: dict[str, Any]) -> str:
     lines = [
         f"# Матрица сбоев МИС — {header['name']}",
         "",
-        f"Код `{header['code']}`, мир `{header['world']}`, LLM недоступна (режим down), mis_honest_degradation = "
-        f"{'on' if header.get('honest') else 'off'}, {header['seconds']} с.",
+        f"Код `{header['code']}`, мир `{header['world']}`, LLM недоступна (режим down), {header['seconds']} с.",
         "Ячейка — исход последнего хода сценария (`detectors.classify_turn`); **жирным** — честный: перевод или оффер оператора.",
         "",
     ]
@@ -180,16 +173,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--world", default="20261008", help="дата мира ГГГГММДД (каталог ~/Dev/dla-private/bench/worlds/<дата>)")
     ap.add_argument("--out", type=Path, default=PRIVATE_ROOT / "faults")
     ap.add_argument("--name", default=None)
-    ap.add_argument("--honest", action="store_true", help="mis_honest_degradation = on (видимая деградация хода (д))")
     args = ap.parse_args(argv)
     world_root = PRIVATE_ROOT / "worlds" / args.world
     sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     dirty = bool(subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip())
     code = f"{sha}{'+wip' if dirty else ''}"
-    name = args.name or f"faults_{code.replace('+', '_')}_{args.world}{'_honest' if args.honest else ''}"
+    name = args.name or f"faults_{code.replace('+', '_')}_{args.world}"
     started = time.time()
-    rows = run(world_root, honest=args.honest)
-    header = {"name": name, "code": code, "world": args.world, "seconds": round(time.time() - started, 1), "honest": args.honest}
+    rows = run(world_root)
+    header = {"name": name, "code": code, "world": args.world, "seconds": round(time.time() - started, 1)}
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"{name}.json").write_text(json.dumps({"header": header, "rows": rows}, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     (args.out / f"{name}.md").write_text(summary(rows, header), encoding="utf-8")

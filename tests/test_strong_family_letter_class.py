@@ -40,7 +40,6 @@ PROD_D18: dict[str, Any] = {
     "MR_CHOOSE_SYMPTOM": "on",
     "MR_CHOOSE_CACHE_TTL_S": 0,
     "MR_PARSE_FAIL_VARIANTS": 3,
-    "MR_MIS_HONEST_DEGRADATION": "on",
     "MR_TOPIC_OVERRIDE_LLM": "off",
     "MR_PARSE_FRAGMENT_WINDOWS": "off",
     "MR_PARSE_COMPLETE_WINDOWS": "off",

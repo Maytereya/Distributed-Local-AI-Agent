@@ -264,7 +264,7 @@ def test_previous_bot_message_is_the_context_of_a_short_reply(ta_world, monkeypa
 # каждая сумма ответа — сумма той строки прайса, название которой напечатано рядом, и строки — только выбранные LLM;
 # выбор LLM от выключателя не зависит (промпт тот же — цены модель не видит); давность прайса — как у пути цены.
 
-_PRICE = {"MR_TEST_ASSIST_PRICE": "on", "MR_MIS_HONEST_DEGRADATION": "on"}
+_PRICE = {"MR_TEST_ASSIST_PRICE": "on"}
 
 
 def _catalog():

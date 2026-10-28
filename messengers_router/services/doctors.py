@@ -19,7 +19,7 @@ from ..doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
-from .. import degradation, turn_names, turn_telemetry
+from .. import turn_names, turn_telemetry
 from ..schedule_parse_watch import dates_all_unparsed
 from .. import resilience as _R
 from ..policies import handoff_message
@@ -312,10 +312,9 @@ async def _schedule_by_specialty(
     fetched = await asyncio.gather(*(_fetch_one(d) for d in candidates))
     if failed:
         _R.log_degraded(upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
-        if degradation.honest():
-            # Сбой МИС → оператор (решение владельца 18.10): и когда не ответил никто, и когда часть — иначе «ближайшее
-            # окно» выбирается только из ответивших, а «нет расписания» перекладывает сбой на пациента (DATA-3).
-            return [], _SCHEDULE_SOURCE_UNAVAILABLE
+        # Сбой МИС → оператор (решение владельца 18.10): и когда не ответил никто, и когда часть — иначе «ближайшее
+        # окно» выбирается только из ответивших, а «нет расписания» перекладывает сбой на пациента (DATA-3).
+        return [], _SCHEDULE_SOURCE_UNAVAILABLE
 
     out_rows: list[dict[str, Any]] = []
     matched_but_without_slots = False
@@ -1096,7 +1095,7 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
             payload, upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False
         )
 
-    if degradation.honest() and dates_all_unparsed(data):
+    if dates_all_unparsed(data):
         # Даты расписания не поняты ни одна — показать окна нельзя, «нет расписания» — неправда (DATA-15; решение
         # владельца 18.10: переводить на оператора).
         _R.log_degraded(upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)

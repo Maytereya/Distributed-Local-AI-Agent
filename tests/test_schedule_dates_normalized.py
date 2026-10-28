@@ -59,11 +59,7 @@ def test_all_unparsed_is_detected_only_when_nothing_is_readable():
     assert dates_all_unparsed([]) is False
 
 
-@pytest.mark.parametrize(("honest", "handoff"), [("on", True), ("off", False)])
-def test_unreadable_schedule_hands_off_under_the_switch(honest, handoff, monkeypatch):
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_MIS_HONEST_DEGRADATION", honest, raising=False)
+def test_unreadable_schedule_hands_off(monkeypatch):
     svc = Services()
 
     async def doctors():
@@ -81,6 +77,5 @@ def test_unreadable_schedule_hands_off_under_the_switch(honest, handoff, monkeyp
 
     res = asyncio.run(svc.doctors_schedule_week("расписание Иванова", {"doctor_name": "Иванов"}))
 
-    assert bool(res.get("handoff_required")) is handoff
-    if handoff:
-        assert res.get("handoff_message") == handoff_message("service_error_schedule")
+    assert bool(res.get("handoff_required")) is True
+    assert res.get("handoff_message") == handoff_message("service_error_schedule")
