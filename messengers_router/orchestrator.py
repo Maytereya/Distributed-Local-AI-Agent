@@ -440,6 +440,7 @@ async def pending_dispatch(
         router._handle_compound_price_pending,
         router._handle_secondary_queue_pending,
         router._handle_slot_value_pending,
+        router._handle_button_reframe,
         router._handle_button_new_topic,
         router._handle_address_followup,
     ):

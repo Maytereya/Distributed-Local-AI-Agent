@@ -46,7 +46,10 @@
   ответа признал ответом на вопрос кнопки, не перебивают и несрочные правила NLU. Стенд деплоя 20 (`s20con_btn`): у 86 из 236
   провалов кнопок тема ответа ≠ теме нажатого листа, 50 из них — «Цена анализа», где рамки не было (`slot`); правила
   (`rule_appointment`, `doc_request_*`, `unsupported_*`) уводили и ответ, признанный ответом. Срочное и явный перевод на
-  оператора (правило с `needs_handoff`) — как всегда; «другая тема» по решению судьи — общий путь.
+  оператора (правило с `needs_handoff`) — как всегда. «Другую тему» судьи ответа под `frame` проверяет отдельный короткий
+  вопрос LLM — «сообщение в теме нажатой кнопки?» (`FRAME_TASK`, промпт `choose_button_frame`): судья с пятью исходами звал
+  «Есть ли у вас 3D УЗИ?», «Можно ли сделать кардиограмму?» на «Цене анализа» другой темой (стенд: 46 ответов, 37 ушли из
+  цены). «В теме» — рамка держится; «другое», сбой — общий путь, как было.
 """
 
 from __future__ import annotations
@@ -219,6 +222,8 @@ def answer_topic(pending: Any) -> str:
     mixed = _MIXED.get()
     if mixed is not None:
         return mixed[0]  # в сообщении и ответ, и другой вопрос (`button_topic_hint`): ответ — по теме кнопки
+    if _REFRAMED.get():
+        return _REFRAMED.get()  # «другую тему» судьи вопрос рамки вернул в тему кнопки (`frame`)
     mode = answer_topic_mode()
     label = str(pending.get("label") or "") if isinstance(pending, dict) else ""
     if mode == "off" or not question_button(pending) or (label in _JUDGED_UNDER_SWITCH and not _judges_price()):
@@ -256,6 +261,10 @@ HINT_TASK = Task(name="button_hint", max_picks=2, num_predict=48, timeout_s=8, q
 _NOT_HINTED = frozenset({"menu.operator"})
 # Ответ по теме кнопки и подсказка в конце — (тема кнопки, текст подсказки) этого хода.
 _MIXED: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("mr_button_mixed", default=None)
+# «Другая тема» судьи ответа, которую отдельный вопрос рамки вернул в тему кнопки (`button_answer_topic = frame`): её тема.
+_REFRAMED: contextvars.ContextVar[str] = contextvars.ContextVar("mr_button_reframed", default="")
+# Сообщение в теме нажатой кнопки? — отдельный короткий вопрос после «другой темы» судьи ответа (`frame`).
+FRAME_TASK = Task(name="button_frame", outcomes=("same", "other"), num_predict=24, timeout_s=8, queue_timeout_ms=3000)
 
 
 @dataclass(frozen=True)
@@ -267,9 +276,10 @@ class Hint:
 
 
 def reset() -> None:
-    """Начало хода: ответа с подсказкой прошлого хода нет."""
+    """Начало хода: ответа с подсказкой и рамки прошлого хода нет."""
 
     _MIXED.set(None)
+    _REFRAMED.set("")
 
 
 def _where(action: button_menu.ButtonAction) -> str:
@@ -345,6 +355,44 @@ async def hint(text: str, current: str, asked: str) -> Hint | None:
     found = Hint(leaves=others, mixed=len(others) < len(picked))
     turn_telemetry.note(button_hint=("mixed:" if found.mixed else "") + "+".join(others))
     return found
+
+
+def reframed() -> bool:
+    """Ход в рамке кнопки по решению вопроса рамки (`frame`): подсказка другой кнопки не нужна."""
+
+    return bool(_REFRAMED.get())
+
+
+async def reframe(text: str, pending: Any) -> bool:
+    """«Другую тему» судьи ответа на вопрос кнопки проверяет отдельный вопрос LLM — сообщение в теме нажатой кнопки?
+    (`FRAME_TASK`, под `button_answer_topic = frame`). «В теме» — тема хода — кнопки (`answer_topic`), её не перебивают
+    несрочные правила; «другое» и сбой LLM — общий путь, как было. Решение лимит решений хода не тратит: оно — шаг NLU.
+
+    :param text: реплика пациента
+    :param pending: висящий вопрос кнопки
+    :return: ход остаётся в теме кнопки
+    """
+
+    from . import llm_runtime
+
+    action = button_menu.action_for(question_button(pending))
+    label = str(pending.get("label") or "") if isinstance(pending, dict) else ""
+    if not frame_firm() or action is None or not action.title or not label:
+        return False
+    spent = llm_runtime.turn_decisions_spent()
+    try:
+        choice = await choose(FRAME_TASK, text, [], asked=f"«{action.title}»{_where(action)} — вопросы про {action.about}")
+    except Exception:  # новый слой: его сбой не ломает ход — общий путь
+        logger.warning("button_frame_failed", exc_info=True)
+        choice = None
+    outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
+    turn_telemetry.note(button_frame=outcome or "none")
+    if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(tu_button_frame_refund=1)
+    if outcome != "same":
+        return False
+    _REFRAMED.set(label)
+    return True
 
 
 def mixed_topic() -> bool:

@@ -2793,6 +2793,29 @@ async def _handle_slot_value_pending(
     )
 
 
+async def _handle_button_reframe(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Кнопка — рамка хода (`button_answer_topic = frame`, STEP-2026-10-29-BUTTON-FRAME): «другую тему» судьи ответа на вопрос
+    кнопки проверяет отдельный вопрос LLM (`button_flow.reframe`); сообщение в теме кнопки — ход идёт общим путём в теме кнопки
+    (`button_flow.answer_topic`), её не перебивают несрочные правила. Ход сам не отвечает — всегда None."""
+
+    found = pending_answer.slot_answer()
+    if found is None or found.outcome is not pending_answer.Outcome.NEW_TOPIC or found.rest:
+        return None
+    if runtime_options is not None and runtime_options.llm_mode == "strict":
+        return None
+    pending = memory.get_pending(state)
+    if button_flow.frame_firm() and button_flow.question_button(pending):
+        await button_flow.reframe(user_text, pending)
+    return None
+
+
 async def _handle_button_new_topic(
     *,
     user_text: str,
@@ -2820,6 +2843,8 @@ async def _handle_button_new_topic(
     found = pending_answer.slot_answer()
     if not button_flow.hint_on() or not current or found is None or found.outcome is not pending_answer.Outcome.NEW_TOPIC:
         return None
+    if button_flow.reframed():
+        return None  # вопрос рамки вернул реплику в тему кнопки (`frame`)
     if runtime_options is not None and runtime_options.llm_mode == "strict":
         return None
     rule = await deterministic_rule_decision(user_text, state.last_entities, runtime_options=runtime_options, allow_refine=False, attach_secondary=False)

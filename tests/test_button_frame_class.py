@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tests.test_button_answer_topic_class import _dialog, _press
@@ -73,3 +75,40 @@ def test_price_leaf_domain_names_availability_for_the_judge(button_id, monkeypat
     monkeypatch.setattr(cfg, "MR_BUTTON_REPLY_JUDGE", "on", raising=False)
     context = button_flow.judge_context({"button": button_id}, "Какой анализ интересует?")
     assert "есть ли" in context and "цену" in context, context
+
+
+# «Другую тему» судьи ответа проверяет отдельный вопрос рамки (`choose_button_frame`).
+_FRAME_MARK = "остаётся ли сообщение в теме нажатой кнопки"
+_AVAILABILITY = "есть ли у вас узи щитовидки"
+
+
+def _frame_dialog(world_dir, monkeypatch, *, switch: str, frame: str | None):
+    from tests import test_button_answer_topic_class as harness
+
+    real = harness._LLM
+
+    class _WithFrame(real):
+        def __init__(self, answers):
+            if frame is not None:
+                answers = {_FRAME_MARK: json.dumps({"picks": [], "outcome": frame}), **answers}
+            super().__init__(answers)
+
+    monkeypatch.setattr(harness, "_LLM", _WithFrame)
+    return _dialog(world_dir, monkeypatch, [_press("menu.price.test"), _AVAILABILITY], switch=switch, free="new_topic")[1]
+
+
+def test_frame_same_keeps_the_button_topic_after_judge_new_topic(mini_prod_world, monkeypatch):  # noqa: F811
+    turn = _frame_dialog(mini_prod_world, monkeypatch, switch="frame", frame="same")
+    assert turn["telemetry"].get("button_frame") == "same", turn["telemetry"]
+    assert turn["telemetry"].get("nlu_topic_by_llm") == "button_answer" and turn["label"] == "PRICE", turn
+
+
+@pytest.mark.parametrize("frame", ["other", None])
+def test_frame_other_or_failure_takes_the_general_path(frame, mini_prod_world, monkeypatch):  # noqa: F811
+    turn = _frame_dialog(mini_prod_world, monkeypatch, switch="frame", frame=frame)
+    assert turn["telemetry"].get("nlu_topic_by_llm") != "button_answer", turn["telemetry"]
+
+
+def test_on_does_not_ask_the_frame_question(mini_prod_world, monkeypatch):  # noqa: F811
+    turn = _frame_dialog(mini_prod_world, monkeypatch, switch="on", frame="same")
+    assert "button_frame" not in turn["telemetry"], turn["telemetry"]
