@@ -208,6 +208,9 @@ class MessengerRouterConfig:
     prepare_by_parse: str
     price_by_parse: str
     strong_family_letter: str
+    position_qualifiers: str
+    qualifier_pool: str
+    qualifier_marks: str
     basket_fail_unpriced: str
     topic_by_llm: str
     booking_target_slot_llm: str
@@ -225,6 +228,7 @@ class MessengerRouterConfig:
     test_assist_price: str
     walkin_by_llm: str
     button_topic_firm: str
+    insurance_topic: str
     price_select_named: str
     bare_name_overview: str
     booking_options_price: str
@@ -658,6 +662,20 @@ settings = Settings(
         # названная другой буквой того же семейства, не сильная — её выбирает LLM. Семейства — из названий прайса.
         # off — как было. [MESSENGER_ROUTER] strong_family_letter
         strong_family_letter=_get_enum("MESSENGER_ROUTER", "strong_family_letter", default="off", allowed={"off", "on"}),
+        # Уточнения позиции (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2): разметка хода `turn_spans` отмечает у каждой услуги её
+        # уточнения (оплата, условие, материал, метод, сопутствующая услуга) тем же вызовом LLM; условие оплаты (ОМС, ДМС, полис) у
+        # позиции или на весь вопрос — без розничной цены; прочие уточнения вне фразы — суду условия корзины. Нужен
+        # `turn_spans_llm = on`. off — как было. [MESSENGER_ROUTER] position_qualifiers
+        position_qualifiers=_get_enum("MESSENGER_ROUTER", "position_qualifiers", default="off", allowed={"off", "on"}),
+        # Уточнения позиции, этап 3 (DESIGN-2026-10-28-POSITION-QUALIFIERS): пул выбора строки по материалу позиции — строки, которые
+        # по данным МИС (`biomatNames`) материал не принимают, не кандидаты; строки с ним — в пул («посев кала» не выбирает общий
+        # посев). Нужен `position_qualifiers = on`. off — как было. [MESSENGER_ROUTER] qualifier_pool
+        qualifier_pool=_get_enum("MESSENGER_ROUTER", "qualifier_pool", default="off", allowed={"off", "on"}),
+        # Уточнения позиции, этап 4: выбор строки цены тем же вызовом отмечает по каждому уточнению пациента (метод, материал,
+        # условие, сопутствующая услуга), есть ли оно в выбранных строках; нет — заголовок «Точно в таком виде в прайсе нет. Есть:»
+        # пишет код («ВПЧ количественным методом», «антитела … суммарные»). Нужен `position_qualifiers = on`. off — как было.
+        # [MESSENGER_ROUTER] qualifier_marks
+        qualifier_marks=_get_enum("MESSENGER_ROUTER", "qualifier_marks", default="off", allowed={"off", "on"}),
         # Корзина при сбое выбора LLM (решение владельца 27.10, узел 7 проверки ответов без LLM; BUG-2026-10-27-LLM-QUEUE-GIVES-UP,
         # шаг 3): слабые позиции — варианты кода **названиями без цен** и оффер оператора, «Итого» нет; сильные (по данным) — с
         # ценой, как были. off — как было: два варианта и больше — с ценами и в итоге. [MESSENGER_ROUTER] basket_fail_unpriced
@@ -746,6 +764,11 @@ settings = Settings(
         # (`topic_by_llm`): «без записи» в адреса и П1 по совпадению с каталогом в цену; «Подобрать анализы» решает LLM по данным
         # (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM, С6 шаг 2). off — как было. [MESSENGER_ROUTER] button_topic_firm
         button_topic_firm=_get_enum("MESSENGER_ROUTER", "button_topic_firm", default="off", allowed={"off", "on"}),
+        # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
+        # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
+        # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — «ответит оператор» и оффер; цена — путь цены.
+        # Тексты — данные клиники (`messengers_router/data/insurance_topic.yaml`). off — как было. [MESSENGER_ROUTER] insurance_topic
+        insurance_topic=_get_enum("MESSENGER_ROUTER", "insurance_topic", default="off", allowed={"off", "on"}),
         # Выбор строки прайса на пути ответа о цене (топ-5 разбора 95 цен, п. 3, классы F + P1): промпты `*_general_named` с
         # правилами 6 «Cito — это срочно» и 7 «позиция для другого пациента, которого пациент не называл
         # (плод, ребёнок до года), — не та»; второй круг по редким словам терминов LLM — и
@@ -941,6 +964,9 @@ MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_STRONG_FAMILY_LETTER = settings.messenger_router.strong_family_letter
+MR_POSITION_QUALIFIERS = settings.messenger_router.position_qualifiers
+MR_QUALIFIER_POOL = settings.messenger_router.qualifier_pool
+MR_QUALIFIER_MARKS = settings.messenger_router.qualifier_marks
 MR_BASKET_FAIL_UNPRICED = settings.messenger_router.basket_fail_unpriced
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
@@ -958,6 +984,7 @@ MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_TEST_ASSIST_PRICE = settings.messenger_router.test_assist_price
 MR_WALKIN_BY_LLM = settings.messenger_router.walkin_by_llm
 MR_BUTTON_TOPIC_FIRM = settings.messenger_router.button_topic_firm
+MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview
 MR_BOOKING_OPTIONS_PRICE = settings.messenger_router.booking_options_price

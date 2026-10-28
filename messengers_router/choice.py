@@ -113,6 +113,8 @@ class Task:
     :param max_terms: сколько терминов второго круга поиска просить (не больше 3)
     :param disjoint: выбранные варианты не пересекаются по `Option.span` (куски одной реплики);
         пересечение — INVALID
+    :param verdict: вопрос-проверка уже принятого решения (проверка выбора строки): число решений хода не тратит и отказом лимита
+        числа не получает — секунды хода, дедлайн и предохранитель как у всех (`llm_runtime.generate_structured`)
     """
 
     name: str
@@ -125,6 +127,7 @@ class Task:
     num_predict: int = 128
     timeout_s: float = 8.0
     queue_timeout_ms: int = 2000
+    verdict: bool = False
 
     @property
     def site(self) -> str:
@@ -186,11 +189,13 @@ def _options_block(task: Task, options: Sequence[Option]) -> str:
     return "\n".join(f"{i}. {o.text}" for i, o in enumerate(options, 1))
 
 
-def render(task: Task, question: str, options: Sequence[Option], *, asked: str = "") -> tuple[str, str]:
+def render(task: Task, question: str, options: Sequence[Option], *, asked: str = "", context: str = "") -> tuple[str, str]:
     """(инструкция для роли system, данные хода для роли user).
 
     `asked` — вопрос бота, на который отвечает реплика (`<<ASKED>>`, клиент `pending_reply`): данные хода, как и
     реплика (в вопросе бывают слова пациента), та же чистка. Промпт без `<<ASKED>>` — прежний запрос байт в байт.
+    `context` — данные хода для задачи, кроме вариантов (`<<CONTEXT>>`: строки прайса, которые проверяет задача
+    `qualifier_in_rows`); строки — построчно, та же чистка. Промпт без `<<CONTEXT>>` — прежний запрос байт в байт.
     """
 
     system, mark, data = load_prompt_text(task.site).partition(_DATA_MARK)
@@ -200,6 +205,7 @@ def render(task: Task, question: str, options: Sequence[Option], *, asked: str =
     user = (
         data.strip()
         .replace("<<ASKED>>", _clean_question(asked))
+        .replace("<<CONTEXT>>", "\n".join(_clean_question(line) for line in str(context or "").splitlines() if line.strip()))
         .replace("<<OPTIONS>>", _options_block(task, options))
         .replace("<<QUESTION>>", _clean_question(question))
     )
@@ -331,6 +337,7 @@ async def choose(
     *,
     shadow: bool = False,
     asked: str = "",
+    context: str = "",
 ) -> Choice:
     """Какие варианты подходят к реплике пациента — решает LLM, разбирает и проверяет код.
 
@@ -339,12 +346,13 @@ async def choose(
     :param options: кандидаты, найденные правилами и поиском по данным
     :param shadow: решение тени — вне бюджета хода и предохранителя, в телеметрии `shadow: true`
     :param asked: вопрос бота, на который отвечает реплика (данные хода, `render`)
+    :param context: данные хода для задачи, кроме вариантов (`render`, `<<CONTEXT>>`)
     :return: выбор; при сбое — UNAVAILABLE / INVALID, политику выбирает вызывающий
     """
 
     options = tuple(options)
     try:
-        system, user = render(task, question, options, asked=asked)
+        system, user = render(task, question, options, asked=asked, context=context)
         schema: Any = answer_schema(task, options)
         gen_options: dict[str, Any] = {"temperature": 0, "num_predict": task.num_predict}
     except (OSError, ValueError) as exc:  # промпт задачи сломан или пропал на хосте — ход не роняем
@@ -365,6 +373,7 @@ async def choose(
             timeout_s=task.timeout_s,
             queue_timeout_ms=task.queue_timeout_ms,
             shadow=shadow,
+            verdict=task.verdict,
         )
     except Exception as exc:  # сбой LLM — UNAVAILABLE; что ответить пациенту, решает вызывающий
         logger.warning("choose_unavailable: %s %s %s", task.name, type(exc).__name__, llm_runtime.error_detail(exc) or "-")

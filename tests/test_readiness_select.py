@@ -95,3 +95,24 @@ def test_strong_match_needs_no_llm(mini_prod_world, monkeypatch):
     turn = _ask("сколько готовится ферритин", "ready-strong", mini_prod_world)
     assert turn["text"].startswith("Срок готовности «Ферритин» — ")
     assert llm.prompts == []
+
+
+@pytest.mark.parametrize("qualifiers_on", [True, False])
+def test_qualifier_split_off_by_the_markup_still_finds_the_service(qualifiers_on, mini_prod_world, monkeypatch):
+    """Уточнения позиции (`position_qualifiers = on`, DESIGN-2026-10-28-POSITION-QUALIFIERS): разметка отдаёт уточнение рядом с фразой,
+    а не в ней (g0112: «анализа хмс» + «по осипову» → срок 10–17 дней стал переводом — кандидатов искали по «анализа хмс»). Кандидаты
+    срока — по фразе вместе с её уточнениями, в словах пациента (`ParsedPhrase.full`); под off поля уточнений нет — путь как был."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    llm = _ReadinessLLM(wanted=(_HCG,))
+    monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "on", raising=False)
+    monkeypatch.setattr(cfg, "MR_POSITION_QUALIFIERS", "on" if qualifiers_on else "off", raising=False)
+    oracle = SpansOracle(("анализ крови",), inner=llm, qualifiers=[("анализ крови", "на ХГЧ", "method")] if qualifiers_on else None)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
+    keep_llm_breaker_closed(monkeypatch)
+    turn = _ask("Сколько готовится анализ крови на ХГЧ?", f"ready-qual-{qualifiers_on}", mini_prod_world)
+    if qualifiers_on:
+        assert turn["text"] == f"Срок готовности «{_HCG}» — 1–2 дня.", turn["text"]
+    else:  # разметка без уточнений — фраза «анализ крови», как отметила LLM: ХГЧ в кандидатах нет, честный перевод (как было)
+        assert turn["handoff"] is True

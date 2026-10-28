@@ -55,7 +55,7 @@ from .. import llm_runtime, turn_parse, turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ..russian_nlu import tokens_share_stem
-from . import _biomaterial, _price_by_parse
+from . import _biomaterial, _price_by_parse, _qualifier_pool
 from ._common import _normalise_catalog_text
 from ._common import _normalise_input
 from ._prices_helpers import (
@@ -169,6 +169,7 @@ class PriceSelection:
     status: str = "picked"
     names: tuple[str, ...] = ()
     reason: str = ""  # код причины пустого выбора (`none_fit`)
+    missing: tuple[str, ...] = ()  # уточнения пациента, которых LLM не нашла в выбранных строках (этап 4: заголовок «в таком виде нет»)
 
 
 def _row_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -590,6 +591,17 @@ async def _ask(
     return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
 
 
+async def _checked(question: str, chosen: list[dict[str, Any]], **fields: Any) -> PriceSelection:
+    """Выбор с проверкой уточнений (этап 4, `qualifier_marks = on`): отдельный вопрос LLM — что из названного пациентом есть в
+    выбранных строках с данными справочника МИС (`_qualifier_pool.check_rows`). Самой услуги нет — «не нашёл» (две LLM разошлись:
+    принцип 1 — уточнение, не цена); нет уточнения — заголовок «в таком виде нет»; вопроса нет или он не ответил — выбор как есть."""
+
+    check = await _qualifier_pool.check_rows(question, chosen)
+    if check is not None and not check.service:
+        return PriceSelection(rows=(), status="none_fit", reason="service_absent")
+    return PriceSelection(rows=tuple(chosen), missing=_qualifier_pool.note_missing(check.missing if check else ()), **fields)
+
+
 # Условия, которые меняют саму услугу для пациента. «Комплекс/программа» сюда не входят:
 # «УЗИ органов брюшной полости (комплексное)» — это основная услуга, а не пакет
 # (свип 01.10: фильтр отбросил её и оставил «УЗИ печени и желчного пузыря»).
@@ -787,6 +799,11 @@ async def select_price_rows(
     if by_synonym:
         keys = {_row_key(row) for row in by_synonym}
         pool = [*by_synonym, *(row for row in pool if _row_key(row) not in keys)][:_POOL_LIMIT]
+    # Материал позиции (уточнения, этап 3; `qualifier_pool = on`): строки, которые по данным МИС его не принимают, — вон, строки с
+    # ним — в пул; «посев кала» не выбирает общий посев (DESIGN-2026-10-28-POSITION-QUALIFIERS).
+    matter, bare = _qualifier_pool.material(question)
+    if matter:
+        pool = await asyncio.to_thread(_qualifier_pool.pool, pool, matter, bare or phrase, rows, _POOL_LIMIT)
     if not _price_by_parse.enabled():
         strong = strong_rows(question, rows, pool=pool)
     else:
@@ -853,8 +870,7 @@ async def select_price_rows(
         return settle(*unavailable())
     chosen, terms, reason = first
     if chosen:
-        picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
-        return settle(picked)
+        return settle(await _checked(question, _prefer_base_variants(chosen, question)))
     # Суд условия (`judge_qualifier`): «условия нет» (`qualifier_absent`, правило 3 промпта) — вердикт окончательный.
     # Второй круг искал бы «почти то» (это и запрещает П2), а у класса A под `turn_parse = on` упирался в лимит
     # решений хода (`budget`) и превращал «не нашёл» в ответ правил (BUG-2026-10-16-QUALIFIER-ROUND-TWO-BUDGET).
@@ -882,6 +898,8 @@ async def select_price_rows(
     pool_by_terms = await asyncio.to_thread(
         _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, first=rare_by_terms, fallback_texts=term_words
     )
+    if matter:  # второй круг по терминам LLM тоже не теряет материал («посев мочи с чувствительностью» → посевы другого материала)
+        pool_by_terms = await asyncio.to_thread(_qualifier_pool.pool, pool_by_terms, matter, " ".join(terms), rows, _POOL_LIMIT)
     # Пустой список — не вопрос к LLM: выбрать не из чего, ответ «не нашёл» тот же без решения из лимита хода.
     if not pool_by_terms:
         journal_miss(terms, reason)
@@ -895,8 +913,7 @@ async def select_price_rows(
     chosen = _prefer_base_variants(second[0], question)
     if journal_phrase:
         _record_synonym_suggestion(journal_phrase, terms, chosen, source=journal_source)
-    picked = PriceSelection(rows=tuple(chosen), search_terms=tuple(terms))
-    return settle(picked)
+    return settle(await _checked(question, chosen, search_terms=tuple(terms)))
 
 
 def distinct_services(rows: Sequence[dict[str, Any]]) -> bool:

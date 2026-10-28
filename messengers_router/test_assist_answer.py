@@ -19,6 +19,14 @@
 строки прайса: «Антитела на корь» → «Вирус кори Ig G — 800 руб.» вместо «цену подскажу по названию» рядом с уже
 напечатанным названием. Частичный ответ — цены найденных строк и «остального в прайсе нет — уточнит оператор». Давность
 прайса — по правилам пути цены (`services/_freshness`): срез старше недели — строки без цен, как под off.
+
+Под `qualifier_marks = on` (проверка выбора, STEP-2026-10-28-POSITION-QUALIFIERS-8) «в таком виде нет» пишет не вызов, который
+выбирал строки, а отдельный вопрос LLM с данными справочника МИС — тот же, что у цены (`_qualifier_pool.check_rows`): ярлык
+`partly` выбора был ложным в 4 из 5 случайных ответов (метод — в описании МИС, «остальное» — станция метро, тот самый чекап).
+Уточнения единственной позиции разбора хода проверка находит не все — `partly` («Точно в таком виде в прайсе нет»); находит все —
+строки как есть; самой услуги нет — «нет данных». Уточнений у позиции нет (или позиций несколько), а выбор сказал `partly` —
+спрошено не об анализе (состав, время, место) или нашлась часть перечня: строки под прежним заголовком «В прайсе клиники есть:»
+и «остального нет — уточнит оператор» (`partly_rest`).
 """
 
 from __future__ import annotations
@@ -46,6 +54,7 @@ TASK = Task(
 
 PICKED = "picked"
 PARTLY = "partly"
+PARTLY_REST = "partly_rest"
 NEED_NAME = "need_name"
 NO_DATA = "no_data"
 FAILED = "failed"
@@ -92,7 +101,7 @@ def applies(decision: Any, evidence: Any) -> bool:
 
 @dataclass(frozen=True)
 class Answer:
-    """Решение: `kind` — PICKED | PARTLY | NEED_NAME | NO_DATA | FAILED, `rows` — выбранные строки прайса."""
+    """Решение: `kind` — PICKED | PARTLY | PARTLY_REST | NEED_NAME | NO_DATA | FAILED, `rows` — выбранные строки прайса."""
 
     kind: str
     rows: tuple[dict[str, Any], ...] = ()
@@ -204,6 +213,7 @@ async def decide(question: str, evidence: Any, *, history: Sequence[Any] | None 
         answer = Answer(NEED_NAME)
     else:  # no_data или пустой выбор: ни одна строка не отвечает
         answer = Answer(NO_DATA)
+    answer = await _checked(question, answer)
     turn_telemetry.note(
         ta_answer=answer.kind,
         ta_rows=len(rows),
@@ -212,6 +222,24 @@ async def decide(question: str, evidence: Any, *, history: Sequence[Any] | None 
         **({"ta_fail": picked.reason or picked.status.value} if picked.failed else {}),
     )
     return answer
+
+
+async def _checked(question: str, answer: Answer) -> Answer:
+    """Проверка выбора (`qualifier_marks = on`): вердикт «в таком виде нет» — отдельный вопрос LLM с данными справочника МИС
+    (`_qualifier_pool.check_rows`), а не ярлык `partly` вызова выбора. Off, строк нет — решение выбора как есть."""
+
+    from .services import _qualifier_pool
+
+    if answer.kind not in (PICKED, PARTLY) or not answer.rows or not _qualifier_pool.marks_enabled():
+        return answer
+    if not _qualifier_pool.to_mark(question):  # уточнений позиции нет: `partly` — о другом (состав, время, место, часть перечня)
+        return Answer(PARTLY_REST, answer.rows) if answer.kind == PARTLY else answer
+    check = await _qualifier_pool.check_rows(question, answer.rows)
+    if check is None:  # проверка не ответила — решение выбора как есть
+        return answer
+    if not check.service:  # выбор и проверка разошлись: самой услуги в строках нет — честный оффер, не чужие строки (принцип 1)
+        return Answer(NO_DATA)
+    return Answer(PARTLY if _qualifier_pool.note_missing(check.missing) else PICKED, answer.rows)
 
 
 # --------------------------------------------------------------------------- текст ответа (печатает код)
@@ -273,17 +301,18 @@ def envelope(answer: Answer, state: Any, memory: Any | None, *, attachments: Seq
     from .response_builder import UNSUPPORTED_CATALOG_OPERATOR_OFFER, mark_operator_offer_pending
     from .service_answer import NO_DATA_TEXT
 
-    priced = price_enabled() and answer.kind in (PICKED, PARTLY) and bool(answer.rows)
+    priced = price_enabled() and answer.kind in (PICKED, PARTLY, PARTLY_REST) and bool(answer.rows)
     if answer.kind == PICKED and answer.rows:
         text, offer = f"{_rows_block(answer.rows)}\n\n{PICKED_TAIL}", False
         if priced:
             text = _priced_text(answer.rows, PRICED_TAIL) or text
     elif answer.kind == NEED_NAME:
         text, offer = NEED_NAME_TEXT, False
-    elif answer.kind == PARTLY and answer.rows:
+    elif answer.kind in (PARTLY, PARTLY_REST) and answer.rows:
         text, offer = f"{_rows_block(answer.rows)}\n\n{PARTLY_TAIL}", True
-        if priced:
-            text = _priced_text(answer.rows, PRICED_PARTLY_TAIL, PRICED_PARTLY_HEADING) or text
+        if priced:  # «в таком виде нет» — только когда проверка не нашла уточнения (под off — по ярлыку выбора, как было)
+            heading = PRICED_PARTLY_HEADING if answer.kind == PARTLY else PICKED_HEADING
+            text = _priced_text(answer.rows, PRICED_PARTLY_TAIL, heading) or text
     else:
         text, offer = NO_DATA_TEXT, True
     if offer and memory is not None:

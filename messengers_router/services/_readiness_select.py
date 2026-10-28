@@ -146,7 +146,10 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         phrase = _single_phrase(parse)
         if phrase is None:
             return None
-        weak_phrase = "" if phrase.rows else phrase.text
+        # Уточнения позиции (`position_qualifiers = on`): уточнение, которое разметка отдала рядом с фразой («анализа хмс» + «по
+        # осипову»), — тоже слова названия для поиска кандидатов (g0112); `full` — фраза с ними в словах пациента, без уточнений пуст.
+        named = phrase.full or phrase.text
+        weak_phrase = "" if phrase.rows else named
         if weak_phrase and not _price_by_parse.enabled():  # фраза журнала — упоминание хода (L-14, шаг 2); под on — фраза разбора (Ш5)
             mentioned = _mention_phrase(question)
             weak_phrase = weak_phrase if mentioned is None else mentioned
@@ -154,7 +157,7 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         if len({_normalise_catalog_text(name) for name in first}) == 1:
             return None  # одна услуга по данным, а срока у неё нет — соседняя строка не годится: перевод
         # Синоним МИС на несколько услуг — выбор только из его услуг; слабая фраза — кандидаты правил по ней.
-        core = _apply_service_synonyms(phrase.text)
+        core = _apply_service_synonyms(named)
     else:
         if _price_by_parse.enabled() and _price_by_parse.failed(question):
             return None  # цена, этап 2, Ш4: без решения LLM разметки услугу не угадываем

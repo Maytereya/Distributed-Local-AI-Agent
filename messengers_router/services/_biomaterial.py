@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent_logic_2.nayka_api import api_service_info, snapshots
+from converters import html_cleaner
 
 from ._common import _normalise_input
 
@@ -93,6 +94,9 @@ class _MisVocabularies:
         # Те же материалы как их написала клиника («соскоб с задней стенки глотки»): их видит LLM выбора строки
         # (`service_mis_names`), а множества слов порядок теряют.
         self.biomat_texts_by_service: dict[str, tuple[str, ...]] = {}
+        # Описание исследования (`description`, HTML) — текстом без разметки: его выдержку видит проверка выбора строки
+        # (`_qualifier_pool.check_rows`), что исследование определяет («чувствительность к антибиотикам» у «Посев мочи …»).
+        self.description_by_service: dict[str, str] = {}
         self._synonym_index_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
         self._synonyms_by_service_cache: tuple[tuple[Any, ...], dict[str, tuple[str, ...]]] | None = None
         self._joined_synonyms_cache: tuple[tuple[Any, ...], dict[str, tuple[str, ...]]] | None = None
@@ -153,6 +157,20 @@ def _can_be_a_synonym(key: str) -> bool:
     return any(char.isalpha() for char in key)
 
 
+# Заголовок, которым клиника начинает почти каждое описание, — не сведение об исследовании.
+_DESCRIPTION_HEADING = "Описание исследования"
+
+
+def _description_text(raw: Any) -> str:
+    """Описание услуги МИС текстом: разметка HTML и сущности сняты (`converters.html_cleaner`; граница тега — пробел, иначе
+    абзацы слипаются), пробелы схлопнуты, заголовок «Описание исследования» — прочь. Пусто — описания нет."""
+
+    text = " ".join(html_cleaner.strip_html(str(raw or "").replace("<", " <")).split())
+    if text.startswith(_DESCRIPTION_HEADING):
+        text = text[len(_DESCRIPTION_HEADING) :].lstrip(" :.")
+    return text
+
+
 def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
     vocab = _MisVocabularies()
     candidates: dict[str, list[str]] = {}
@@ -178,6 +196,9 @@ def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
         if name_key and service_phrases:
             vocab.biomat_by_service.setdefault(name_key, tuple(service_phrases))
             vocab.biomat_texts_by_service.setdefault(name_key, tuple(dict.fromkeys(service_texts)))
+        description = _description_text(row.get("description"))
+        if name_key and description:
+            vocab.description_by_service.setdefault(name_key, description)
 
         raw_syn = row.get("serviceSynonyms")
         syn_values = raw_syn if isinstance(raw_syn, list) else [raw_syn]
@@ -550,6 +571,18 @@ def service_mis_names(
     vocab = vocab if vocab is not None else _vocabularies()
     key = _normalise_input(service_name)
     return vocab.biomat_texts_by_service.get(key, ()), _synonyms_by_service(vocab).get(key, ())
+
+
+def service_mis_description(service_name: str, *, vocab: _MisVocabularies | None = None) -> str:
+    """Описание услуги МИС (`description`) текстом, как его написала клиника; услуги или описания нет — пусто.
+
+    Для проверки выбора строки (`_qualifier_pool.check_rows`): что исследование определяет, справочник пишет в описании, а не в
+    названии («Посев мочи с идентификацией культур» — «определяется чувствительность к … антибиотикам»). Выдержку под слова
+    пациента выбирает вызывающий; судит по ней LLM.
+    """
+
+    vocab = vocab if vocab is not None else _vocabularies()
+    return vocab.description_by_service.get(_normalise_input(service_name), "")
 
 
 def split_biomaterial_tail(text: str) -> tuple[str, str]:

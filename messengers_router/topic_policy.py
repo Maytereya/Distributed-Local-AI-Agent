@@ -75,6 +75,12 @@ _ROWS: tuple[Relabel, ...] = (
         "topic_handoff", "topic_registry", "OTHER", "_maybe_topic_handoff",
         "тема реестра «только оператор» (выезд на дом и др.)", "BUG-2026-09-25-HOME-VISIT-AS-URGENT",
     ),
+    # --- тема по смыслу LLM ---
+    Relabel(
+        "insurance_topic", "topic_llm", "OTHER", "_maybe_insurance_topic",
+        "реплика об обслуживании по ДМС / ОМС по выбору LLM (`insurance_topic = on`): памятка ДМС или «ответит оператор» — с оффером",
+        "BUG-2026-10-28-K26-DMS-OMS-TOPIC",
+    ),
     # --- поток записи ---
     Relabel(
         "flow_pending_answer", "appointment_flow", "APPOINTMENT", "_apply_appointment_continuity_overrides",

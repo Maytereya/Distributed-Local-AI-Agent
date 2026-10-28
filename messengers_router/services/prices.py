@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from .. import shown_context, turn_parse, turn_telemetry
-from . import _price_by_parse
+from . import _price_by_parse, _qualifier_pool
 from ..policies import handoff_message
 from ..text_templates import PRICE_CLARIFY_NAME_TEXT, price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
@@ -198,6 +198,10 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
     # «ферритин по ОМС»), и «не нашёл для «ферритин»» читалось бы как «ферритина нет» — под `price_by_parse = on` без названия.
     phrase = "" if absent and _price_by_parse.enabled() else _shown_phrase(query_text)
     used = {**entities, "service_name_effective": phrase}
+    if absent and _price_by_parse.insurance_marked(query_text):
+        # Суд условия: «условия в строке нет», и разметка пометила оплату страховкой — цену по ОМС / ДМС называет оператор (решение
+        # владельца 28.10), а не «не нашёл».
+        return _insurance_handoff(used, "one")
     note = f"price_match_policy: {status}"
     if status == "unavailable" and not selection.names:
         return _service_fallback(
@@ -209,6 +213,42 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
         )
     text = price_not_found_text(phrase) if status == "none_fit" else price_names_without_prices_text(phrase, selection.names)
     return {"service_name": phrase, "prices": [], "retail_prices": [], "doctors": [], "clarify_text": text, "note": note, "entities_used": used}
+
+
+def _mark_missing(payload: dict[str, Any], missing: list[str], query: str) -> None:
+    """Уточнения, которых выбор строки не нашёл (этап 4), — в ответ: заголовок «в таком виде нет»; сопутствующая услуга («под
+    наркозом») — ещё и «стоимость уточнит оператор» (`qualifiers_missing_addon`)."""
+
+    if not missing:
+        return
+    payload["qualifiers_missing"] = list(missing)
+    addons = _qualifier_pool.addons(query)
+    if addons:
+        payload["qualifiers_missing_addon"] = [text for text in missing if text in addons]
+
+
+def _insurance_handoff(entities: dict[str, Any], where: str) -> dict[str, Any]:
+    """Перевод на оператора по цене ОМС / ДМС (решение владельца 28.10): цен в ответе нет."""
+
+    turn_telemetry.note(price_insurance=where)
+    return _service_fallback(
+        note="price_info: insurance_price",
+        handoff_message=handoff_message("insurance_price"),
+        entities=entities,
+        reason="insurance_price",
+        extra={"prices": [], "retail_prices": []},
+    )
+
+
+def _condition_followup(query: str, query_text: str, retail_rows: list[dict[str, Any]]) -> bool:
+    """Короткий вопрос после цены с условием, которого нет в прайсе («а сколько стоит по омс?» — BUG-2026-10-27-OMS-FOLLOWUP-PRICED):
+    разметка хода отметила уточнение ни к одной услуге (`position_qualifiers = on`), а гард П2 видит в реплике слово вне прайса.
+    Показанная строка («контекст = показанное») такой вопрос не отвечает — ход идёт к судье П2 по услуге контекста."""
+
+    if not _price_by_parse.loose_qualifier(str(query or "")) or not query_has_unsatisfiable_qualifier(query_text, retail_rows):
+        return False
+    turn_telemetry.note(price_condition_followup=True)
+    return True
 
 
 async def _multi_price_payload(
@@ -229,6 +269,7 @@ async def _multi_price_payload(
     if parse is not None:
         if not parse.is_list:
             return None
+        report: dict[str, Any] = {}
         positions, unrecognized = await basket_from_phrases(
             str(query or ""),
             parse.items,
@@ -236,7 +277,12 @@ async def _multi_price_payload(
             retail_rows,
             llm_allowed=choosing,
             journal=parse.status == turn_parse.ParseStatus.PICKED,
+            report=report,
         )
+        if report.get("judged_rejected") and _price_by_parse.insurance_marked(str(query or "")):
+            # Суд условия отверг позицию, а разметка пометила ОМС / ДМС: весь ход — оператору, без цен (решение владельца 28.10: по ДМС
+            # цены не называем вовсе, цену соседа пациент с полисом тоже примет за свою).
+            return _insurance_handoff(entities, "basket")
         # Сбой выбора под `basket_fail_unpriced` — итога нет: решение «складывать ли» не спрашиваем (`summed: False`).
         calculation = await basket_calc(str(query or ""), positions, retail_rows, llm_allowed=choosing and not failed_unpriced(positions))
         return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True, calculation=calculation)
@@ -540,6 +586,9 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     """
 
     await _prefetch_price_snapshots()
+    # Цену по ОМС / ДМС / страховке называет оператор (решение владельца 28.10): разметка и вопрос об оплате сказали «не по прайсу».
+    if _price_by_parse.insurance_confirmed(str(query or "")):
+        return _insurance_handoff(entities, "confirmed")
 
     async def _load_with_retry(fn: Any, *args: Any) -> Any:
         last_exc: Exception | None = None
@@ -772,7 +821,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
                 return verdict
             # Сбой судьи — ход как без судьи: прежний выбор строки и его политика (L-13), а не ответ правил мимо неё.
         judged = _parse_phrase_judged_by_llm(str(query or ""))
-        return await select_price_rows(
+        selection = await select_price_rows(
             str(query or ""),
             retail_rows_clean,
             candidates=proposal,
@@ -784,6 +833,10 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             budget_clarify=True,  # отказ лимита решений хода — уточнение (DESIGN-2026-10-22-TURN-DECISION-BUDGET)
             general_as_none_fit=True,  # «слишком общее» — уточнение, не цены правил (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3)
         )
+        missing[:] = getattr(selection, "missing", ())
+        return selection
+
+    missing: list[str] = []  # уточнения пациента, которых выбор строки не нашёл в строках (этап 4) — заголовок ответа
 
     def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:
         name = _llm_selection_service_name(query_text, rows, reply=str(query or ""))
@@ -802,9 +855,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
                 "note": "price_info: price_llm_select",
             }
         payload["entities_used"] = {**entities, "service_name_effective": name}
+        _mark_missing(payload, missing, str(query or ""))
         return payload
 
-    shown_before = None if doctor_id else _rows_shown_before(str(query or ""), retail_rows_clean)
+    followup = _condition_followup(str(query or ""), query_text, retail_rows_clean)
+    shown_before = None if doctor_id or followup else _rows_shown_before(str(query or ""), retail_rows_clean)
     if shown_before:
         if len(shown_before) == 1:
             payload = _llm_answer(shown_before)
@@ -907,6 +962,9 @@ async def service_bundle_info(
 ) -> dict[str, Any]:
     top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
     await _prefetch_price_snapshots()
+    # Цену по ОМС / ДМС / страховке называет оператор (решение владельца 28.10): разметка и вопрос об оплате сказали «не по прайсу».
+    if _price_by_parse.insurance_confirmed(str(query or "")):
+        return _insurance_handoff(entities, "confirmed")
     # Нормализуем пациентские синонимы к терминам каталога (BUG-2026-06-23-01:
     # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
     entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
@@ -974,7 +1032,7 @@ async def service_bundle_info(
             if verdict is not None:
                 return verdict
             # Сбой судьи — ход как без судьи (прежний выбор строки и политика L-13).
-        return await select_price_rows(
+        selection = await select_price_rows(
             str(query or ""),
             retail_rows,
             candidates=proposal,
@@ -985,14 +1043,22 @@ async def service_bundle_info(
             budget_clarify=True,  # отказ лимита решений хода — уточнение (DESIGN-2026-10-22-TURN-DECISION-BUDGET)
             general_as_none_fit=True,  # «слишком общее» — уточнение, не цены правил (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3)
         )
+        missing[:] = getattr(selection, "missing", ())
+        return selection
+
+    missing: list[str] = []  # уточнения пациента, которых выбор строки не нашёл в строках (этап 4) — заголовок ответа
 
     def _llm_variants(rows: list[dict[str, Any]]) -> dict[str, Any]:
         llm_payload = _llm_family_payload(_llm_selection_service_name(query_text, rows, reply=str(query or "")), rows)
         llm_payload["top_n_applied"] = top_limit
         llm_payload["entities_used"] = entities
+        _mark_missing(llm_payload, missing, str(query or ""))
         return llm_payload
 
-    llm_rows: list[dict[str, Any]] | None = [family_row] if family_row is not None else _rows_shown_before(str(query or ""), retail_rows)
+    followup = family_row is None and _condition_followup(str(query or ""), query_text, retail_rows)
+    llm_rows: list[dict[str, Any]] | None = (
+        [family_row] if family_row is not None else None if followup else _rows_shown_before(str(query or ""), retail_rows)
+    )
     if llm_rows is not None and len(llm_rows) > 1:  # показанные варианты — те же, что видел пациент
         shown_payload = _llm_family_payload(entity_service_name or str(llm_rows[0].get("serviceName") or ""), llm_rows)
         shown_payload.update(top_n_applied=top_limit, entities_used=entities, note="service_bundle_info: shown_before")
@@ -1133,6 +1199,7 @@ async def service_bundle_info(
         out["service_name"] = service_name
         out["llm_selected"] = True
         out["entities_used"] = {**entities, "service_name_effective": service_name}
+        _mark_missing(out, missing, str(query or ""))
 
     compound_payload = _build_compound_price_clarify_payload(
         query_text=query_text,

@@ -95,6 +95,12 @@ def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list
         if isinstance(row, dict) and _row_key(row) not in seen:
             seen.add(_row_key(row))
             out.append(row)
+    if item.get("material"):
+        # Материал позиции списка (уточнения, этап 3а; `qualifier_pool = on`): строки, которые по данным МИС его не принимают, — вон,
+        # строки с ним — в кандидаты позиции, как у пути одной услуги (DESIGN-2026-10-28-POSITION-QUALIFIERS).
+        from . import _qualifier_pool  # выбор строки импортирует корзину — импорт на вызове
+
+        out = _qualifier_pool.pool(out, str(item["material"]), str(item.get("material_bare") or ""), retail_rows, _PER_ITEM * 2)
     return out
 
 
@@ -444,6 +450,7 @@ async def basket_from_phrases(
     *,
     llm_allowed: bool = True,
     journal: bool = False,
+    report: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Корзина из фраз разбора хода (`turn_parse = on`, L-15b, шаг 5): позиции — фразы в порядке реплики.
 
@@ -470,6 +477,10 @@ async def basket_from_phrases(
     judged = {index for index, item in enumerate(items) if item.get("judge")}
     if judged:
         turn_telemetry.note(strong_phrase_guard="basket_fallback" if failed else ("basket_rows" if any(chosen.get(i) for i in judged) else "basket_not_found"))
+    if report is not None:  # позиции, отвергнутые по условию: суд не дал строк или условия нет в прайсе вовсе (вызывающий решает, переводить
+        # ли ход — ОМС / ДМС)
+        rejected = 0 if failed else sum(1 for index in judged if not chosen.get(index))
+        report["judged_rejected"] = rejected + sum(1 for item in items if item.get("unsatisfiable"))
     if journal and not failed:
         for index, fragment, _candidates in weak:
             phrase = _journal_fragment(fragment)

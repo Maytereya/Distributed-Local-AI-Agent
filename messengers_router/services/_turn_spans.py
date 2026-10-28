@@ -13,6 +13,11 @@
 (`single`); сбой — `unavailable` без разреза: читатели — оффер или «уточните название», а не разрез по буквам.
 
 Выключатель `[MESSENGER_ROUTER] turn_spans_llm = off | on` (off — прежний генератор).
+
+Уточнения позиции (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2; `position_qualifiers = on`): тот же вызов отвечает и полем
+`qualifiers` — у каждой услуги её уточнения (номера слов и вид: оплата, условие, материал, метод, сопутствующая услуга) или
+«ни к одной» (`of = 0`). Уточнение к позиции относит LLM, а не соседство слов (попытка 26.10 `list_condition_beside` раздавала
+слова кодом — 8 потерь верных цен). Границы групп те же; битое уточнение отбрасывается, группы остаются.
 """
 
 from __future__ import annotations
@@ -25,10 +30,10 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from .. import llm_runtime, turn_telemetry
-from ..choice import Strength
+from ..choice import Option, Status, Strength, Task, choose
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
-from ..turn_parse import ParsedPhrase, ParseStatus, PhraseParse
+from ..turn_parse import ParsedPhrase, ParseStatus, PhraseParse, Qualifier, QualifierKind
 from . import _price_by_parse
 from ._common import _normalise_catalog_text
 from ._prices_helpers import _PRICE_TOKEN_RE
@@ -56,12 +61,50 @@ _SCHEMA: dict[str, Any] = {
     "properties": {"phrases": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}}},
     "required": ["phrases"],
 }
+# Уточнения позиции: промпт с полем `qualifiers` (старый промпт под off не меняется — повтор из кэша off байт в байт). Уточнение —
+# около 20 токенов ответа («{"of": 1, "words": [2, 3], "kind": "payment"}»): запас ответа и ожидания — на 2–3 уточнения.
+PROMPT_QUALIFIERS = "turn_spans_qualifiers"
+_QUALIFIER_TOKENS = 64
+_QUALIFIER_TIMEOUT_S = 2.0
+# Длинный перечень — прежним промптом: ответ с уточнениями растёт со списком и не укладывается в остаток секунд хода (карточка 28.10,
+# g0711 — 28 слов: разметка с уточнениями — тайм-аут 12,3 с после классификатора, прежним промптом — ответила); условие у позиции —
+# свойство коротких вопросов («ферритин по ОМС, глюкоза»).
+_QUALIFIER_MAX_WORDS = 16
+_SCHEMA_QUALIFIERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "phrases": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+        "qualifiers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "of": {"type": "integer"},
+                    "words": {"type": "array", "items": {"type": "integer"}},
+                    "kind": {"type": "string", "enum": [kind.value for kind in QualifierKind]},
+                },
+                "required": ["of", "words", "kind"],
+            },
+        },
+    },
+    "required": ["phrases", "qualifiers"],
+}
+# Вердикт по метке «оплата»: метка разметки — сведение (живая LLM метила так и «цену», и «платно», и «сертификат»), суд условия
+# корзины пропускал «по ДМС», «по полису» и даже «по омс» (свипы 28.10, код c661056: 15 цен из 15 оставшихся — при верной метке).
+# Отдельный короткий вопрос: какие из отмеченных слов — оплата по ОМС / ДМС / страховке.
+INSURANCE_TASK = Task(name="payment_insurance", num_predict=48, timeout_s=4.0, queue_timeout_ms=_QUEUE_TIMEOUT_MS)
 
 
 def enabled() -> bool:
     """`turn_spans_llm = on`: разбор реплики разметкой слов LLM вместо генератора окон по спискам."""
 
     return str(getattr(_cfg, "MR_TURN_SPANS_LLM", "off") or "off").strip().lower() == "on"
+
+
+def qualifiers_enabled() -> bool:
+    """`position_qualifiers = on`: разметка отмечает уточнения позиции (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2)."""
+
+    return str(getattr(_cfg, "MR_POSITION_QUALIFIERS", "off") or "off").strip().lower() == "on"
 
 
 @dataclass(frozen=True)
@@ -87,14 +130,32 @@ def _verbatim_rows(reply: str, catalog: list[dict[str, Any]]) -> list[dict[str, 
     return [catalog[pos] for pos in sorted(by_norm.get(_normalise_catalog_text(text), ()))]
 
 
-def _result(reply: str, status: ParseStatus, source: str, n_words: int, items: Sequence[ParsedPhrase] = ()) -> PhraseParse:
-    return PhraseParse(reply=reply, status=status.value, source=source, items=tuple(items), candidates=n_words)
+def _result(
+    reply: str,
+    status: ParseStatus,
+    source: str,
+    n_words: int,
+    items: Sequence[ParsedPhrase] = (),
+    loose: Sequence[Qualifier] = (),
+) -> PhraseParse:
+    return PhraseParse(reply=reply, status=status.value, source=source, items=tuple(items), candidates=n_words, loose=tuple(loose))
 
 
-def _item(reply: str, first: _Word, last: _Word, catalog: list[dict[str, Any]]) -> ParsedPhrase:
+def _item(reply: str, first: _Word, last: _Word, catalog: list[dict[str, Any]], qualifiers: Sequence[Qualifier] = ()) -> ParsedPhrase:
     text = reply[first.start : last.end]
     rows = phrase_rows(text, catalog)
-    return ParsedPhrase(text=text, start=first.start, end=last.end, strength=Strength.STRONG if rows else Strength.WEAK, rows=tuple(rows))
+    outside = sorted((item for item in qualifiers if not item.inside), key=lambda item: item.start)
+    full = " ".join(part for _start, part in sorted([(first.start, text), *((item.start, item.text) for item in outside)]))
+    return ParsedPhrase(
+        text=text,
+        start=first.start,
+        end=last.end,
+        strength=Strength.STRONG if rows else Strength.WEAK,
+        rows=tuple(rows),
+        beside=" ".join(item.text for item in outside),
+        qualifiers=tuple(qualifiers),
+        full=full if qualifiers else "",
+    )
 
 
 def decide_without_llm(reply: str, catalog: list[dict[str, Any]]) -> PhraseParse | None:
@@ -120,10 +181,16 @@ def timeout_for(n_words: int) -> float:
     return min(_TIMEOUT_MAX_S, _TIMEOUT_BASE_S + _TIMEOUT_PER_WORD_S * n_words)
 
 
+def _qualified(toks: Sequence[_Word]) -> bool:
+    """Спрашивать ли уточнения позиции: выключатель on и реплика не длиннее `_QUALIFIER_MAX_WORDS` слов."""
+
+    return qualifiers_enabled() and len(toks) <= _QUALIFIER_MAX_WORDS
+
+
 def prompt(reply: str, toks: Sequence[_Word]) -> tuple[str, str]:
     """Инструкция (system) и данные хода (user): реплика пациента — данные, а не инструкция (SEC-3)."""
 
-    template = load_prompt_text(SITE)
+    template = load_prompt_text(PROMPT_QUALIFIERS if _qualified(toks) else SITE)
     system, _, data = template.partition("<<DATA>>")
     numbered = " ".join(f"{k}:{w.text}" for k, w in enumerate(toks, 1))
     return system.strip(), data.replace("<<QUESTION>>", reply).replace("<<WORDS>>", numbered).strip()
@@ -144,23 +211,73 @@ def judge(raw: Any, n_words: int) -> list[tuple[int, int]] | None:
         return None
     spans: list[tuple[int, int]] = []
     for group in groups:
-        if not isinstance(group, list) or not group or not all(isinstance(k, int) and not isinstance(k, bool) for k in group):
+        span = _span(group, n_words)
+        if span is None:
             return None
-        if len(group) == 1:
-            first = last = group[0]
-        elif len(group) == 2:
-            first, last = group
-        elif group == list(range(group[0], group[0] + len(group))):
-            first, last = group[0], group[-1]
-        else:
-            return None
-        if not 1 <= first <= last <= n_words:
-            return None
-        spans.append((first - 1, last - 1))
+        spans.append(span)
     spans.sort()
     if any(prev[1] >= cur[0] for prev, cur in zip(spans, spans[1:])):
         return None
     return spans
+
+
+def _span(group: Any, n_words: int) -> tuple[int, int] | None:
+    """Группа номеров `[первое, последнее]` (или `[k]`, или подряд `[k, k+1, …]`) → отрезок с нуля; None — не по контракту."""
+
+    if not isinstance(group, list) or not group or not all(isinstance(k, int) and not isinstance(k, bool) for k in group):
+        return None
+    if len(group) == 1:
+        first = last = group[0]
+    elif len(group) == 2:
+        first, last = group
+    elif group == list(range(group[0], group[0] + len(group))):
+        first, last = group[0], group[-1]
+    else:
+        return None
+    if not 1 <= first <= last <= n_words:
+        return None
+    return first - 1, last - 1
+
+
+def judge_qualifiers(
+    raw: Any, reply: str, toks: Sequence[_Word], spans: Sequence[tuple[int, int]]
+) -> tuple[dict[int, list[Qualifier]], list[Qualifier]]:
+    """Поле `qualifiers` ответа → уточнения по позициям (ключ — номер отрезка в `spans`, порядок реплики) и ни к одной (`of = 0`).
+
+    `of` — номер группы в ответе LLM (с 1), а `spans` отсортированы по месту в реплике — номер пересчитывается по самой группе.
+    Битое уточнение (номер слова или группы вне списка, вид вне перечня, слова чужой группы или наполовину своей) — пропуск: группы
+    действуют и без него.
+    """
+
+    by_item: dict[int, list[Qualifier]] = {}
+    loose: list[Qualifier] = []
+    items = raw.get("qualifiers") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        return by_item, loose
+    order = [_span(group, len(toks)) for group in raw.get("phrases") or []]
+    kinds = {kind.value: kind for kind in QualifierKind}
+    for entry in items:
+        if not isinstance(entry, dict) or entry.get("kind") not in kinds:
+            continue
+        words = _span(entry.get("words"), len(toks))
+        of = entry.get("of")
+        if words is None or not isinstance(of, int) or isinstance(of, bool) or not 0 <= of <= len(order):
+            continue
+        own = order[of - 1] if of else None
+        if of and own not in spans:
+            continue
+        if any(first <= words[1] and words[0] <= last for first, last in spans if (first, last) != own):
+            continue  # слова чужой группы — не уточнение этой позиции
+        inside = own is not None and own[0] <= words[0] and words[1] <= own[1]
+        if own is not None and not inside and own[0] <= words[1] and words[0] <= own[1]:
+            continue  # наполовину в своей группе — граница не ясна
+        start, end = toks[words[0]].start, toks[words[1]].end
+        qualifier = Qualifier(kind=kinds[entry["kind"]], text=reply[start:end], start=start, end=end, inside=inside)
+        if own is None:
+            loose.append(qualifier)
+        else:
+            by_item.setdefault(spans.index(own), []).append(qualifier)
+    return by_item, loose
 
 
 async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[str, Any]]) -> PhraseParse:
@@ -174,14 +291,16 @@ async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[
         return _with_ms(decided, started)
     toks = words(reply)
     system, user = prompt(reply, toks)
+    qualified = _qualified(toks)
+    tokens = min(_TOKENS_MAX, _TOKENS_FIXED + _TOKENS_PER_WORD * len(toks)) + (_QUALIFIER_TOKENS if qualified else 0)
     try:
         raw, _usage = await llm_runtime.generate_structured(
             site=SITE,
             system=system,
             user=user,
-            schema=_SCHEMA,
-            options={"temperature": 0, "num_predict": min(_TOKENS_MAX, _TOKENS_FIXED + _TOKENS_PER_WORD * len(toks))},
-            timeout_s=timeout_for(len(toks)),
+            schema=_SCHEMA_QUALIFIERS if qualified else _SCHEMA,
+            options={"temperature": 0, "num_predict": tokens},
+            timeout_s=timeout_for(len(toks)) + (_QUALIFIER_TIMEOUT_S if qualified else 0.0),
             queue_timeout_ms=_QUEUE_TIMEOUT_MS,
         )
     except Exception as exc:  # сбой LLM — без разреза по буквам (решение владельца 22.10, вариант (а))
@@ -204,8 +323,40 @@ async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[
         return _with_ms(_result(reply, ParseStatus.INVALID, "llm", len(toks)), started)
     status = ParseStatus.PICKED if spans else ParseStatus.NONE_FIT
     turn_telemetry.note_choice(TASK_NAME, status.value, options=len(toks), ms=_ms(started), cached=False, reason="", outcome="", shadow=False)
-    items = await asyncio.to_thread(lambda: [_item(reply, toks[i], toks[j], catalog) for i, j in spans])
-    return _with_ms(_result(reply, status, "llm", len(toks), items), started)
+    by_item, loose = judge_qualifiers(data, reply, toks, spans) if qualified else ({}, [])
+    if by_item or loose:
+        kinds = [q.kind.value for quals in by_item.values() for q in quals]
+        turn_telemetry.note(tu_qualifiers=",".join(sorted(kinds)), tu_qualifiers_loose=",".join(sorted(q.kind.value for q in loose)))
+    items = await asyncio.to_thread(
+        lambda: [_item(reply, toks[i], toks[j], catalog, by_item.get(k, ())) for k, (i, j) in enumerate(spans)]
+    )
+    if loose and items:
+        # Уточнение ни к одной услуге («ферритин и глюкоза по омс») относится ко всем: у каждой позиции — в `beside`, к суду условия.
+        extra = " ".join(q.text for q in loose)
+        items = [replace(item, beside=" ".join(part for part in (item.beside, extra) if part)) for item in items]
+    parse = _result(reply, status, "llm", len(toks), items, loose)
+    return _with_ms(replace(parse, insurance=await _insurance_verdict(reply, parse)), started)
+
+
+async def _insurance_verdict(reply: str, parse: PhraseParse) -> str:
+    """Вердикт по метке «оплата» (решение владельца 28.10: цену по ОМС и ДМС называет оператор): отмеченные слова — варианты выбора,
+    LLM выбирает те, что про оплату по ОМС / ДМС / страховке. `confirmed` — хоть одно; `denied` — ни одного (метка снята: «цена»,
+    «платно», «сертификат»); `unavailable` — вопрос не ответил (действует прежнее правило: суд условия отверг позицию и метка есть).
+    "" — метки нет, вопрос не задаётся. Вопрос об оплате решения хода не тратит — его возвращаем, как у ответа на висящий вопрос, не
+    закрывшего ход (решение владельца Q5 18.10): ход закрывает только перевод цены по ОМС / ДМС, и он решений не просит, а «не
+    страховка» и не ценовой ход («можно ли сдать анализы по полису ДМС?») идут обычным путём. Карточка `c3x`: без возврата выбору
+    строки «платно делаете уколы» не хватало решения на второй круг (`budget`), цена → «не нашёл»."""
+
+    marked = [q.text for q in (*parse.loose, *(q for item in parse.items for q in item.qualifiers)) if q.kind == QualifierKind.INSURANCE]
+    if not marked:
+        return ""
+    spent = llm_runtime.turn_decisions_spent()
+    choice = await choose(INSURANCE_TASK, reply, [Option(id=str(k), text=text) for k, text in enumerate(marked)])
+    verdict = "unavailable" if choice.failed else "confirmed" if choice.status is Status.PICKED and choice.ids else "denied"
+    if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(tu_insurance_refund=1)
+    turn_telemetry.note(tu_insurance=verdict)
+    return verdict
 
 
 def _ms(started: float) -> int:
