@@ -42,6 +42,11 @@
   П1 по совпадению с каталогом (`test_assist_catalog_hit_is_price`, `understanding_list_is_price`). На «Подобрать анализы»
   подбор решает LLM по данным хода (`test_assist_answer`), а не буквы: «подберите анализы, где сдать кровь» уходил в список
   филиалов, «комплексный анализ на ИППП» — в цену чужой строки.
+* `button_answer_topic = frame` (STEP-2026-10-29-BUTTON-FRAME) — кнопка задаёт рамку хода: как `on`, и тему, которую судья
+  ответа признал ответом на вопрос кнопки, не перебивают и несрочные правила NLU. Стенд деплоя 20 (`s20con_btn`): у 86 из 236
+  провалов кнопок тема ответа ≠ теме нажатого листа, 50 из них — «Цена анализа», где рамки не было (`slot`); правила
+  (`rule_appointment`, `doc_request_*`, `unsupported_*`) уводили и ответ, признанный ответом. Срочное и явный перевод на
+  оператора (правило с `needs_handoff`) — как всегда; «другая тема» по решению судьи — общий путь.
 """
 
 from __future__ import annotations
@@ -69,11 +74,23 @@ def _on(key: str) -> bool:
 
 
 def answer_topic_mode() -> str:
-    """`[MESSENGER_ROUTER] button_answer_topic = off | slot | on`: тему ответа на вопрос кнопки решает кнопка, не
-    LLM-классификатор, — у вопросов-слотов (`slot`: подготовка, подбор анализов, результаты) или и у кнопок цены (`on`)."""
+    """`[MESSENGER_ROUTER] button_answer_topic = off | slot | on | frame`: тему ответа на вопрос кнопки решает кнопка, не
+    LLM-классификатор, — у вопросов-слотов (`slot`: подготовка, подбор анализов, результаты) или и у кнопок цены (`on`);
+    `frame` — как `on`, и эту тему не перебивают несрочные правила (`frame_firm`)."""
 
     mode = str(getattr(_cfg, "MR_BUTTON_ANSWER_TOPIC", "off") or "").strip().lower()
-    return mode if mode in ("slot", "on") else "off"
+    return mode if mode in ("slot", "on", "frame") else "off"
+
+
+def _judges_price() -> bool:
+    return answer_topic_mode() in ("on", "frame")
+
+
+def frame_firm() -> bool:
+    """`button_answer_topic = frame`: тему ответа на вопрос кнопки не перебивают несрочные правила NLU — кнопка задаёт рамку
+    хода (STEP-2026-10-29-BUTTON-FRAME). Срочное и правило с переводом на оператора — как всегда (`nlu_pipeline`)."""
+
+    return answer_topic_mode() == "frame"
 
 
 def answer_topic_on() -> bool:
@@ -157,7 +174,7 @@ def judges_answer(label: str, pending: Any) -> bool:
     `SLOT_TOPICS` получает его и без выключателя (`pending_buttons`). Подсказка (`button_topic_hint`) судью кнопкам цены не
     добавляет: под `slot` классификатор там остаётся, и судья был бы лишней секундой (карточка 25.10: p50 2,5 → 3,3 с)."""
 
-    return answer_topic_mode() == "on" and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
+    return _judges_price() and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
 
 
 def judged_by_llm(pending: Any) -> bool:
@@ -204,7 +221,7 @@ def answer_topic(pending: Any) -> str:
         return mixed[0]  # в сообщении и ответ, и другой вопрос (`button_topic_hint`): ответ — по теме кнопки
     mode = answer_topic_mode()
     label = str(pending.get("label") or "") if isinstance(pending, dict) else ""
-    if mode == "off" or not question_button(pending) or (label in _JUDGED_UNDER_SWITCH and mode != "on"):
+    if mode == "off" or not question_button(pending) or (label in _JUDGED_UNDER_SWITCH and not _judges_price()):
         return ""
     found = pending_answer.slot_answer()
     if found is None or found.outcome is not pending_answer.Outcome.ANSWER:

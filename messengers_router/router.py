@@ -3392,10 +3392,12 @@ async def _resolve_nlu_decision_before_doctor_guard(
         shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
         if use_v2_nlu:
             # Ответ на вопрос кнопки, признанный ответом, — тема кнопки (`button_answer_topic`); смешанное сообщение — тоже
-            # (`button_topic_hint`: ответ по теме кнопки, подсказка в конце — её не перебивает и надёжное правило). Только
+            # (`button_topic_hint`: ответ по теме кнопки, подсказка в конце — её не перебивает и надёжное правило). Под
+            # `frame` кнопка — рамка хода: тему не перебивают и несрочные правила (STEP-2026-10-29-BUTTON-FRAME). Только
             # когда тема есть.
             answer_topic = button_flow.answer_topic(pending_before_nlu)
-            firm = {"answer_topic_firm": True} if answer_topic and button_flow.mixed_topic() else {}
+            firm_topic = answer_topic and (button_flow.mixed_topic() or button_flow.frame_firm())
+            firm = {"answer_topic_firm": True} if firm_topic else {}
             nlu_result = await analyze_with_candidates(
                 user_text,
                 state,
