@@ -117,7 +117,7 @@ from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
 from .services._doctors_helpers import _extract_specialties_from_text, _is_consultation_service_query, _service_name_allows_specialty
 from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, consult_price_phrase, price_reply_names_own_service
-from .services._readiness_select import readiness_by_choice, readiness_from_catalog, readiness_mode
+from .services._readiness_select import readiness_by_choice, readiness_from_catalog
 from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT, RESULTS_PORTAL_URL
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
@@ -2279,7 +2279,7 @@ async def _maybe_readiness_reply(
         return None
     memory.clear_pending(state)
     deadlines = await asyncio.to_thread(readiness_from_catalog, user_text)
-    if not deadlines and readiness_mode() == "on":
+    if not deadlines:
         # Слабое совпадение: услугу выбирает LLM из кандидатов, срок печатает код (ход (в)).
         deadlines = await readiness_by_choice(user_text)
     if deadlines:

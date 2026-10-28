@@ -201,7 +201,6 @@ class MessengerRouterConfig:
     classifier_compact: str
     choose_cache_ttl_s: int
     choose_symptom: str
-    choose_readiness: str
     parse_fail_variants: int
     variant_b_wordforms: str
     mis_honest_degradation: str
@@ -522,10 +521,8 @@ settings = Settings(
         # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
         # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_symptom
         choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="on", allowed={"off", "legacy", "on"}),
-        # Срок готовности при слабом совпадении — услугу выбирает LLM, срок печатает код из МИС (ход (в)).
-        # off | on, по умолчанию on — как на проде с 14.10 (STEP-2026-10-15-DEFAULTS-B); действует под пониманием
-        # хода on. [MESSENGER_ROUTER] choose_readiness
-        choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="on", allowed={"off", "on"}),
+        # Срок готовности при слабом совпадении — всегда выбор LLM (ход (в)): ключ [MESSENGER_ROUTER] choose_readiness снят
+        # 28.10 (on на проде с 14.10) и больше не читается (в config.ini прода безвреден).
         # Разбор ценовой реплики на фразы-услуги (L-15b, контракт C) — единственный режим с T7 шага 3б (16.10): ключ
         # [MESSENGER_ROUTER] turn_parse снят и больше не читается (в config.ini прода безвреден).
         # Политика сбоя под turn_parse = on (L-15b, шаг 6, T5): сколько вариантов кода с ценами показывать у
@@ -945,7 +942,6 @@ MR_LLM_FAIL_OFFER = settings.messenger_router.llm_fail_offer
 MR_CLASSIFIER_COMPACT = settings.messenger_router.classifier_compact
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
-MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation

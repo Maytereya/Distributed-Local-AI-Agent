@@ -50,7 +50,6 @@ PROD_D17: dict[str, Any] = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
     "MR_TURN_UNDERSTANDING_ONE": "on",
     "MR_TURN_SPANS_LLM": "on",
-    "MR_CHOOSE_READINESS": "on",
     "MR_CHOOSE_SYMPTOM": "on",
     "MR_CHOOSE_CACHE_TTL_S": 0,
     "MR_PARSE_FAIL_VARIANTS": 3,

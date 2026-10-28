@@ -56,14 +56,12 @@ from tests.test_price_turns_golden import FIXTURE, run_dialog
 # `choose_price`, `parse_price_guard`, `p2_llm_judge` сняты 17.10 (STEP-2026-10-17-ONE-PATH-*).
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
-    "MR_CHOOSE_READINESS": "on",
     "MR_CHOOSE_SYMPTOM": "on",
 }
 # Набор `default` — умолчания кода ДО переворота «умолчания = прод» (STEP-2026-10-15-DEFAULTS-A), заданные явно:
 # переворот умолчаний в `agent_logic_2/config.py` не меняет смысла отметок этого набора.
 _DEFAULT = {
     "MR_TURN_UNDERSTANDING_PRICE": "shadow",
-    "MR_CHOOSE_READINESS": "off",
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
     # Семья (iv) переворота 27.10 (STEP-2026-10-27-DEFAULTS-PROD): прежние умолчания; набор уходит со снятием `turn_spans_llm`.
