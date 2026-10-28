@@ -286,13 +286,6 @@ def _wordform_family_size(word: str, retail_rows: list[dict[str, Any]], *, same:
     return len(names)
 
 
-def _variant_b_wordforms_on() -> bool:
-    """`[MESSENGER_ROUTER] variant_b_wordforms = off | on` (облако 16.10; по умолчанию on с 17.10 — STEP-2026-10-17-VBW-ON);
-    мусор в значении — как было (off)."""
-
-    return str(getattr(_cfg, "MR_VARIANT_B_WORDFORMS", "on") or "").strip().lower() == "on"
-
-
 # Словоформа — одно слово (`russian_nlu.tokens_share_stem`, одно определение «одно ли это слово»): порог 6 — как у гарда
 # отображения цены; «сифилис» = «сифилиса», но «гастроскопию» ≠ «гастрин» («гастро» / «гастри»). Только слова из одних
 # букв: служебные токены кода («витамин_a», «витамин_b12») и коды с цифрами сравниваются целиком.
@@ -326,7 +319,7 @@ def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: li
     отпадают сами, без списка слов. По началу слова нельзя: на «гастроскопию» первым оказался бы
     «Гастрин»; слова нет в прайсе вовсе — названий нет (честный перевод). Порядок — как у кандидатов.
 
-    Под `variant_b_wordforms = on`: различающее слово могло стать редким из-за словоформы — «сифилис» целиком есть только
+    Различающее слово могло стать редким из-за словоформы — «сифилис» целиком есть только
     в чужой строке («Кровь на сифилис (…)»), а в верной — «сифилиса» («Экспресс-тест для определения сифилиса (антитела
     IgG и IgM …)»). Строка со словоформой различающего слова добавляется, только если покрывает слов пациента строго
     больше любой строки с ним целиком; порядок — по числу слов пациента в названии (словоформы — одно слово), при
@@ -341,14 +334,11 @@ def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: li
     key = min(wanted, key=lambda token: (df.get(token, 0), token))
     if not df.get(key):
         return ()
-    if _variant_b_wordforms_on():
-        return _wordform_names(wanted, key, pool, retail_rows)
-    names = [_row_name(row) for row in pool if key in set(_price_query_tokens(_row_name(row)))]
-    return tuple(dict.fromkeys(name for name in names if name))[:_VARIANT_B_LIMIT]
+    return _wordform_names(wanted, key, pool, retail_rows)
 
 
 def _wordform_names(wanted: set[str], key: str, pool: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> tuple[str, ...]:
-    """Строки варианта B под `variant_b_wordforms = on`. Словоформы ключевого слова — только когда слово вместе с ними
+    """Строки варианта B. Словоформы ключевого слова — только когда слово вместе с ними
     различает: есть не больше чем в `_VARIANT_B_LIMIT` названиях прайса (список покажет их все). Иначе редкость слова —
     артефакт словоформы, а само слово общее (BUG-2026-10-17-VARIANT-B-COMMON-WORD: «стоимость консультации врача» —
     «консультации» дословно в одном названии, со словоформой «консультация» — в 163 приёмах; первые пять кандидатов —

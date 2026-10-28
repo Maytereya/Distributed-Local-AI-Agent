@@ -202,7 +202,6 @@ class MessengerRouterConfig:
     choose_cache_ttl_s: int
     choose_symptom: str
     parse_fail_variants: int
-    variant_b_wordforms: str
     mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
@@ -624,12 +623,8 @@ settings = Settings(
         # [MESSENGER_ROUTER] names_patient_fill
         # По умолчанию on — как на проде с 26.10 (деплой 18; STEP-2026-10-15-DEFAULTS-B).
         names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="on", allowed={"off", "on"}),
-        # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
-        # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
-        # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
-        # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
-        # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
-        variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
+        # Вариант B L-13 — словоформы различающего слова всегда: ключ [MESSENGER_ROUTER] variant_b_wordforms снят 28.10 (on на
+        # проде с 18.10) и больше не читается (в config.ini прода безвреден).
         # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
         # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
         # приписка «по данным на ДД.ММ» или оператор. off — как было. По умолчанию on — как на проде с 18.10 (деплой 8;
@@ -943,7 +938,6 @@ MR_CLASSIFIER_COMPACT = settings.messenger_router.classifier_compact
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
-MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm

@@ -5,7 +5,7 @@
 pallidum)». Корень: `_price_select_llm._whole_word_names` берёт самое редкое слово пациента и строки, где оно есть ЦЕЛИКОМ;
 «сифилис» целиком есть только в чужой строке (в верной — «сифилиса»), поэтому оно и редкое, и верная строка отпадает.
 
-Фикс под `[MESSENGER_ROUTER] variant_b_wordforms = on` (по умолчанию on с 17.10): словоформа различающего слова —
+Фикс (выключатель `variant_b_wordforms` снят 28.10 — on на проде с 18.10): словоформа различающего слова —
 одно слово (`russian_nlu.tokens_share_stem`, порог 6, только слова из одних букв); строка со словоформой добавляется, если
 покрывает слов пациента строго больше любой строки со словом целиком; порядок — по числу слов пациента. Встречный свип
 по 398 названиям мини-прайса («сколько стоит» + название без скобок): изменилось 6, ни одно попадание и ни одна первая
@@ -34,12 +34,6 @@ _RIGHT = "Экспресс-тест для определения сифилис
 _WRONG = "Кровь на сифилис (реакция микропреципитации с кардиолипиновым антигеном,антитела IgG и IgM к Treponema pallidum)"
 
 
-def _switch(monkeypatch, value: str) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_VARIANT_B_WORDFORMS", value, raising=False)
-
-
 def _rows() -> list[dict]:
     path = FIXTURE / "price_by_region" / "price_region_3_20261008.jsonl"
     return [json.loads(line) for line in path.open(encoding="utf-8") if line.strip()]
@@ -57,35 +51,10 @@ def _names(question: str) -> tuple[str, ...]:
     return PS._whole_word_names(question, pool, rows)
 
 
-# Нет атрибута — умолчание кода (on с 17.10); мусор в значении — как было (off).
-@pytest.mark.parametrize(("raw", "expected"), [(None, True), ("off", False), ("on", True), ("x", False)])
-def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
-    from messengers_router.runtime_config import config as cfg
-    from messengers_router.services._price_select_llm import _variant_b_wordforms_on
-
-    if raw is None:
-        monkeypatch.delattr(cfg, "MR_VARIANT_B_WORDFORMS", raising=False)
-    else:
-        _switch(monkeypatch, raw)
-    assert _variant_b_wordforms_on() is expected
-
-
-def test_config_default_is_on():
-    """Умолчание on с 17.10: офлайн-замер dev 867 при недоступной LLM — 0 хуже (STEP-2026-10-17-VBW-ON)."""
-
-    from agent_logic_2 import config
-
-    assert config.MR_VARIANT_B_WORDFORMS == "on"
-
-
 def test_the_row_covering_the_patient_words_comes_first(mini_prod_world, monkeypatch):  # noqa: F811
     with ev_world.FrozenWorld(mini_prod_world, "day"):
-        _switch(monkeypatch, "off")
-        before = _names(_SYPHILIS)
-        _switch(monkeypatch, "on")
         after = _names(_SYPHILIS)
-    assert _RIGHT not in before and before[0] == _WRONG  # как было: чужая строка — единственная
-    assert after[0] == _RIGHT and _WRONG in after  # словоформа: верная первой, неоднозначность — списком
+    assert after[0] == _RIGHT and _WRONG in after  # словоформа: верная первой, неоднозначность — списком (без неё — чужая единственная)
 
 
 @pytest.mark.parametrize(
@@ -95,14 +64,12 @@ def test_the_row_covering_the_patient_words_comes_first(mini_prod_world, monkeyp
         ("сколько стоит витамин а", ("Витамин А (ретинол)",)),  # «витамин_a» не сливается с «витамин_b12»
     ],
 )
-def test_boundaries_of_the_class(question, expected, mini_prod_world, monkeypatch):  # noqa: F811
-    _switch(monkeypatch, "on")
+def test_boundaries_of_the_class(question, expected, mini_prod_world):  # noqa: F811
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         assert _names(question)[: len(expected) or None] == expected
 
 
-@pytest.mark.parametrize("value", ["off", "on"])
-def test_through_the_endpoint_with_the_llm_down_two_turns(value, mini_prod_world, monkeypatch):  # noqa: F811
+def test_through_the_endpoint_with_the_llm_down_two_turns(mini_prod_world, monkeypatch):  # noqa: F811
     """Через эндпоинт, набор прода, выбор строки LLM недоступен: вариант B — названия без цен; под `on` первой — верная строка;
     второй ход «а сколько?» не называет цены строки, которой пациент не выбирал. Разметка фраз — оракул (`turn_spans_llm = on`,
     прод с деплоя 17): при лежащей LLM целиком цена — только реплике-названию, иначе «Уточните» (`price_by_parse = on`), и до
@@ -112,16 +79,12 @@ def test_through_the_endpoint_with_the_llm_down_two_turns(value, mini_prod_world
     from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 
     _configure(monkeypatch, "deploy")
-    _switch(monkeypatch, value)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle((_SYPHILIS_PHRASE,)))
     keep_llm_breaker_closed(monkeypatch)
     with ev_world.FrozenWorld(mini_prod_world, "day"):
-        first, second = run_dialog([_SYPHILIS, "а сколько?"], f"variant-b-{value}")
+        first, second = run_dialog([_SYPHILIS, "а сколько?"], "variant-b-on")
     assert not re.search(r"\d\s*руб", first["text"] + second["text"]), (first["text"], second["text"])
-    if value == "on":
-        assert first["text"].index(_RIGHT) < first["text"].index(_WRONG), first["text"]
-    else:
-        assert _WRONG in first["text"] and _RIGHT not in first["text"], first["text"]
+    assert first["text"].index(_RIGHT) < first["text"].index(_WRONG), first["text"]
 
 
 # --------------------------------------------------------------------------- общее слово (BUG-2026-10-17-VARIANT-B-COMMON-WORD)
@@ -170,7 +133,7 @@ def _common_names(rows: list[dict]) -> tuple[str, ...]:
 
 def test_a_word_rare_only_as_a_word_form_names_nothing(rare_form_world, monkeypatch):
     """Ключ варианта B — «консультации» (дословно одно название вне кандидатов), со словоформой — общее слово: строк
-    нет ни под off, ни под on; без условия «различает» под on были бы приёмы (что и было 16.10)."""
+    нет; без условия «различает» были бы приёмы (что и было 16.10)."""
 
     from messengers_router.services import _price_select_llm as PS
 
@@ -178,9 +141,6 @@ def test_a_word_rare_only_as_a_word_form_names_nothing(rare_form_world, monkeypa
     with ev_world.FrozenWorld(rare_form_world, "day"):
         assert PS._token_df(rows).get("консультации") == 1
         assert PS._wordform_family_size("консультации", rows) > PS._VARIANT_B_LIMIT
-        _switch(monkeypatch, "off")
-        assert _common_names(rows) == ()
-        _switch(monkeypatch, "on")
         assert _common_names(rows) == ()
         monkeypatch.setattr(PS, "_wordform_family_size", lambda *_args: 0)  # как до 17.10: словоформы без условия
         assert _common_names(rows) and all(name.startswith("Прием") for name in _common_names(rows))
@@ -193,18 +153,15 @@ def test_the_distinguishing_word_form_still_comes_first(mini_prod_world, monkeyp
 
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         assert PS._wordform_family_size("сифилис", _rows()) <= PS._VARIANT_B_LIMIT
-        _switch(monkeypatch, "on")
         assert _names(_SYPHILIS)[0] == _RIGHT
 
 
-@pytest.mark.parametrize("value", ["off", "on"])
-def test_common_word_through_the_endpoint_two_turns(value, rare_form_world, monkeypatch):
+def test_common_word_through_the_endpoint_two_turns(rare_form_world, monkeypatch):
     """Через эндпоинт, набор прода, LLM недоступна: «стоимость консультации врача» — не список приёмов и без цены;
     второй ход «а сколько?» — без цены строки, которой пациент не видел."""
 
     _configure(monkeypatch, "deploy")
-    _switch(monkeypatch, value)
     with ev_world.FrozenWorld(rare_form_world, "day"):
-        first, second = run_dialog([_COMMON, "а сколько?"], f"variant-b-common-{value}")
+        first, second = run_dialog([_COMMON, "а сколько?"], "variant-b-common")
     assert "хирург" not in first["text"].lower() and "похожие услуги" not in first["text"], first["text"]
     assert not re.search(r"\d\s*руб", first["text"] + second["text"]), (first["text"], second["text"])
