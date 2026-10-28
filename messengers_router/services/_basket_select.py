@@ -95,6 +95,12 @@ def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list
         if isinstance(row, dict) and _row_key(row) not in seen:
             seen.add(_row_key(row))
             out.append(row)
+    if item.get("material"):
+        # Материал позиции списка (уточнения, этап 3а; `qualifier_pool = on`): строки, которые по данным МИС его не принимают, — вон,
+        # строки с ним — в кандидаты позиции, как у пути одной услуги (DESIGN-2026-10-28-POSITION-QUALIFIERS).
+        from . import _qualifier_pool  # выбор строки импортирует корзину — импорт на вызове
+
+        out = _qualifier_pool.pool(out, str(item["material"]), str(item.get("material_bare") or ""), retail_rows, _PER_ITEM * 2)
     return out
 
 

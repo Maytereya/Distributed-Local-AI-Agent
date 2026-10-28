@@ -3649,9 +3649,22 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
                 "prices": _annotate_price_rows_with_care_context(top_rows),
                 "fragment": fragment,
                 "strong": [],
+                **_position_material(phrase),
             }
         )
     return items
+
+
+def _position_material(phrase: Any) -> dict[str, str]:
+    """Материал слабой позиции списка (уточнения, этап 3а; `qualifier_pool = on`): {"material", "material_bare"} для пула кандидатов
+    корзины (`_basket_select._candidates`); выключатель off или материала нет — пусто (позиция как была)."""
+
+    from . import _qualifier_pool  # выбор строки импортирует этот модуль — импорт на вызове
+
+    if not _qualifier_pool.enabled():
+        return {}
+    material, bare = _qualifier_pool.of_phrase(phrase)
+    return {"material": material, "material_bare": bare} if material else {}
 
 
 def _build_synonym_fork_payload(

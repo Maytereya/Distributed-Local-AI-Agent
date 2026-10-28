@@ -43,8 +43,13 @@ def material(question: str) -> tuple[str, str]:
     parse = turn_understanding.parse_for(question)
     if parse is None or not parse.decided or len(parse.items) != 1:
         return "", ""
-    item = parse.items[0]
-    words = [q for q in item.qualifiers if q.kind == turn_parse.QualifierKind.MATERIAL]
+    return of_phrase(parse.items[0])
+
+
+def of_phrase(item: Any) -> tuple[str, str]:
+    """Материал фразы разбора (вид `material`) и её слова без него: («кала», «посев на микрофлору»); материала нет — («», «»)."""
+
+    words = [q for q in getattr(item, "qualifiers", ()) if q.kind == turn_parse.QualifierKind.MATERIAL]
     if not words:
         return "", ""
     text = str(item.text or "")

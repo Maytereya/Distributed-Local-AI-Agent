@@ -7,7 +7,7 @@
 
 Инварианты класса:
 - строка, которая по данным МИС материал позиции не принимает, не попадает в список выбора LLM и не получает цену — ни в первом круге,
-  ни во втором (по терминам LLM);
+  ни во втором (по терминам LLM), ни у позиции списка (корзина);
 - строки с этим материалом попадают в список выбора, хотя слов фразы пациента в их названии нет;
 - встречные: вопрос без материала — кандидаты как были; выключатель off — как было; материал у строки без данных справочника — по
   словам её названия («вен» у «Дуплексного сканирования вен»).
@@ -97,6 +97,19 @@ def test_material_the_row_lacks_keeps_it_out_of_the_choice(mis_materials, mini_p
     assert any(name.startswith("Кал на яйца глист") for name in inner.offered), inner.offered  # строка с материалом — без слов фразы
     assert not _priced(turn["text"], "Посев на микрофлору"), turn["text"]
     assert row["pool_material"].split("/")[1] != "0"  # общий посев был в пуле по буквам и ушёл по данным
+
+
+def test_list_position_with_material_keeps_the_generic_row_out(mis_materials, mini_prod_world, monkeypatch):  # noqa: F811
+    """Позиция списка (корзина) — тот же пул по материалу; соседняя позиция — своей ценой."""
+
+    inner = _Rows(("Посев",))
+    oracle = SpansOracle(
+        ("посев кала на микрофлору", "ферритин"), inner=inner, qualifiers=[("посев кала на микрофлору", "кала", "material")]
+    )
+    turn, _row = _run("сколько стоит посев кала на микрофлору и ферритин", oracle, mini_prod_world, monkeypatch, _sid("list"))
+    assert inner.offered and _GENERIC not in inner.offered, inner.offered
+    assert any(name.startswith("Кал на яйца глист") for name in inner.offered), inner.offered
+    assert not _priced(turn["text"], "Посев на микрофлору") and _priced(turn["text"], "Ферритин"), turn["text"]
 
 
 def test_without_material_the_generic_rows_stay(mis_materials, mini_prod_world, monkeypatch):  # noqa: F811
