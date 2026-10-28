@@ -227,6 +227,13 @@ def _button_answer_result(text: str, rule: RouteDecision | None, topic: str, top
         decision = rule
     else:
         decision = RouteDecision(label=topic, confidence=0.9, needs_handoff=False, context_action="continue", source="button_answer")
+    from . import button_flow
+
+    leaf = button_flow.leaf_frame()
+    if leaf is not None:
+        # Лист без своего вопроса (`frame`): его флаги и сущности, сущности реплики поверх («ХГЧ» вместо «анализы»).
+        decision.flags = set(decision.flags) | set(leaf.flags)
+        decision.entities = {**dict(leaf.entities), **(dict(rule.entities) if rule is not None else {}), **dict(decision.entities or {})}
     decision.flags = set(decision.flags) | classifier.detect_pii(text) | {"button_answer_topic"}
     turn_telemetry.note(nlu_topic_by_llm="button_answer", nlu_src="button")
     return NLUResult(

@@ -137,8 +137,8 @@ def build_plan(
     # Поле ожидания (вопрос бота, D2.1) — состояние диалога, не сущность: инструментам не отдаём, иначе через их
     # `entities_used` текст вопроса попал бы в промпт свободного ответа LLM и поменял бы ответ.
     entities = expects.without(state.last_entities)
-    if address_flow.ADDRESS_BUTTON_KEY in entities:  # метка адресной кнопки — состояние хода, не сущность инструмента
-        entities = {k: v for k, v in entities.items() if k != address_flow.ADDRESS_BUTTON_KEY}
+    if address_flow.ADDRESS_BUTTON_KEY in entities or button_flow.LEAF_KEY in entities:  # метки кнопок — состояние хода
+        entities = {k: v for k, v in entities.items() if k not in (address_flow.ADDRESS_BUTTON_KEY, button_flow.LEAF_KEY)}
     if runtime_options is not None:
         entities = {**entities, "__runtime_llm_mode": runtime_options.llm_mode}
     missing = missing_slots(effective_label, entities)

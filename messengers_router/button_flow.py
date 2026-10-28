@@ -49,7 +49,11 @@
   оператора (правило с `needs_handoff`) — как всегда. «Другую тему» судьи ответа под `frame` проверяет отдельный короткий
   вопрос LLM — «сообщение в теме нажатой кнопки?» (`FRAME_TASK`, промпт `choose_button_frame`): судья с пятью исходами звал
   «Есть ли у вас 3D УЗИ?», «Можно ли сделать кардиограмму?» на «Цене анализа» другой темой (стенд: 46 ответов, 37 ушли из
-  цены). «В теме» — рамка держится; «другое», сбой — общий путь, как было.
+  цены). «В теме» — рамка держится; «другое», сбой — общий путь, как было. Листы без своего вопроса («Нужно ли записываться»,
+  «Акции и скидки», «Справка для вычета»: бот отвечает на нажатие сразу) держат рамку на одну следующую реплику — метка нажатия
+  на ход (как `address_flow`, адресные листы — у `address_followup`), тот же вопрос рамки; «в теме» — тема, флаги и сущности
+  листа, сущности реплики — поверх («Записаться на ХГЧ» на «Нужно ли записываться» — без записи ли ХГЧ, решает каталог МИС в
+  `router._guard_walkin_named_service`, а не запись по `rule_appointment`).
 """
 
 from __future__ import annotations
@@ -263,6 +267,11 @@ _NOT_HINTED = frozenset({"menu.operator"})
 _MIXED: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("mr_button_mixed", default=None)
 # «Другая тема» судьи ответа, которую отдельный вопрос рамки вернул в тему кнопки (`button_answer_topic = frame`): её тема.
 _REFRAMED: contextvars.ContextVar[str] = contextvars.ContextVar("mr_button_reframed", default="")
+# Лист без своего вопроса, нажатый на прошлом ходе, — рамка этой реплики (`frame`): метка хода и ключ состояния.
+LEAF_KEY = "_button_leaf"
+_LEAF: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("mr_button_leaf", default=None)
+# Лист, в рамку которого вопрос рамки вернул эту реплику: его флаги и сущности — решению хода (`nlu_pipeline`).
+_REFRAMED_LEAF: contextvars.ContextVar[str] = contextvars.ContextVar("mr_button_reframed_leaf", default="")
 # Сообщение в теме нажатой кнопки? — отдельный короткий вопрос после «другой темы» судьи ответа (`frame`).
 FRAME_TASK = Task(name="button_frame", outcomes=("same", "other"), num_predict=24, timeout_s=8, queue_timeout_ms=3000)
 
@@ -280,6 +289,7 @@ def reset() -> None:
 
     _MIXED.set(None)
     _REFRAMED.set("")
+    _REFRAMED_LEAF.set("")
 
 
 def _where(action: button_menu.ButtonAction) -> str:
@@ -373,12 +383,21 @@ async def reframe(text: str, pending: Any) -> bool:
     :return: ход остаётся в теме кнопки
     """
 
-    from . import llm_runtime
-
     action = button_menu.action_for(question_button(pending))
     label = str(pending.get("label") or "") if isinstance(pending, dict) else ""
     if not frame_firm() or action is None or not action.title or not label:
         return False
+    if not await _in_frame(text, action):
+        return False
+    _REFRAMED.set(label)
+    return True
+
+
+async def _in_frame(text: str, action: button_menu.ButtonAction) -> bool:
+    """Вопрос рамки (`FRAME_TASK`): сообщение в теме нажатой кнопки? Сбой — нет; лимит решений хода не тратит."""
+
+    from . import llm_runtime
+
     spent = llm_runtime.turn_decisions_spent()
     try:
         choice = await choose(FRAME_TASK, text, [], asked=f"«{action.title}»{_where(action)} — вопросы про {action.about}")
@@ -389,10 +408,67 @@ async def reframe(text: str, pending: Any) -> bool:
     turn_telemetry.note(button_frame=outcome or "none")
     if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
         turn_telemetry.note(tu_button_frame_refund=1)
-    if outcome != "same":
+    return outcome == "same"
+
+
+def _frames_next_reply(button_id: str) -> bool:
+    """Лист без своего вопроса (отвечает на нажатие сразу: `pass` или `slot` со своими сущностями), кроме адресных — их
+    следующую реплику ведёт `address_followup`."""
+
+    action = button_menu.action_for(button_id) if button_id else None
+    if action is None or not action.title:
         return False
-    _REFRAMED.set(label)
+    answered_at_press = action.mode == "pass" or (action.mode == "slot" and bool(action.entities))
+    return answered_at_press and not (action.mode == "pass" and action.label == "ADDRESS")
+
+
+def track_leaf(state: Any, button_id: str) -> None:
+    """Начало хода (`frame`): нажатие листа без своего вопроса — метка этого хода (возраст 0), следующая реплика — возраст 1;
+    другое нажатие и вторая реплика — метки нет. off — состояние как было."""
+
+    _LEAF.set(None)
+    if not frame_firm():
+        return
+    previous = state.last_entities.pop(LEAF_KEY, None)
+    if button_id:
+        if _frames_next_reply(button_id):
+            _LEAF.set({"id": button_id, "age": 0})
+        return
+    if isinstance(previous, dict) and int(previous.get("age") or 0) == 0 and previous.get("id"):
+        _LEAF.set({"id": str(previous["id"]), "age": 1})
+
+
+def finish_leaf(state: Any) -> None:
+    """Конец хода: метку нажатия — в состояние, чтобы её увидела следующая реплика; прочее — снять."""
+
+    mark = _LEAF.get()
+    if mark is not None and int(mark.get("age") or 0) == 0:
+        state.last_entities[LEAF_KEY] = dict(mark)
+    else:
+        state.last_entities.pop(LEAF_KEY, None)
+
+
+async def reframe_leaf(text: str) -> bool:
+    """Реплика сразу после листа без своего вопроса: в его теме? (`frame`, вопрос рамки). «В теме» — тема хода — листа, его
+    флаги и сущности — решению (`leaf_frame`), несрочные правила её не перебивают; «другое» и сбой — общий путь, как было."""
+
+    mark = _LEAF.get()
+    button_id = str(mark.get("id") or "") if mark is not None and int(mark.get("age") or 0) == 1 else ""
+    action = button_menu.action_for(button_id) if button_id else None
+    if not frame_firm() or action is None or not action.label:
+        return False
+    if not await _in_frame(text, action):
+        return False
+    _REFRAMED.set(action.label)
+    _REFRAMED_LEAF.set(button_id)
     return True
+
+
+def leaf_frame() -> button_menu.ButtonAction | None:
+    """Лист без своего вопроса, в рамку которого вопрос рамки вернул эту реплику; иначе None."""
+
+    button_id = _REFRAMED_LEAF.get()
+    return button_menu.action_for(button_id) if button_id else None
 
 
 def mixed_topic() -> bool:

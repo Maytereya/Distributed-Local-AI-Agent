@@ -112,3 +112,49 @@ def test_frame_other_or_failure_takes_the_general_path(frame, mini_prod_world, m
 def test_on_does_not_ask_the_frame_question(mini_prod_world, monkeypatch):  # noqa: F811
     turn = _frame_dialog(mini_prod_world, monkeypatch, switch="on", frame="same")
     assert "button_frame" not in turn["telemetry"], turn["telemetry"]
+
+
+# Лист без своего вопроса («Нужно ли записываться» отвечает на нажатие сразу): рамка — на одну следующую реплику.
+_LEAF = "menu.tests.booking_needed"
+_LEAF_REPLY = "Записаться на хгч"
+
+
+def _leaf_dialog(world_dir, monkeypatch, turns, *, switch: str, frame: str | None):
+    from tests import test_button_answer_topic_class as harness
+
+    real = harness._LLM
+
+    class _WithFrame(real):
+        def __init__(self, answers):
+            if frame is not None:
+                answers = {_FRAME_MARK: json.dumps({"picks": [], "outcome": frame}), **answers}
+            super().__init__(answers)
+
+    monkeypatch.setattr(harness, "_LLM", _WithFrame)
+    return _dialog(world_dir, monkeypatch, turns, switch=switch, free=None)
+
+
+def test_leaf_frame_keeps_the_leaf_topic_against_the_booking_rule(mini_prod_world, monkeypatch):  # noqa: F811
+    turn = _leaf_dialog(mini_prod_world, monkeypatch, [_press(_LEAF), _LEAF_REPLY], switch="frame", frame="same")[1]
+    tel = turn["telemetry"]
+    assert tel.get("button_frame") == "same" and tel.get("nlu_topic_by_llm") == "button_answer", tel
+    assert tel.get("tu_label_nlu") == "ADDRESS", tel
+
+
+@pytest.mark.parametrize("frame", ["other", None])
+def test_leaf_frame_other_or_failure_takes_the_general_path(frame, mini_prod_world, monkeypatch):  # noqa: F811
+    turn = _leaf_dialog(mini_prod_world, monkeypatch, [_press(_LEAF), _LEAF_REPLY], switch="frame", frame=frame)[1]
+    assert turn["telemetry"].get("nlu_topic_by_llm") != "button_answer", turn["telemetry"]
+
+
+def test_leaf_frame_holds_one_reply_only(mini_prod_world, monkeypatch):  # noqa: F811
+    turns = _leaf_dialog(mini_prod_world, monkeypatch, [_press(_LEAF), "спасибо", _LEAF_REPLY], switch="frame", frame="same")
+    assert "button_frame" not in turns[2]["telemetry"], turns[2]["telemetry"]
+
+
+@pytest.mark.parametrize("switch", ["off", "on"])
+def test_leaf_mark_only_under_frame(switch, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router import button_flow
+
+    turns = _leaf_dialog(mini_prod_world, monkeypatch, [_press(_LEAF), _LEAF_REPLY], switch=switch, frame="same")
+    assert button_flow.LEAF_KEY not in turns[0]["state"] and "button_frame" not in turns[1]["telemetry"]

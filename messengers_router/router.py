@@ -2803,14 +2803,17 @@ async def _handle_button_reframe(
 ) -> tuple[RouteDecision, Plan, Evidence] | None:
     """Кнопка — рамка хода (`button_answer_topic = frame`, STEP-2026-10-29-BUTTON-FRAME): «другую тему» судьи ответа на вопрос
     кнопки проверяет отдельный вопрос LLM (`button_flow.reframe`); сообщение в теме кнопки — ход идёт общим путём в теме кнопки
-    (`button_flow.answer_topic`), её не перебивают несрочные правила. Ход сам не отвечает — всегда None."""
+    (`button_flow.answer_topic`), её не перебивают несрочные правила. Реплика сразу после листа без своего вопроса — тот же
+    вопрос рамки (`button_flow.reframe_leaf`). Ход сам не отвечает — всегда None."""
 
-    found = pending_answer.slot_answer()
-    if found is None or found.outcome is not pending_answer.Outcome.NEW_TOPIC or found.rest:
-        return None
     if runtime_options is not None and runtime_options.llm_mode == "strict":
         return None
     pending = memory.get_pending(state)
+    if button_flow.frame_firm() and not button_flow.question_button(pending) and await button_flow.reframe_leaf(user_text):
+        return None  # висящий вопрос, если есть, — от того же нажатия листа: реплика в его рамке
+    found = pending_answer.slot_answer()
+    if found is None or found.outcome is not pending_answer.Outcome.NEW_TOPIC or found.rest:
+        return None
     if button_flow.frame_firm() and button_flow.question_button(pending):
         await button_flow.reframe(user_text, pending)
     return None
@@ -4285,6 +4288,7 @@ async def patient_routing_stream(
         clear_on_topic_switch(state, memory)
     # Метка адресной кнопки (`address_branch_flags`): нажатие ставит, следующая реплика старит — после сброса кнопкой.
     address_flow.track_address_button(state, button_id)
+    button_flow.track_leaf(state, button_id)  # лист без своего вопроса — рамка следующей реплики (`frame`)
     # Вопрос, на который отвечает реплика, — после сброса кнопкой (поле ожидания, D2.1; пишет его конец хода).
     expects.begin_turn(state)
 
@@ -4497,6 +4501,7 @@ async def patient_routing_stream(
     # Смешанное сообщение внутри кнопки (`button_topic_hint`): ответ по теме кнопки — и подсказка кнопки на остальное.
     response = button_flow.with_mixed_hint(response)
     address_flow.finish_turn(state)  # метка адресной кнопки — следующей реплике (`address_branch_flags`)
+    button_flow.finish_leaf(state)  # метка листа без своего вопроса — следующей реплике (`frame`)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
     expects.finish_turn(state, response)
 
