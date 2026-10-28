@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import evidence_keys as ek
-from . import address_flow, expects, pending_answer, shown_context
+from . import address_flow, booking_target, expects, pending_answer, shown_context, turn_telemetry
 from . import walkin as walkin_llm
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
@@ -785,6 +785,11 @@ def build_appointment_step_response(
         text_lines.append("Передаю заявку оператору для подтверждения и дальнейшего оформления.")
         return ResponseEnvelope(text="\n".join(text_lines), handoff=True)
 
+    if booking_target.enabled() and booking_target.branch_outside_target(entities, evidence):
+        # Филиал назван, но цели там по данным хода нет (К8): в заявку он не идёт — бот покажет филиалы, где цель есть.
+        for key in booking_target.BRANCH_KEYS:
+            entities.pop(key, None)
+        turn_telemetry.note(bt_branch="outside_target")
     appointment_step = appointment_step_policy(entities)
     service = appointment_service_display(entities)
     city = str(entities.get("city") or "").strip()

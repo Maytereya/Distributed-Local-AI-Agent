@@ -37,6 +37,7 @@ _PROD_TOPIC_BY_LLM = (
 _BRANCHES = [
     {"id": "branch_8882", "name": "пр.Ленина, 5", "aliases": "пр.ленина, 5, ленина 5, самара"},
     {"id": "branch_8890", "name": "ул. Победы, 83", "aliases": "ул. победы, 83, победы 83, самара"},
+    {"id": "branch_8870", "name": "пр.Кирова, 223А", "aliases": "пр.кирова, 223а, кирова 223а, самара"},
 ]
 _BRANCH_NAMES = {b["name"] for b in _BRANCHES}
 
@@ -356,3 +357,17 @@ def test_specialty_word_is_a_reception_not_a_procedure(via_button, gyn_synonym, 
     for slots in (last["entities"], last["decision"].get("entities") or {}, last["planned"]):
         assert str(slots.get("service_name") or "") != _GYN_UZI, slots
     assert "узи" not in last["text"].lower(), last["text"]
+
+
+@pytest.mark.parametrize("via_button", [False, True], ids=["text", "button"])
+def test_branch_without_the_target_is_not_booked(via_button, monkeypatch):
+    """Филиал есть в справочнике, но цели там по данным хода нет (адреса терапевта — без Кирова): ложного «да, можем записать»
+    и цены нет — бот показывает филиалы, где цель есть (К8)."""
+
+    reply = "Записаться к терапевту на Кирова 223А"
+    oracle = _Oracle({"target": ("терапевту",), "branch": ("Кирова 223А",)})
+    last = _dialog(monkeypatch, _press_then(reply) if via_button else [reply], oracle)[-1]
+    assert "booking" in oracle.asked
+    assert "можем записать" not in last["text"] and "Заявка на запись" not in last["text"], last["text"]
+    assert "Какой филиал" in last["text"], last["text"]
+    assert not last["entities"].get("branch_name"), last["entities"]

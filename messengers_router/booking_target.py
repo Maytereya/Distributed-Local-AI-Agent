@@ -28,9 +28,10 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Sequence
 
+from . import evidence_keys as ek
 from . import llm_runtime, turn_telemetry
 from .llm_mode_policy import fail_offer
-from .policies import REQUIRED_SLOTS
+from .policies import REQUIRED_SLOTS, build_branch_index, match_branch_hint
 from .prompt_registry import load_prompt_text
 from .runtime_config import config as _cfg
 from .services._turn_spans import timeout_for, words
@@ -310,6 +311,24 @@ async def names_reception_role(parse: BookingParse, services: "Services | None")
         return False
     roles = [*found.exact, *found.partial]
     return bool(roles) and all(role.reception for role in roles)
+
+
+def branch_outside_target(entities: dict[str, Any], evidence: Any) -> bool:
+    """Филиал записи не среди адресов цели по данным хода (адреса услуги или специальности, `ek.ADDRESS`) — в заявку не идёт (К8:
+    «Да, можем записать на УЗИ (Финютина)» там, где этого УЗИ нет; разметка читает филиал чаще, чем разрез по буквам). Адресов в
+    данных хода нет или врач уже выбран (его адреса — расписание) — проверить нечем, как было."""
+
+    branch = str(entities.get("branch_name") or "").strip()
+    if not branch or entities.get("doctor_name") or entities.get("doctor_id"):
+        return False
+    payload = evidence.get(ek.ADDRESS) if evidence is not None else None
+    raw = payload.get("addresses") if isinstance(payload, dict) else None
+    addresses = [str(item).strip() for item in raw if str(item or "").strip()] if isinstance(raw, list) else []
+    if not addresses:
+        return False
+    index = build_branch_index([{"id": f"target_{k}", "name": address} for k, address in enumerate(addresses)])
+    found, _name = match_branch_hint(branch, index)
+    return found is None
 
 
 def fail_offer_decision(decision: "RouteDecision") -> "RouteDecision":
