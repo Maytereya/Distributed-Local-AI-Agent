@@ -10,6 +10,8 @@
 Инварианты класса (принцип 1; решение 22.07 — «по ОМС» — честное «не нашёл»):
 - позиция с условием, которого нет в прайсе, не получает розничную цену — при любой границе её группы (условие внутри группы или
   LLM его оторвала) и в любом месте списка; соседние позиции — своими ценами (BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS);
+- условие — оплата по ОМС / ДМС / полису (суд отверг позицию и разметка пометила оплату страховкой) — перевод хода на оператора, цен
+  нет (решение владельца 28.10: цену по ДМС не называем вовсе, по ОМС — оперменеджер);
 - условие ни к одной услуге — у каждой позиции; вопрос без названия после цены («а сколько стоит по омс?») не берёт показанную строку —
   судья П2 по услуге контекста (BUG-2026-10-27-OMS-FOLLOWUP-PRICED);
 - слова вопроса о цене, которые LLM отметила уточнением («сколько стоит», «какая цена»), цену не снимают (гард их не видит);
@@ -40,7 +42,8 @@ from tests.test_turn_parse_t3 import _ROWS_MARKS
 
 PAY = QualifierKind.INSURANCE.value
 _CLARIFY = "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость."
-_CONDITION = re.compile(r"омс|полис|дмс", re.I)
+_CONDITION = re.compile(r"омс|полис|дмс|акции", re.I)
+_HANDOFF = "Стоимость и условия по ОМС и ДМС подскажет оператор — соединяю."
 _BASKET_MARK = "ответить на вопрос о ценах нескольких услуг"
 
 
@@ -62,7 +65,7 @@ class _Rows:
             picks = [
                 n for n, text in options
                 if text.split(" → ", 1)[-1].startswith(self.rows)
-                and not re.search(r"\[добавлено: «[^»]*(омс|полис|дмс)", text.split(" → ", 1)[0], re.I)
+                and not re.search(r"\[добавлено: «[^»]*(омс|полис|дмс|акции)", text.split(" → ", 1)[0], re.I)
             ]
             answer: dict = {"picks": picks}
         else:
@@ -120,31 +123,54 @@ _LIST_CASES = [
 
 
 @pytest.mark.parametrize(("reply", "phrases", "qualifier"), _LIST_CASES)
-def test_condition_takes_the_price_from_its_position_only(reply, phrases, qualifier, mini_prod_world, monkeypatch):  # noqa: F811
+def test_insurance_at_a_position_hands_the_turn_to_the_operator(reply, phrases, qualifier, mini_prod_world, monkeypatch):  # noqa: F811
+    """Решение владельца 28.10: цену по ОМС и ДМС называет оператор — суд условия отверг позицию, разметка пометила оплату страховкой:
+    перевод хода, цен в ответе нет (и у соседа: по ДМС цены не называем вовсе)."""
+
     of, words = qualifier
     oracle = SpansOracle(phrases, inner=_Rows(("Ферритин", "Глюкоза", "ТТГ")), qualifiers=[(of, words, PAY)])
     [turn], [row] = _run([reply], oracle, mini_prod_world, monkeypatch, _sid("list", reply, of))
-    named = "ТТГ" if "ТТГ" in reply else "Ферритин"
-    assert not _rub(turn["text"], named), turn["text"]
-    assert _rub(turn["text"], "Глюкоза"), turn["text"]
-    assert "Не распознал" in turn["text"] and words.lower() in turn["text"].lower(), turn["text"]  # словами пациента
-    assert row["tu_qualifiers"] == PAY
+    assert turn["handoff"] and not _priced(turn["text"]) and _HANDOFF in turn["text"], turn["text"]
+    assert row["tu_qualifiers"] == PAY and row["price_insurance"] == "basket"
+
+
+@pytest.mark.parametrize(("phrases", "of"), [(("ферритин", "глюкоза"), "ферритин"), (("ТТГ", "глюкоза"), "ТТГ")])  # сильная и слабая позиция
+def test_other_condition_takes_the_price_from_its_position_only(phrases, of, mini_prod_world, monkeypatch):  # noqa: F811
+    """Условие не про оплату («по акции»): позиция без цены — «Не распознал» словами пациента; соседняя — своей ценой; не перевод."""
+
+    reply = f"сколько стоит {of} по акции, глюкоза"
+    oracle = SpansOracle(phrases, inner=_Rows(("Ферритин", "Глюкоза", "ТТГ")), qualifiers=[(of, "по акции", "condition")])
+    [turn], [row] = _run([reply], oracle, mini_prod_world, monkeypatch, _sid("other", of))
+    named = "ТТГ" if of == "ТТГ" else "Ферритин"
+    assert not turn["handoff"] and not _rub(turn["text"], named) and _rub(turn["text"], "Глюкоза"), turn["text"]
+    assert "Не распознал" in turn["text"] and "по акции" in turn["text"].lower(), turn["text"]
+    assert "price_insurance" not in row
 
 
 def test_condition_on_the_whole_list_reaches_every_position(mini_prod_world, monkeypatch):  # noqa: F811
     oracle = SpansOracle(("ферритин", "глюкоза"), inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[(None, "по омс", PAY)])
     [turn], [row] = _run(["ферритин и глюкоза по омс сколько стоят"], oracle, mini_prod_world, monkeypatch, _sid("whole"))
-    assert not _priced(turn["text"]), turn["text"]
+    assert turn["handoff"] and not _priced(turn["text"]), turn["text"]
     assert row["tu_qualifiers_loose"] == PAY
 
 
 # --------------------------------------------------------------------------- одна услуга и вопрос после цены
 
 
-def test_one_service_with_a_condition_is_not_found(mini_prod_world, monkeypatch):  # noqa: F811
+def test_one_service_by_insurance_goes_to_the_operator(mini_prod_world, monkeypatch):  # noqa: F811
     oracle = SpansOracle(("ферритин",), inner=_Rows(("Ферритин",)), qualifiers=[("ферритин", "по омс", PAY)])
-    [turn], _rows = _run(["сколько стоит ферритин по омс"], oracle, mini_prod_world, monkeypatch, _sid("one"))
-    assert not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
+    [turn], [row] = _run(["сколько стоит ферритин по омс"], oracle, mini_prod_world, monkeypatch, _sid("one"))
+    assert turn["handoff"] and not _priced(turn["text"]) and _HANDOFF in turn["text"], turn["text"]
+    assert row["price_insurance"] == "one"
+
+
+def test_one_service_with_another_condition_is_not_found(mini_prod_world, monkeypatch):  # noqa: F811
+    """Условие не про оплату — как было: «не нашёл», без перевода."""
+
+    oracle = SpansOracle(("ферритин",), inner=_Rows(("Ферритин",)), qualifiers=[("ферритин", "по акции", "condition")])
+    [turn], [row] = _run(["сколько стоит ферритин по акции"], oracle, mini_prod_world, monkeypatch, _sid("one-other"))
+    assert not turn["handoff"] and not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
+    assert "price_insurance" not in row
 
 
 @pytest.mark.parametrize(("follow_up", "condition"), [("а сколько стоит по омс?", "по омс"), ("а сколько стоит по полису?", "по полису")])
@@ -155,8 +181,9 @@ def test_condition_after_a_price_does_not_take_the_shown_row(follow_up, conditio
     oracle = SpansOracle(("ферритин",), inner=_Rows(("Ферритин",)), qualifiers=[(None, condition, PAY)])
     (first, second), rows = _run(["сколько стоит ферритин", follow_up], oracle, mini_prod_world, monkeypatch, _sid("follow", follow_up))
     assert _rub(first["text"], "Ферритин"), first["text"]
-    assert not _priced(second["text"]) and "Не нашёл" in second["text"], second["text"]
+    assert second["handoff"] and not _priced(second["text"]) and _HANDOFF in second["text"], second["text"]
     assert rows[-1]["price_condition_followup"] is True and rows[-1]["p2_llm_judge"] == "not_found"
+    assert rows[-1]["price_insurance"] == "one"
 
 
 # --------------------------------------------------------------------------- встречные

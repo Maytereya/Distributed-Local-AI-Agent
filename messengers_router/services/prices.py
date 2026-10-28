@@ -198,6 +198,10 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
     # «ферритин по ОМС»), и «не нашёл для «ферритин»» читалось бы как «ферритина нет» — под `price_by_parse = on` без названия.
     phrase = "" if absent and _price_by_parse.enabled() else _shown_phrase(query_text)
     used = {**entities, "service_name_effective": phrase}
+    if absent and _price_by_parse.insurance_marked(query_text):
+        # Суд условия: «условия в строке нет», и разметка пометила оплату страховкой — цену по ОМС / ДМС называет оператор (решение
+        # владельца 28.10), а не «не нашёл».
+        return _insurance_handoff(used, "one")
     note = f"price_match_policy: {status}"
     if status == "unavailable" and not selection.names:
         return _service_fallback(
@@ -221,6 +225,19 @@ def _mark_missing(payload: dict[str, Any], missing: list[str], query: str) -> No
     addons = _qualifier_pool.addons(query)
     if addons:
         payload["qualifiers_missing_addon"] = [text for text in missing if text in addons]
+
+
+def _insurance_handoff(entities: dict[str, Any], where: str) -> dict[str, Any]:
+    """Перевод на оператора по цене ОМС / ДМС (решение владельца 28.10): цен в ответе нет."""
+
+    turn_telemetry.note(price_insurance=where)
+    return _service_fallback(
+        note="price_info: insurance_price",
+        handoff_message=handoff_message("insurance_price"),
+        entities=entities,
+        reason="insurance_price",
+        extra={"prices": [], "retail_prices": []},
+    )
 
 
 def _condition_followup(query: str, query_text: str, retail_rows: list[dict[str, Any]]) -> bool:
@@ -252,6 +269,7 @@ async def _multi_price_payload(
     if parse is not None:
         if not parse.is_list:
             return None
+        report: dict[str, Any] = {}
         positions, unrecognized = await basket_from_phrases(
             str(query or ""),
             parse.items,
@@ -259,7 +277,12 @@ async def _multi_price_payload(
             retail_rows,
             llm_allowed=choosing,
             journal=parse.status == turn_parse.ParseStatus.PICKED,
+            report=report,
         )
+        if report.get("judged_rejected") and _price_by_parse.insurance_marked(str(query or "")):
+            # Суд условия отверг позицию, а разметка пометила ОМС / ДМС: весь ход — оператору, без цен (решение владельца 28.10: по ДМС
+            # цены не называем вовсе, цену соседа пациент с полисом тоже примет за свою).
+            return _insurance_handoff(entities, "basket")
         # Сбой выбора под `basket_fail_unpriced` — итога нет: решение «складывать ли» не спрашиваем (`summed: False`).
         calculation = await basket_calc(str(query or ""), positions, retail_rows, llm_allowed=choosing and not failed_unpriced(positions))
         return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True, calculation=calculation)

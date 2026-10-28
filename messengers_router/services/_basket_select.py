@@ -450,6 +450,7 @@ async def basket_from_phrases(
     *,
     llm_allowed: bool = True,
     journal: bool = False,
+    report: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Корзина из фраз разбора хода (`turn_parse = on`, L-15b, шаг 5): позиции — фразы в порядке реплики.
 
@@ -476,6 +477,10 @@ async def basket_from_phrases(
     judged = {index for index, item in enumerate(items) if item.get("judge")}
     if judged:
         turn_telemetry.note(strong_phrase_guard="basket_fallback" if failed else ("basket_rows" if any(chosen.get(i) for i in judged) else "basket_not_found"))
+    if report is not None:  # позиции, отвергнутые по условию: суд не дал строк или условия нет в прайсе вовсе (вызывающий решает, переводить
+        # ли ход — ОМС / ДМС)
+        rejected = 0 if failed else sum(1 for index in judged if not chosen.get(index))
+        report["judged_rejected"] = rejected + sum(1 for item in items if item.get("unsatisfiable"))
     if journal and not failed:
         for index, fragment, _candidates in weak:
             phrase = _journal_fragment(fragment)
