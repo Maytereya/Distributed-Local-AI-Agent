@@ -12,12 +12,13 @@
   ответ кнопки «Нужно ли записываться» — фраза «без записи» при любом ответе судьи.
 * BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT — анти-залип считает нажатие другой кнопки с тем же вопросом «другой репликой
   пациента»: «Сколько стоит анализ» → «Цена анализа» дописывает «Похоже, мне не удаётся помочь… Перевести на оператора?», и
-  следующее «ферритин» судья читает согласием — перевод на оператора вместо цены.
+  следующее «ферритин» судья читает согласием — перевод на оператора вместо цены. Звено 1 исправлено классом (решение
+  владельца 28.10): нажатие листа не реплика — `router._maybe_offer_operator_on_repeat(pressed=True)` повтором его не считает;
+  звено 2 (оффер поверх вопроса, судья читает ответ на вопрос согласием) — на консилиуме.
   Инвариант: нажатие листа не засчитывается повтором — вопрос кнопки, заданный нажатием, не несёт оффера оператора.
 
 Конфиг — прод деплоя 19 (умолчания кода + 13 строк runbook §3). Через обработчик эндпоинта, срезы гейта; LLM — подделка
-настоящего типа: метки промптов, остальное — отказ соединения. Известные, ещё не закрытые провалы — xfail strict (чинить —
-по слову владельца).
+настоящего типа: метки промптов, остальное — отказ соединения.
 """
 
 from __future__ import annotations
@@ -155,15 +156,19 @@ def test_same_question_leaves_exist():
     assert ("menu.results.lookup", "menu.results.missing") in _SAME_QUESTION
 
 
-@pytest.mark.parametrize(
-    ("first", "second"),
-    [pytest.param(*pair, marks=pytest.mark.xfail(strict=True, reason="BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT")) for pair in _SAME_QUESTION],
-)
+@pytest.mark.parametrize(("first", "second"), _SAME_QUESTION)
 def test_second_leaf_with_same_question_is_not_a_repeat(first, second, monkeypatch):
     _, pressed = _dialog(monkeypatch, [_press(first), _press(second)], _RecordingLLM())
 
     assert _OFFER not in pressed["text"], pressed["text"]
     assert not pressed["offer_pending"]
+
+
+def test_name_after_two_price_leaves_is_not_a_transfer(monkeypatch):
+    # Что видел пациент: «Сколько стоит анализ» → «Цена анализа» → «ферритин» → «Соединяю с оператором по вашему запросу».
+    *_, named = _dialog(monkeypatch, [_press("menu.tests.price"), _press("menu.price.test"), "ферритин"], _RecordingLLM())
+
+    assert not named["handoff"], named["text"]
 
 
 @pytest.mark.parametrize("button_id", sorted(_ASKING))
