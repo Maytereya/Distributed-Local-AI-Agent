@@ -1,13 +1,17 @@
-"""Тему ответа на вопрос кнопки переклейка «без записи» после NLU не перебивает (STEP-2026-10-28-C6-WALKIN-BUTTON-TOPIC).
+"""Тему ответа на вопрос кнопки переклейки после NLU по буквам не перебивают (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
 
 Стенд деплоя 19 (`s19all_btn`): на листе «Подобрать анализы» тему ответа задаёт кнопка (`button_answer_topic = slot`, TEST_ASSIST),
 но гард после NLU (`policy_nonbookable_walkin`) спрашивает у LLM другое — без записи ли сама услуга, — получает «да, анализы» и
 переклеивает подбор в адреса: 4 хода из 4 — провал («подбор анализов подменён списком филиалов»). Тему от LLM-классификатора
 (`topic_by_llm`) гард уже не перебивает (STEP-2026-10-21-B-TOPIC-BY-LLM); тема кнопки — тот же смысл, не буквы.
 
-Инвариант класса: под `walkin_guard_button_topic = on` ход, тему которого задала кнопка, остаётся в теме кнопки — гард «без записи»
-его в адреса не переводит (в журнале хода `walkin_guard = button_topic`); та же реплика без кнопки и off — как было. Через
-обработчик эндпоинта, LLM — подделка настоящего типа.
+Та же карточка: когда гард отпустил тему, её следом перебивает П1 — совпадение реплики с каталогом по буквам
+(`test_assist_catalog_hit_is_price`, `understanding_list_is_price`) переклеивает подбор в цену ближайшей строки («комплексный
+анализ на ИППП» → «TORCH-инфекции — 3 800 руб.», чужая цена); на этом листе П1 и без гарда переклеивал 9 ходов (6 — провал).
+
+Инвариант класса: под `button_topic_firm = on` ход, тему которого задала кнопка, остаётся в теме кнопки — ни гард «без записи», ни
+П1 его не переклеивают (в журнале хода `button_topic_firm = walkin | p1`); подбор решает LLM по данным хода; та же реплика без
+кнопки и off — как было. Через обработчик эндпоинта, LLM — подделка настоящего типа.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ def _dialog(world_dir, monkeypatch, turns, *, switch: str) -> list[dict[str, Any
     from messengers_router.runtime_config import config as cfg
     from messengers_router.services import Services
 
-    session = f"walkin-guard-{switch}-{json.dumps(turns, ensure_ascii=False)}"
+    session = f"button-firm-{switch}-{json.dumps(turns, ensure_ascii=False)}"
     answers = {
         _FREE_MARK: json.dumps({"picks": [], "outcome": "answer"}),
         _WALKIN_MARK: json.dumps({"picks": [1], "outcome": "none"}),  # «анализы — без записи»
@@ -62,7 +66,7 @@ def _dialog(world_dir, monkeypatch, turns, *, switch: str) -> list[dict[str, Any
             "MR_CHOOSE_CACHE_TTL_S": 0,
             "MR_BUTTON_ANSWER_TOPIC": "slot",
             "MR_WALKIN_BY_LLM": "on",
-            "MR_WALKIN_GUARD_BUTTON_TOPIC": switch,
+            "MR_BUTTON_TOPIC_FIRM": switch,
         }.items():
             patch.setattr(cfg, key, value, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
@@ -83,11 +87,11 @@ def test_off_relabels_button_topic_to_addresses_as_before(reply, mini_prod_world
 
 
 @pytest.mark.parametrize("reply", _REPLIES)
-def test_on_keeps_the_button_topic(reply, mini_prod_world, monkeypatch):  # noqa: F811
+def test_on_walkin_guard_keeps_the_button_topic(reply, mini_prod_world, monkeypatch):  # noqa: F811
     tel = _dialog(mini_prod_world, monkeypatch, [(_BUTTON, GATEWAY_V1_TITLES[_BUTTON]), reply], switch="on")[1]["telemetry"]
     assert tel.get("nlu_topic_by_llm") == "button_answer", tel
     assert not _walkin_relabel(tel) and tel.get("tu_label_final") != "ADDRESS", tel
-    assert tel.get("walkin_guard") == "button_topic", tel
+    assert tel.get("button_topic_firm") == "walkin", tel
 
 
 @pytest.mark.parametrize("reply", _REPLIES)
@@ -95,4 +99,34 @@ def test_typed_question_without_button_is_untouched(reply, mini_prod_world, monk
     off = _dialog(mini_prod_world, monkeypatch, [reply], switch="off")[0]
     on = _dialog(mini_prod_world, monkeypatch, [reply], switch="on")[0]
     assert on["text"] == off["text"]
-    assert "walkin_guard" not in on["telemetry"], on["telemetry"]
+    assert "button_topic_firm" not in on["telemetry"], on["telemetry"]
+
+
+def _p1_relabel(tel: dict) -> bool:
+    return any(str(s).split(":")[0] in {"test_assist_catalog_hit_is_price", "understanding_list_is_price"} for s in tel.get("tu_relabel_src") or [])
+
+
+# Подбор, где реплика называет услугу каталога: П1 переклеивал её в цену по совпадению букв.
+_NAMED = ["анализ на ферритин", "общий анализ крови и ферритин"]
+
+
+@pytest.mark.parametrize("reply", _NAMED)
+def test_off_p1_relabels_button_topic_to_price_as_before(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    tel = _dialog(mini_prod_world, monkeypatch, [(_BUTTON, GATEWAY_V1_TITLES[_BUTTON]), reply], switch="off")[1]["telemetry"]
+    assert tel.get("nlu_topic_by_llm") == "button_answer", tel
+    assert _p1_relabel(tel) and tel.get("tu_label_final") == "PRICE", tel
+
+
+@pytest.mark.parametrize("reply", _NAMED)
+def test_on_p1_keeps_the_button_topic(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    tel = _dialog(mini_prod_world, monkeypatch, [(_BUTTON, GATEWAY_V1_TITLES[_BUTTON]), reply], switch="on")[1]["telemetry"]
+    assert not _p1_relabel(tel) and tel.get("tu_label_final") == "TEST_ASSIST", tel
+    assert tel.get("button_topic_firm") == "p1", tel
+
+
+@pytest.mark.parametrize("reply", _NAMED)
+def test_typed_named_service_without_button_is_untouched(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    off = _dialog(mini_prod_world, monkeypatch, [reply], switch="off")[0]
+    on = _dialog(mini_prod_world, monkeypatch, [reply], switch="on")[0]
+    assert on["text"] == off["text"]
+    assert "button_topic_firm" not in on["telemetry"], on["telemetry"]

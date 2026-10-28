@@ -1965,6 +1965,12 @@ def _relabel_test_assist_catalog_hit_as_price(
     if decision.label != "TEST_ASSIST":
         return decision
     flags = set(decision.flags or set())
+    if button_flow.topic_firm(flags):
+        # Подбор анализов задала кнопка: совпадение с каталогом по буквам тему не перебивает — названные анализы подбор находит
+        # по данным хода (`test_assist_answer`, с ценой строки), а не цена ближайшей строки (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
+        if "catalog_service_exact" in flags or (turn_understanding.acting() is not None and turn_understanding.acting().is_list):
+            turn_telemetry.note(button_topic_firm="p1")
+        return decision
     # Понимание хода (ход (б), шаг 1, `on`): список узнанных каталогом услуг — цена, как одна
     # узнанная услуга (П1). Вопрос о сроке сюда не доходит как цена: ему отвечает
     # `_maybe_readiness_reply` — срок из МИС или перевод (READINESS-AS-PRICE).
@@ -3007,10 +3013,10 @@ async def _apply_post_nlu_guardrails(
 
     # Тему хода решила LLM (`topic_by_llm`, ход (б), этап 4): детектор «без записи» её не перебивает — метка ADDRESS есть
     # и у LLM (STEP-2026-10-21-B-TOPIC-BY-LLM, g0716: список анализов «можно ли за один визит» уходил в адреса). Так же —
-    # тему кнопки под `walkin_guard_button_topic` (STEP-2026-10-28-C6-WALKIN-BUTTON-TOPIC).
-    keeps_button = walkin.guard_keeps_button_topic(decision.flags)
+    # тему кнопки под `button_topic_firm` (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
+    keeps_button = button_flow.topic_firm(decision.flags)
     if keeps_button and decision.label in {"APPOINTMENT", "TEST_ASSIST"} and detect_nonbookable_walkin_intent(user_text, state.last_entities):
-        turn_telemetry.note(walkin_guard="button_topic")
+        turn_telemetry.note(button_topic_firm="walkin")
     if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags and not keeps_button:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})

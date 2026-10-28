@@ -54,16 +54,6 @@ def enabled() -> bool:
     return str(getattr(_cfg, "MR_WALKIN_BY_LLM", "off") or "").strip().lower() == "on"
 
 
-def guard_keeps_button_topic(flags: Any) -> bool:
-    """`[MESSENGER_ROUTER] walkin_guard_button_topic = on` и тему хода задала кнопка (`button_answer_topic`): переклейка после
-    NLU в адреса её не перебивает — как тему от LLM (`topic_by_llm`). «Подобрать анализы» спрашивает, какие анализы сдать, а
-    вопрос задачи `walkin` — без записи ли сама услуга: «да, анализы — без записи» переводил подбор в список филиалов
-    (STEP-2026-10-28-C6-WALKIN-BUTTON-TOPIC). off — как было."""
-
-    on = str(getattr(_cfg, "MR_WALKIN_GUARD_BUTTON_TOPIC", "off") or "").strip().lower() == "on"
-    return on and "button_answer_topic" in set(flags or ())
-
-
 def decided(flags: Any) -> str | None:
     """Решение LLM этого хода по флагам: что без записи («анализы», «ЭКГ», «анализы и ЭКГ»), "" — не без записи, None —
     не спрашивали (или сбой)."""
