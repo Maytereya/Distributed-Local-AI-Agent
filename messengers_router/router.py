@@ -3006,8 +3006,12 @@ async def _apply_post_nlu_guardrails(
             state.last_entities.pop(k, None)
 
     # Тему хода решила LLM (`topic_by_llm`, ход (б), этап 4): детектор «без записи» её не перебивает — метка ADDRESS есть
-    # и у LLM (STEP-2026-10-21-B-TOPIC-BY-LLM, g0716: список анализов «можно ли за один визит» уходил в адреса).
-    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags:
+    # и у LLM (STEP-2026-10-21-B-TOPIC-BY-LLM, g0716: список анализов «можно ли за один визит» уходил в адреса). Так же —
+    # тему кнопки под `walkin_guard_button_topic` (STEP-2026-10-28-C6-WALKIN-BUTTON-TOPIC).
+    keeps_button = walkin.guard_keeps_button_topic(decision.flags)
+    if keeps_button and decision.label in {"APPOINTMENT", "TEST_ASSIST"} and detect_nonbookable_walkin_intent(user_text, state.last_entities):
+        turn_telemetry.note(walkin_guard="button_topic")
+    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags and not keeps_button:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         by_llm = None
