@@ -905,6 +905,25 @@ def test_button_card_section_counts_per_leaf_without_utterances():
     assert buttons.button_metrics(after, {}, labels, judged) is None  # прогон не по набору кнопок — раздела нет
 
 
+def test_button_card_compares_the_press_answer_per_leaf():
+    # Ответ на само нажатие — отдельный раздел карточки: регресс первого хода не виден в метриках второго
+    # (BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE). Без реплик, только счётчики и id.
+    from evalbench import buttons
+
+    def turn(tid, leaf, answer, handoff=False):
+        return {"id": tid, "set": "b", "button": leaf, "press": {"button": leaf, "answer": answer, "handoff": handoff}}
+
+    walkin = "Анализы выполняются без записи. СЕКРЕТНЫЙ ОТВЕТ"
+    before = [turn("g1", "menu.tests.booking_needed", walkin), turn("g2", "menu.tests.booking_needed", walkin), turn("g3", "menu.price.test", "Какой анализ?")]
+    after = [turn("g1", "menu.tests.booking_needed", "Филиалы"), turn("g2", "menu.tests.booking_needed", walkin), turn("g3", "menu.price.test", "Какой анализ?", handoff=True), {"id": "g4", "set": "b"}]
+    changes = buttons.press_changes(before, after)
+    assert changes == {"menu.tests.booking_needed": (1, 2, ["g1"]), "menu.price.test": (1, 1, ["g3"])}  # перевод — тоже изменение
+    text = "\n".join(buttons.render_press("d18", "d19", changes))
+    assert "Нужно ли записываться (`menu.tests.booking_needed`) | 2 | 1 | g1" in text and "| **в целом** | 3 | **2** |" in text
+    assert "СЕКРЕТНЫЙ" not in text
+    assert buttons.press_changes(before, before) == {"menu.tests.booking_needed": (0, 2, []), "menu.price.test": (0, 1, [])}
+
+
 def test_run_with_unreachable_live_llm_is_not_valid():
     """Обрыв связи с LLM посреди прогона (VPN) — прогон не мерил живую LLM: `valid=false` (25.10, `bkt_on`: 39 из 44 живых
     вызовов упали, а прогон был действителен). Тайм-аут ответа модели — поведение бота, прогон не портит."""

@@ -304,6 +304,23 @@ def test_failure_is_unavailable_and_not_cached(monkeypatch, exc):
     assert len(fake.calls) == 2
 
 
+@pytest.mark.parametrize("question", ["", "   ", "\n\t", None])
+def test_no_patient_words_ask_llm_nothing(llm, question):
+    # Ход нажатия листа меню: подпись — не содержание, слов пациента нет — судить нечего (BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE:
+    # судья walk-in на пустом сообщении снимал «без записи» с кнопки). Решения LLM нет — политика вызывающего, как без LLM.
+    chosen = _choose(question=question)
+
+    assert llm.calls == []
+    assert chosen.status is ch.Status.UNAVAILABLE and chosen.failed
+    assert chosen.reason == ch.NO_WORDS
+
+
+def test_any_patient_word_is_judged(llm):
+    # Встречная сторона: одно слово пациента — уже реплика, её судит LLM.
+    assert _choose(question="да").status is ch.Status.PICKED
+    assert len(llm.calls) == 1
+
+
 def test_broken_task_prompt_is_unavailable_not_a_crashed_turn(llm, monkeypatch):
     # Промпт на хосте (app_data/prompts) отредактировали и потеряли маркер данных: ход не падает,
     # решение — «LLM недоступна», дальше политика вызывающего.

@@ -275,6 +275,43 @@ def render_buttons(runs: list[tuple[dict[str, Any], dict[str, Any] | None]]) -> 
     return lines
 
 
+def press_changes(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> dict[str, tuple[int, int, list[str]]]:
+    """Ответ на само нажатие листа (`press`: текст и перевод) двух прогонов — по листам: (изменился, общих, id изменившихся).
+
+    Метрики и судья смотрят второй ход; регресс первого виден только здесь (BUG-2026-10-28-BOOKING-NEEDED-WALKIN-JUDGE: деплой 19
+    снял «без записи» с 29 нажатий «Нужно ли записываться» из 29, карточка этого не показала).
+    """
+
+    before = {(t.get("set"), t["id"]): t["press"] for t in left if t.get("press")}
+    out: dict[str, tuple[int, int, list[str]]] = {}
+    for turn in right:
+        press, key = turn.get("press"), (turn.get("set"), turn["id"])
+        if not press or key not in before:
+            continue
+        old = before[key]
+        same = str(old.get("answer") or "").strip() == str(press.get("answer") or "").strip() and bool(old.get("handoff")) == bool(press.get("handoff"))
+        leaf = str(press.get("button") or turn.get("button") or "")
+        changed, total, ids = out.get(leaf, (0, 0, []))
+        out[leaf] = (changed + (not same), total + 1, ids if same else [*ids, turn["id"]])
+    return out
+
+
+def render_press(left_name: str, right_name: str, changes: dict[str, tuple[int, int, list[str]]]) -> list[str]:
+    """Раздел карточки «Ответ на нажатие листа» — только счётчики и id, без реплик."""
+
+    if not changes:
+        return []
+    lines = ["", f"## Ответ на нажатие листа: {right_name} против {left_name}", "", "| Лист | нажатий | ответ изменился | id |", "|---|---|---|---|"]
+    order = sorted(changes, key=lambda leaf: list(GATEWAY_CAPTIONS).index(leaf) if leaf in GATEWAY_CAPTIONS else 99)
+    for leaf in order:
+        changed, total, ids = changes[leaf]
+        lines.append(f"| {GATEWAY_CAPTIONS.get(leaf, leaf)} (`{leaf}`) | {total} | {changed} | " + ", ".join(ids[:8]) + (" …" if len(ids) > 8 else "") + " |")
+    changed = sum(c for c, _, _ in changes.values())
+    total = sum(t for _, t, _ in changes.values())
+    lines.append(f"| **в целом** | {total} | **{changed}** | |")
+    return lines
+
+
 # --- судья ---------------------------------------------------------------------------------------------------------
 
 JUDGE_INSTRUCTIONS = """\

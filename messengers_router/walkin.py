@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import llm_runtime, turn_telemetry
-from .choice import Option, Status, Task, choose
+from .choice import NO_WORDS, Option, Status, Task, choose
 from .runtime_config import config as _cfg
 
 TASK = Task(name="walkin", max_picks=2, outcomes=("booking", "other"), num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
@@ -74,9 +74,11 @@ async def service(user_text: str, *, site: str) -> str | None:
     spent_before = llm_runtime.turn_decisions_spent()
     picked = await choose(TASK, user_text, _OPTIONS)
     if picked.failed:
-        # Сбой — решает детектор, как было: лимит решений хода не тратится.
+        # Сбой или слов пациента нет (ход нажатия кнопки, `choice.NO_WORDS`) — решает детектор, как было: лимит решений хода не
+        # тратится.
         spent = llm_runtime.turn_decisions_spent() > spent_before
-        turn_telemetry.note(walkin_llm="failed", walkin_llm_site=site, walkin_llm_refund=int(spent and llm_runtime.refund_turn_decision()))
+        outcome = picked.reason if picked.reason == NO_WORDS else "failed"
+        turn_telemetry.note(walkin_llm=outcome, walkin_llm_site=site, walkin_llm_refund=int(spent and llm_runtime.refund_turn_decision()))
         return None
     if picked.status is Status.PICKED:
         ids = [o.id for o in _OPTIONS if o.id in picked.ids]
