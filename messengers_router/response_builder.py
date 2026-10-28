@@ -287,8 +287,12 @@ def _qualifiers_partly(text: str, payload: dict[str, Any]) -> str:
         return text
     first, sep, rest = str(text).partition("\n")
     if first.startswith(("По услуге «", "По запросу «")) and first.rstrip().endswith(":"):
-        return f"{PRICED_PARTLY_HEADING}{sep}{rest}"
-    return f"{PRICED_PARTLY_HEADING}\n{text}"  # ответ одной строкой («Ферритин — 530 руб.») — без своего заголовка
+        text = f"{PRICED_PARTLY_HEADING}{sep}{rest}"
+    else:
+        text = f"{PRICED_PARTLY_HEADING}\n{text}"  # ответ одной строкой («Ферритин — 530 руб.») — без своего заголовка
+    # Сопутствующая услуга без своей строки («под наркозом»): цена процедуры — без неё, её стоимость — у оператора (решение 27.10 п. 12).
+    addons = [str(item) for item in payload.get("qualifiers_missing_addon") or [] if str(item).strip()]
+    return text + "".join(f"\n\n«{item}» — стоимость уточнит оператор." for item in addons)
 
 
 def build_price_response(

@@ -38,8 +38,9 @@ _QUALIFIER = "количественным методом"
 class _Rows:
     """Выбор строк — строки с началом названия «Ферритин»; `in_rows` — заданные отметки (None — без поля); `prompts` — запросы выбора."""
 
-    def __init__(self, in_rows: list[bool] | None) -> None:
+    def __init__(self, in_rows: list[bool] | None, prefix: str = "Ферритин") -> None:
         self.in_rows = in_rows
+        self.prefix = prefix
         self.prompts: list[str] = []
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
@@ -48,23 +49,33 @@ class _Rows:
             raise ConnectionError("тест: LLM недоступна для этого места")
         self.prompts.append(prompt)
         options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
-        picks = [n for n, text in options if text.split(" → ", 1)[-1].startswith("Ферритин")]
+        picks = [n for n, text in options if text.split(" → ", 1)[-1].startswith(self.prefix)]
         answer: dict = {"picks": picks, "reason": "none", "search_terms": []}
         if self.in_rows is not None and _BLOCK in prompt:
             answer["in_rows"] = self.in_rows
         return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
 
-def _run(rows: _Rows, world, monkeypatch, session: str, *, marks_on: bool = True, qualifiers=((_PHRASE, _QUALIFIER, "method"),)) -> tuple[dict, dict]:
+def _run(
+    rows: _Rows,
+    world,
+    monkeypatch,
+    session: str,
+    *,
+    marks_on: bool = True,
+    qualifiers=((_PHRASE, _QUALIFIER, "method"),),
+    reply: str = _REPLY,
+    phrase: str = _PHRASE,
+) -> tuple[dict, dict]:
     from messengers_router.runtime_config import config as cfg
 
     _deploy(monkeypatch)
     keep_llm_breaker_closed(monkeypatch)
     monkeypatch.setattr(cfg, "MR_POSITION_QUALIFIERS", "on", raising=False)
     monkeypatch.setattr(cfg, "MR_QUALIFIER_MARKS", "on" if marks_on else "off", raising=False)
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle((_PHRASE,), inner=rows, qualifiers=list(qualifiers)))
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle((phrase,), inner=rows, qualifiers=list(qualifiers)))
     with ev_world.FrozenWorld(world, "day") as frozen:
-        [turn] = run_dialog([_REPLY], session)
+        [turn] = run_dialog([reply], session)
         telemetry = [row for row in frozen.telemetry if row.get("kind", "turn") == "turn"]
         attempts = list(frozen.net.attempts)
     assert attempts == []
@@ -107,6 +118,25 @@ def test_payment_is_not_marked_here(mini_prod_world, monkeypatch):  # noqa: F811
     rows = _Rows([False])
     _run(rows, mini_prod_world, monkeypatch, "qm-pay", qualifiers=())
     assert rows.prompts and not any(_BLOCK in prompt for prompt in rows.prompts)
+
+
+def test_addon_without_its_row_is_priced_by_the_operator(mini_prod_world, monkeypatch):  # noqa: F811
+    """Сопутствующая услуга («под наркозом») без своей строки: цена процедуры — с заголовком «в таком виде нет», стоимость наркоза —
+    у оператора (решение 20.10 `4cec16e`, 27.10 п. 12: наркоз — вторая позиция; строки нет — «уточнит оператор»)."""
+
+    rows = _Rows([False], prefix="Эзофагогастродуоденоскопия")
+    phrase = "ФГДС под наркозом"
+    turn, _row = _run(
+        rows, mini_prod_world, monkeypatch, "qm-addon", reply="сколько стоит ФГДС под наркозом", phrase=phrase,
+        qualifiers=((phrase, "под наркозом", "addon"),),
+    )
+    assert turn["text"].startswith(_PARTLY) and re.search(r"Эзофагогастродуоденоскопия[^\n]*— 5 100 руб", turn["text"]), turn["text"]
+    assert "«под наркозом» — стоимость уточнит оператор." in turn["text"], turn["text"]
+
+
+def test_method_without_its_row_has_no_operator_line(mini_prod_world, monkeypatch):  # noqa: F811
+    turn, _row = _run(_Rows([False]), mini_prod_world, monkeypatch, "qm-method-noline")
+    assert "стоимость уточнит оператор" not in turn["text"], turn["text"]
 
 
 # --------------------------------------------------------------------------- контракт `choose()`

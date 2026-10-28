@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from .. import shown_context, turn_parse, turn_telemetry
-from . import _price_by_parse
+from . import _price_by_parse, _qualifier_pool
 from ..policies import handoff_message
 from ..text_templates import PRICE_CLARIFY_NAME_TEXT, price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
@@ -209,6 +209,18 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
         )
     text = price_not_found_text(phrase) if status == "none_fit" else price_names_without_prices_text(phrase, selection.names)
     return {"service_name": phrase, "prices": [], "retail_prices": [], "doctors": [], "clarify_text": text, "note": note, "entities_used": used}
+
+
+def _mark_missing(payload: dict[str, Any], missing: list[str], query: str) -> None:
+    """Уточнения, которых выбор строки не нашёл (этап 4), — в ответ: заголовок «в таком виде нет»; сопутствующая услуга («под
+    наркозом») — ещё и «стоимость уточнит оператор» (`qualifiers_missing_addon`)."""
+
+    if not missing:
+        return
+    payload["qualifiers_missing"] = list(missing)
+    addons = _qualifier_pool.addons(query)
+    if addons:
+        payload["qualifiers_missing_addon"] = [text for text in missing if text in addons]
 
 
 def _payment_payload(query: str, entities: dict[str, Any]) -> dict[str, Any] | None:
@@ -824,8 +836,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
                 "note": "price_info: price_llm_select",
             }
         payload["entities_used"] = {**entities, "service_name_effective": name}
-        if missing:
-            payload["qualifiers_missing"] = list(missing)
+        _mark_missing(payload, missing, str(query or ""))
         return payload
 
     shown_before = None if doctor_id else _rows_shown_before(str(query or ""), retail_rows_clean)
@@ -1020,8 +1031,7 @@ async def service_bundle_info(
         llm_payload = _llm_family_payload(_llm_selection_service_name(query_text, rows, reply=str(query or "")), rows)
         llm_payload["top_n_applied"] = top_limit
         llm_payload["entities_used"] = entities
-        if missing:
-            llm_payload["qualifiers_missing"] = list(missing)
+        _mark_missing(llm_payload, missing, str(query or ""))
         return llm_payload
 
     llm_rows: list[dict[str, Any]] | None = [family_row] if family_row is not None else _rows_shown_before(str(query or ""), retail_rows)
@@ -1165,8 +1175,7 @@ async def service_bundle_info(
         out["service_name"] = service_name
         out["llm_selected"] = True
         out["entities_used"] = {**entities, "service_name_effective": service_name}
-        if missing:
-            out["qualifiers_missing"] = list(missing)
+        _mark_missing(out, missing, str(query or ""))
 
     compound_payload = _build_compound_price_clarify_payload(
         query_text=query_text,

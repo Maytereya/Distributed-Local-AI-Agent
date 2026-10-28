@@ -77,6 +77,20 @@ def to_mark(question: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(q.text for q in parse.items[0].qualifiers if q.kind != turn_parse.QualifierKind.PAYMENT))
 
 
+def addons(question: str) -> frozenset[str]:
+    """Сопутствующие услуги (вид `addon`: «под наркозом», «с седацией») единственной позиции разбора этой реплики — их ненайденная
+    строка не «другая услуга», а отдельная цена: «стоимость уточнит оператор» (решение 20.10 `4cec16e`, 27.10 п. 12)."""
+
+    if not marks_enabled():
+        return frozenset()
+    from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
+
+    parse = turn_understanding.parse_for(question)
+    if parse is None or not parse.decided or len(parse.items) != 1:
+        return frozenset()
+    return frozenset(q.text for q in parse.items[0].qualifiers if q.kind == turn_parse.QualifierKind.ADDON)
+
+
 def note_missing(missing: Sequence[str]) -> tuple[str, ...]:
     """Ненайденные уточнения выбора — в телеметрию хода (`price_qual_missing`, число) и вызывающему."""
 
