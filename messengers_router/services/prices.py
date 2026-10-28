@@ -223,19 +223,15 @@ def _mark_missing(payload: dict[str, Any], missing: list[str], query: str) -> No
         payload["qualifiers_missing_addon"] = [text for text in missing if text in addons]
 
 
-def _payment_payload(query: str, entities: dict[str, Any]) -> dict[str, Any] | None:
-    """Условие оплаты на ходе (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2): LLM разметки отметила «по ОМС / ДМС / полису»
-    у единственной позиции или ни к одной («а сколько стоит по омс?» после цены — BUG-2026-10-27-OMS-FOLLOWUP-PRICED). Прайс МИС —
-    розничный, цену по ОМС он не отвечает: исход суда условия «условия нет» (`qualifier_absent` → «не нашёл»), без суда — 0
-    решений LLM, раньше корзины и «контекста = показанное». Цена попутно (запись, карточка врача) — не трогается. Иначе None."""
+def _condition_followup(query: str, query_text: str, retail_rows: list[dict[str, Any]]) -> bool:
+    """Короткий вопрос после цены с условием, которого нет в прайсе («а сколько стоит по омс?» — BUG-2026-10-27-OMS-FOLLOWUP-PRICED):
+    разметка хода отметила уточнение ни к одной услуге (`position_qualifiers = on`), а гард П2 видит в реплике слово вне прайса.
+    Показанная строка («контекст = показанное») такой вопрос не отвечает — ход идёт к судье П2 по услуге контекста."""
 
-    if not entities.get("__price_question"):
-        return None
-    where = _price_by_parse.payment_condition(str(query or ""))
-    if not where:
-        return None
-    turn_telemetry.note(price_payment=where)
-    return _match_policy_payload(PriceSelection(rows=(), status="none_fit", reason="qualifier_absent"), str(query or ""), entities)
+    if not _price_by_parse.loose_qualifier(str(query or "")) or not query_has_unsatisfiable_qualifier(query_text, retail_rows):
+        return False
+    turn_telemetry.note(price_condition_followup=True)
+    return True
 
 
 async def _multi_price_payload(
@@ -729,9 +725,6 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     clarify = _parse_failed_clarify(query, entities)
     if clarify is not None:
         return clarify
-    payment = _payment_payload(query, entities)
-    if payment is not None:
-        return payment
     # retail prices: city-level regionId в /priceByRegion/{cityRegionId}
     try:
         price_rows = await _load_with_retry(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
@@ -839,7 +832,8 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         _mark_missing(payload, missing, str(query or ""))
         return payload
 
-    shown_before = None if doctor_id else _rows_shown_before(str(query or ""), retail_rows_clean)
+    followup = _condition_followup(str(query or ""), query_text, retail_rows_clean)
+    shown_before = None if doctor_id or followup else _rows_shown_before(str(query or ""), retail_rows_clean)
     if shown_before:
         if len(shown_before) == 1:
             payload = _llm_answer(shown_before)
@@ -970,8 +964,6 @@ async def service_bundle_info(
             "entities_used": entities,
         }
     clarify = None if family_row is not None else _parse_failed_clarify(query, entities)
-    if clarify is None and family_row is None:
-        clarify = _payment_payload(query, entities)  # раньше «контекста = показанное»: «а по омс?» не берёт показанную строку
     if clarify is not None:
         clarify["top_n_applied"] = top_limit
         return clarify
@@ -1034,7 +1026,10 @@ async def service_bundle_info(
         _mark_missing(llm_payload, missing, str(query or ""))
         return llm_payload
 
-    llm_rows: list[dict[str, Any]] | None = [family_row] if family_row is not None else _rows_shown_before(str(query or ""), retail_rows)
+    followup = family_row is None and _condition_followup(str(query or ""), query_text, retail_rows)
+    llm_rows: list[dict[str, Any]] | None = (
+        [family_row] if family_row is not None else None if followup else _rows_shown_before(str(query or ""), retail_rows)
+    )
     if llm_rows is not None and len(llm_rows) > 1:  # показанные варианты — те же, что видел пациент
         shown_payload = _llm_family_payload(entity_service_name or str(llm_rows[0].get("serviceName") or ""), llm_rows)
         shown_payload.update(top_n_applied=top_limit, entities_used=entities, note="service_bundle_info: shown_before")

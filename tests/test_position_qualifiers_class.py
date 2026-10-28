@@ -1,20 +1,23 @@
-"""Уточнения позиции, этап 2 — условие оплаты (DESIGN-2026-10-28-POSITION-QUALIFIERS; `position_qualifiers = on`) — через
+"""Уточнения позиции, этап 2 — условие у позиции (DESIGN-2026-10-28-POSITION-QUALIFIERS; `position_qualifiers = on`) — через
 обработчик эндпоинта, мини-прод, день, сеть закрыта.
 
 Разметка хода `turn_spans` отвечает и полем `qualifiers`: у каждой услуги её уточнения (номера слов, вид) или «ни к одной»
-(`of = 0`). Класс: «по ОМС / полису / ДМС» у позиции или на весь вопрос — прайс розничный, такой цены он не отвечает.
+(`of = 0`). Уточнение, которое LLM отнесла к позиции, — в `ParsedPhrase.beside` (раньше его заполнял только генератор окон по
+соседству слов), дальше — прежний механизм «слово — повод спросить, вердикт — LLM»: гард П2 по словарю прайса и суд условия в том же
+вызове корзины (правило 5 её промпта). Прямого «оплата → без цены» нет: карточка 28.10 (`c3ton_*`) — живая LLM разметки звала
+«оплатой» и «цену», и «платно», и «сертификат» (−20 верных цен).
 
-Инварианты класса (принцип 1: дезинформация ценой хуже уточнения; решение 22.07 — «по ОМС» — честное «не нашёл»):
-- позиция с условием оплаты не получает розничную цену — при любой границе её группы (условие внутри группы или LLM его
-  оторвала) и в любом месте списка; соседние позиции без условия — своими ценами (BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS);
-- условие оплаты ни к одной услуге (на весь список; вопрос без названия после цены — BUG-2026-10-27-OMS-FOLLOWUP-PRICED) — на
-  этом ходе цен нет вовсе; показанные раньше строки его не обходят;
-- без суда LLM: условие оплаты решает разметка (0 новых решений, выбор строки не зовётся);
-- встречные: уточнение другого вида и вопрос без уточнений — цены как были; выключатель off — разметка без поля, ответ прежний;
-  разметка недоступна — как было («Уточните название»).
+Инварианты класса (принцип 1; решение 22.07 — «по ОМС» — честное «не нашёл»):
+- позиция с условием, которого нет в прайсе, не получает розничную цену — при любой границе её группы (условие внутри группы или
+  LLM его оторвала) и в любом месте списка; соседние позиции — своими ценами (BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS);
+- условие ни к одной услуге — у каждой позиции; вопрос без названия после цены («а сколько стоит по омс?») не берёт показанную строку —
+  судья П2 по услуге контекста (BUG-2026-10-27-OMS-FOLLOWUP-PRICED);
+- слова вопроса о цене, которые LLM отметила уточнением («сколько стоит», «какая цена»), цену не снимают (гард их не видит);
+- встречные: вопрос без уточнений — цены как были; выключатель off — разметка без поля, ответ прежний; разметка недоступна — как было.
 
-Подделка LLM — оракул разметки (`tests/spans_oracle.py`, поле `qualifiers`) поверх оракула выбора строк (`test_turn_parse_t3._Oracle`:
-строки с заданным началом названия), прочие места — «недоступна»; предохранитель LLM не размыкается.
+Подделка LLM — оракул разметки (`tests/spans_oracle.py`, поле `qualifiers`) поверх суда: корзина отвергает позицию с «[добавлено:
+«… омс / полис / дмс»]» (правило 5, как `test_p2_strong_phrase_basket_class._RuleFive`), выбор одной строки на реплике с таким условием —
+«условия нет» (как `test_qualifier_round_two_class._Judge`); прочие строки — с заданным началом названия; остальное — «недоступна».
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ import json
 import re
 
 import pytest
+from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
@@ -32,24 +36,42 @@ from messengers_router.turn_parse import QualifierKind
 from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
-from tests.test_turn_parse_t3 import _ROWS_MARKS, _Oracle
+from tests.test_turn_parse_t3 import _ROWS_MARKS
 
 PAY = QualifierKind.INSURANCE.value
 _CLARIFY = "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость."
+_CONDITION = re.compile(r"омс|полис|дмс", re.I)
+_BASKET_MARK = "ответить на вопрос о ценах нескольких услуг"
 
 
-class _Rows(_Oracle):
-    """Выбор строк — строки с началом названия `rows`; счётчик вызовов выбора (`rows_calls`)."""
+class _Rows:
+    """Суд и выбор строк: корзина — варианты с началом названия `rows`, кроме позиций с «[добавлено: «… условие»]»; одна строка — на
+    реплике с условием пусто и «условия нет», иначе строки с началом `rows`. `rows_calls` — вызовы выбора."""
 
     def __init__(self, rows: tuple[str, ...]) -> None:
-        super().__init__((), rows)
+        self.rows = rows
         self.rows_calls = 0
 
-    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+    async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
-        if any(mark in seen for mark in _ROWS_MARKS):
-            self.rows_calls += 1
-        return await super().generate(prompt=prompt, system=system, **kwargs)
+        if not any(mark in seen for mark in _ROWS_MARKS):
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        self.rows_calls += 1
+        options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        if _BASKET_MARK in seen:
+            picks = [
+                n for n, text in options
+                if text.split(" → ", 1)[-1].startswith(self.rows)
+                and not re.search(r"\[добавлено: «[^»]*(омс|полис|дмс)", text.split(" → ", 1)[0], re.I)
+            ]
+            answer: dict = {"picks": picks}
+        else:
+            question = re.search(r"пациента: «(.*?)»", prompt, re.S)
+            if question and _CONDITION.search(question.group(1)):
+                answer = {"picks": [], "reason": "qualifier_absent", "search_terms": []}
+            else:
+                answer = {"picks": [n for n, text in options if text.split(" → ", 1)[-1].startswith(self.rows)], "reason": "none", "search_terms": []}
+        return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
 
 def _run(turns, oracle: SpansOracle, world, monkeypatch, session: str, *, on: bool = True) -> tuple[list[dict], list[dict]]:
@@ -81,7 +103,7 @@ def _sid(*parts: str) -> str:
     return "pq-" + "-".join(re.sub(r"\W+", "_", part)[-16:] for part in parts)
 
 
-# --------------------------------------------------------------------------- позиция списка с условием оплаты
+# --------------------------------------------------------------------------- позиция списка с условием
 
 # (реплика, фразы разметки, уточнение (фраза, слова)) — условие оторвано от названия (как живая LLM в 59 из 82 случаев свипа П2) или
 # внутри группы (правило 3 промпта), в начале и в конце списка, ОМС / полис / ДМС.
@@ -94,65 +116,63 @@ _LIST_CASES = [
 
 
 @pytest.mark.parametrize(("reply", "phrases", "qualifier"), _LIST_CASES)
-def test_payment_takes_the_price_from_its_position_only(reply, phrases, qualifier, mini_prod_world, monkeypatch):  # noqa: F811
+def test_condition_takes_the_price_from_its_position_only(reply, phrases, qualifier, mini_prod_world, monkeypatch):  # noqa: F811
     of, words = qualifier
     oracle = SpansOracle(phrases, inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[(of, words, PAY)])
     [turn], [row] = _run([reply], oracle, mini_prod_world, monkeypatch, _sid("list", reply, of))
     assert not _rub(turn["text"], "Ферритин"), turn["text"]
     assert _rub(turn["text"], "Глюкоза"), turn["text"]
-    assert "Не распознал" in turn["text"] and words.lower() in turn["text"].lower(), turn["text"]
+    assert "Не распознал" in turn["text"] and words.lower() in turn["text"].lower(), turn["text"]  # словами пациента
     assert row["tu_qualifiers"] == PAY
 
 
-def test_payment_on_the_whole_list_leaves_no_price(mini_prod_world, monkeypatch):  # noqa: F811
+def test_condition_on_the_whole_list_reaches_every_position(mini_prod_world, monkeypatch):  # noqa: F811
     oracle = SpansOracle(("ферритин", "глюкоза"), inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[(None, "по омс", PAY)])
     [turn], [row] = _run(["ферритин и глюкоза по омс сколько стоят"], oracle, mini_prod_world, monkeypatch, _sid("whole"))
-    assert not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
-    assert row["price_payment"] == "loose" and row["tu_qualifiers_loose"] == PAY
-    assert oracle.inner.rows_calls == 0  # без суда: условие оплаты решила разметка
+    assert not _priced(turn["text"]), turn["text"]
+    assert row["tu_qualifiers_loose"] == PAY
 
 
 # --------------------------------------------------------------------------- одна услуга и вопрос после цены
 
 
-def test_one_service_with_payment_is_not_found_without_a_judge(mini_prod_world, monkeypatch):  # noqa: F811
+def test_one_service_with_a_condition_is_not_found(mini_prod_world, monkeypatch):  # noqa: F811
     oracle = SpansOracle(("ферритин",), inner=_Rows(("Ферритин",)), qualifiers=[("ферритин", "по омс", PAY)])
-    [turn], [row] = _run(["сколько стоит ферритин по омс"], oracle, mini_prod_world, monkeypatch, _sid("one"))
+    [turn], _rows = _run(["сколько стоит ферритин по омс"], oracle, mini_prod_world, monkeypatch, _sid("one"))
     assert not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
-    assert row["price_payment"] == "position" and oracle.inner.rows_calls == 0
 
 
 @pytest.mark.parametrize(("follow_up", "condition"), [("а сколько стоит по омс?", "по омс"), ("а сколько стоит по полису?", "по полису")])
-def test_payment_after_a_price_does_not_take_the_shown_row(follow_up, condition, mini_prod_world, monkeypatch):  # noqa: F811
-    """BUG-2026-10-27-OMS-FOLLOWUP-PRICED: второй ход — условие без названия; показанная строка («контекст = показанное»)
-    его не обходит."""
+def test_condition_after_a_price_does_not_take_the_shown_row(follow_up, condition, mini_prod_world, monkeypatch):  # noqa: F811
+    """BUG-2026-10-27-OMS-FOLLOWUP-PRICED: второй ход — условие без названия; показанная строка («контекст = показанное») его не
+    обходит — судья П2 по услуге контекста."""
 
     oracle = SpansOracle(("ферритин",), inner=_Rows(("Ферритин",)), qualifiers=[(None, condition, PAY)])
     (first, second), rows = _run(["сколько стоит ферритин", follow_up], oracle, mini_prod_world, monkeypatch, _sid("follow", follow_up))
     assert _rub(first["text"], "Ферритин"), first["text"]
     assert not _priced(second["text"]) and "Не нашёл" in second["text"], second["text"]
-    assert rows[-1]["price_payment"] == "loose"
+    assert rows[-1]["price_condition_followup"] is True and rows[-1]["p2_llm_judge"] == "not_found"
 
 
 # --------------------------------------------------------------------------- встречные
+
+
+@pytest.mark.parametrize("of", ["ферритин", None])
+@pytest.mark.parametrize("words", ["сколько стоит", "какая цена"])
+def test_price_words_marked_as_a_qualifier_keep_the_prices(words, of, mini_prod_world, monkeypatch):  # noqa: F811
+    """Класс карточки 28.10: живая LLM разметки звала «оплатой» слова вопроса о цене — цену это не снимает."""
+
+    reply = f"{words} ферритин и глюкоза" if words == "сколько стоит" else f"ферритин и глюкоза {words}"
+    oracle = SpansOracle(("ферритин", "глюкоза"), inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[(of, words, PAY)])
+    [turn], _rows = _run([reply], oracle, mini_prod_world, monkeypatch, _sid("words", words, str(of)))
+    assert _rub(turn["text"], "Ферритин") and _rub(turn["text"], "Глюкоза"), turn["text"]
 
 
 def test_list_without_qualifiers_keeps_both_prices(mini_prod_world, monkeypatch):  # noqa: F811
     oracle = SpansOracle(("ферритин", "глюкоза"), inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[])
     [turn], [row] = _run(["сколько стоит ферритин и глюкоза"], oracle, mini_prod_world, monkeypatch, _sid("plain"))
     assert _rub(turn["text"], "Ферритин") and _rub(turn["text"], "Глюкоза"), turn["text"]
-    assert "price_payment" not in row and "tu_qualifiers" not in row
-
-
-def test_other_kinds_do_not_take_the_price(mini_prod_world, monkeypatch):  # noqa: F811
-    """Уточнение не об оплате внутри группы («из вены» у ферритина) — не повод убирать цену: этап 2 решает только оплату."""
-
-    oracle = SpansOracle(
-        ("ферритин из вены", "глюкоза"), inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[("ферритин из вены", "из вены", "material")]
-    )
-    [turn], [row] = _run(["сколько стоит ферритин из вены и глюкоза"], oracle, mini_prod_world, monkeypatch, _sid("material"))
-    assert _rub(turn["text"], "Глюкоза") and "price_payment" not in row, turn["text"]
-    assert row["tu_qualifiers"] == "material"
+    assert "tu_qualifiers" not in row and "price_condition_followup" not in row
 
 
 def test_off_asks_the_old_prompt_and_answers_as_before(mini_prod_world, monkeypatch):  # noqa: F811
@@ -171,7 +191,7 @@ def test_off_asks_the_old_prompt_and_answers_as_before(mini_prod_world, monkeypa
     [turn], [row] = _run(["сколько стоит ферритин и глюкоза"], oracle, mini_prod_world, monkeypatch, _sid("off"), on=False)
     assert prompts and not any('"qualifiers"' in text for text in prompts)
     assert _rub(turn["text"], "Ферритин") and _rub(turn["text"], "Глюкоза")
-    assert "price_payment" not in row
+    assert "tu_qualifiers" not in row
 
 
 def test_markup_down_is_as_before(mini_prod_world, monkeypatch):  # noqa: F811
@@ -231,7 +251,7 @@ def test_inside_loose_and_broken_qualifiers(monkeypatch):
     ferritin, glucose = parse.items
     assert parse.status == "picked" and [i.text for i in parse.items] == ["ферритин по омс", "глюкоза"]
     assert [(q.kind, q.text, q.inside) for q in ferritin.qualifiers] == [(QualifierKind.INSURANCE, "по омс", True)]
-    assert ferritin.beside == "" and glucose.qualifiers == ()
+    assert ferritin.beside == "срочно" and glucose.beside == "срочно" and glucose.qualifiers == ()  # ни к одной — у каждой позиции
     assert [(q.kind, q.text) for q in parse.loose] == [(QualifierKind.CONDITION, "срочно")]
 
 

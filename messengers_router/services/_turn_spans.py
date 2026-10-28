@@ -316,6 +316,10 @@ async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[
     items = await asyncio.to_thread(
         lambda: [_item(reply, toks[i], toks[j], catalog, by_item.get(k, ())) for k, (i, j) in enumerate(spans)]
     )
+    if loose and items:
+        # Уточнение ни к одной услуге («ферритин и глюкоза по омс») относится ко всем: у каждой позиции — в `beside`, к суду условия.
+        extra = " ".join(q.text for q in loose)
+        items = [replace(item, beside=" ".join(part for part in (item.beside, extra) if part)) for item in items]
     return _with_ms(_result(reply, status, "llm", len(toks), items, loose), started)
 
 
