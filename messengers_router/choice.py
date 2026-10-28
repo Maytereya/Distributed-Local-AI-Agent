@@ -235,7 +235,8 @@ def render(task: Task, question: str, options: Sequence[Option], *, asked: str =
         user = (
             f"{user}\n\nУточнения пациента к услуге:\n{listed}\n"
             '"in_rows" — по каждому уточнению по порядку: true, если оно есть в выбранных позициях (по смыслу, не по буквам), '
-            "иначе false; позиций не выбрано — false."
+            "иначе false; позиций не выбрано — false. Отметки не меняют выбора: позиции выбирай по правилам выше, здесь только "
+            "отметь уточнения."
         )
     return system.strip(), user
 

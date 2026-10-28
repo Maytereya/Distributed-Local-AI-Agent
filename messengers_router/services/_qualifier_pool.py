@@ -6,9 +6,9 @@
 общий «Посев на микрофлору» — 37 материалов, кала среди них нет), у строки без материалов в справочнике (исследования, приёмы:
 «Дуплексное сканирование вен …») — слова её названия. Сверка — по основам слов (морфология, не список слов): «кала» ~ «кал».
 
-Пул позиции с материалом: кандидаты, в которых материал есть или о которых данных нет, плюс строки с этим материалом, ближайшие по
-названию к фразе пациента без материала. Строки, которые по данным материала не принимают, в пул не идут: общий посев — не ответ на
-посев кала. Какая из строк с материалом — та услуга, решает выбор LLM по смыслу (приравнивать кодом нельзя: синонимы — клиники).
+Пул позиции с материалом: кандидаты как были плюс строки с этим материалом, ближайшие по названию к фразе пациента без материала.
+Кандидатов пул не исключает (карточка 28.10: исключение по тексту `biomatNames` теряло верные строки); общий посев на «посев кала»
+честно помечает отметка выбора «материала в строке нет» (этап 4). Какая строка — та услуга, решает выбор LLM по смыслу.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def to_mark(question: str) -> tuple[str, ...]:
     parse = turn_understanding.parse_for(question)
     if parse is None or not parse.decided or len(parse.items) != 1:
         return ()
-    return tuple(dict.fromkeys(q.text for q in parse.items[0].qualifiers if q.kind != turn_parse.QualifierKind.PAYMENT))
+    return tuple(dict.fromkeys(q.text for q in parse.items[0].qualifiers if q.kind != turn_parse.QualifierKind.INSURANCE))
 
 
 def addons(question: str) -> frozenset[str]:
@@ -137,12 +137,14 @@ def accepts(row: dict[str, Any], material_text: str) -> bool | None:
 
 
 def pool(pool_rows: Sequence[dict[str, Any]], material_text: str, phrase: str, retail_rows: Sequence[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    """Пул выбора строки с материалом: кандидаты, в которых он есть (по данным), затем строки прайса с этим материалом, ближайшие
-    по названию к фразе без материала; кандидаты, которые по данным материал не принимают, — вон."""
+    """Пул выбора строки с материалом: кандидаты как были, плюс строки прайса с этим материалом (по данным МИС), ближайшие по
+    названию к фразе без материала. Кандидатов не исключает: карточка 28.10 (`c3ton_*`) — исключение по тексту `biomatNames`
+    выкидывало верные строки («с поверхности задней стенки глотки» ≠ «соскоб с задней стенки глотки», «глюкоза в плазме»), а
+    «материалом» LLM разметки называла и возбудитель, и аллерген. Есть ли материал в выбранной строке — отметка выбора (этап 4)."""
 
     from ._price_select_llm import _row_key  # выбор строки импортирует этот модуль — импорт на вызове
 
-    kept = [row for row in pool_rows if accepts(row, material_text) is not False]
+    kept = list(pool_rows)
     seen = {_row_key(row) for row in kept}
     words = _stems(phrase)
 
@@ -153,5 +155,7 @@ def pool(pool_rows: Sequence[dict[str, Any]], material_text: str, phrase: str, r
     found = [row for row in retail_rows if isinstance(row, dict) and _row_key(row) not in seen and accepts(row, material_text)]
     found.sort(key=closeness, reverse=True)
     added = found[:_ADDED_LIMIT]
-    turn_telemetry.note(pool_material=f"{len(kept)}/{len(pool_rows) - len(kept)}/{len(added)}")
-    return [*kept, *added][:limit]
+    turn_telemetry.note(pool_material=f"{len(kept)}/0/{len(added)}")
+    # Добавленные — в пределах пула: строки с материалом важнее хвоста кандидатов по буквам.
+    room = max(0, limit - len(added))
+    return [*kept[:room], *added][:limit]

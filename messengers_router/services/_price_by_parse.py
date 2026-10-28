@@ -70,9 +70,9 @@ def payment_condition(text: str) -> str:
     parse = turn_understanding.parse_for(text)
     if parse is None or not parse.decided:
         return ""
-    if any(item.kind == turn_parse.QualifierKind.PAYMENT for item in parse.loose):
+    if any(item.kind == turn_parse.QualifierKind.INSURANCE for item in parse.loose):
         return "loose"
-    if len(parse.items) == 1 and parse.items[0].has(turn_parse.QualifierKind.PAYMENT):
+    if len(parse.items) == 1 and parse.items[0].has(turn_parse.QualifierKind.INSURANCE):
         return "position"
     return ""
 

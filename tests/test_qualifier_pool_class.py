@@ -6,11 +6,13 @@
 (`biomatNames` справочника услуг; у строки без материалов в справочнике — слова её названия), сверка — по основам слов.
 
 Инварианты класса:
-- строка, которая по данным МИС материал позиции не принимает, не попадает в список выбора LLM и не получает цену — ни в первом круге,
-  ни во втором (по терминам LLM), ни у позиции списка (корзина);
-- строки с этим материалом попадают в список выбора, хотя слов фразы пациента в их названии нет;
-- встречные: вопрос без материала — кандидаты как были; выключатель off — как было; материал у строки без данных справочника — по
-  словам её названия («вен» у «Дуплексного сканирования вен»).
+- строки с материалом позиции (по данным МИС) попадают в список выбора LLM, хотя слов фразы пациента в их названии нет — в первом
+  круге, во втором (по терминам LLM) и у позиции списка (корзина);
+- кандидаты по буквам пул не исключает (карточка 28.10 `c3ton_*`: исключение по тексту `biomatNames` теряло верные строки — «с
+  поверхности задней стенки глотки» ≠ «соскоб с задней стенки глотки»); общий посев на «посев кала» честно помечает отметка выбора
+  «материала в строке нет» (этап 4, `test_qualifier_marks_class`);
+- встречные: вопрос без материала — кандидаты как были; выключатель off — строк с материалом в выборе нет; материал у строки без данных
+  справочника — по словам её названия («вен» у «Дуплексного сканирования вен»).
 
 Справочник МИС в тесте — свой (`_build_vocabularies` из строк ниже): гейт держит синонимы герметичными, а материалы в CI без среза пусты.
 """
@@ -89,17 +91,17 @@ def _sid(*parts: str) -> str:
 _STOOL = "сколько стоит посев кала на микрофлору"
 
 
-def test_material_the_row_lacks_keeps_it_out_of_the_choice(mis_materials, mini_prod_world, monkeypatch):  # noqa: F811
+def test_rows_with_the_material_join_the_choice(mis_materials, mini_prod_world, monkeypatch):  # noqa: F811
     inner = _Rows(("Посев",))
     oracle = SpansOracle(("посев кала на микрофлору",), inner=inner, qualifiers=[("посев кала на микрофлору", "кала", "material")])
-    turn, row = _run(_STOOL, oracle, mini_prod_world, monkeypatch, _sid("stool"))
-    assert inner.offered and _GENERIC not in inner.offered, inner.offered
+    _turn, row = _run(_STOOL, oracle, mini_prod_world, monkeypatch, _sid("stool"))
     assert any(name.startswith("Кал на яйца глист") for name in inner.offered), inner.offered  # строка с материалом — без слов фразы
-    assert not _priced(turn["text"], "Посев на микрофлору"), turn["text"]
-    assert row["pool_material"].split("/")[1] != "0"  # общий посев был в пуле по буквам и ушёл по данным
+    assert _GENERIC in inner.offered  # кандидат по буквам не исключается: его честность — отметка выбора (этап 4)
+    kept, dropped, added = row["pool_material"].split("/")
+    assert dropped == "0" and int(added) > 0
 
 
-def test_list_position_with_material_keeps_the_generic_row_out(mis_materials, mini_prod_world, monkeypatch):  # noqa: F811
+def test_list_position_with_material_gets_rows_with_it(mis_materials, mini_prod_world, monkeypatch):  # noqa: F811
     """Позиция списка (корзина) — тот же пул по материалу; соседняя позиция — своей ценой."""
 
     inner = _Rows(("Посев",))
@@ -107,9 +109,8 @@ def test_list_position_with_material_keeps_the_generic_row_out(mis_materials, mi
         ("посев кала на микрофлору", "ферритин"), inner=inner, qualifiers=[("посев кала на микрофлору", "кала", "material")]
     )
     turn, _row = _run("сколько стоит посев кала на микрофлору и ферритин", oracle, mini_prod_world, monkeypatch, _sid("list"))
-    assert inner.offered and _GENERIC not in inner.offered, inner.offered
     assert any(name.startswith("Кал на яйца глист") for name in inner.offered), inner.offered
-    assert not _priced(turn["text"], "Посев на микрофлору") and _priced(turn["text"], "Ферритин"), turn["text"]
+    assert _priced(turn["text"], "Ферритин"), turn["text"]
 
 
 def test_without_material_the_generic_rows_stay(mis_materials, mini_prod_world, monkeypatch):  # noqa: F811
@@ -125,6 +126,7 @@ def test_off_offers_the_generic_rows_as_before(mis_materials, mini_prod_world, m
     oracle = SpansOracle(("посев кала на микрофлору",), inner=inner, qualifiers=[("посев кала на микрофлору", "кала", "material")])
     turn, row = _run(_STOOL, oracle, mini_prod_world, monkeypatch, _sid("off"), pool_on=False)
     assert _GENERIC in inner.offered and "pool_material" not in row
+    assert not any(name.startswith("Кал на яйца глист") for name in inner.offered), inner.offered
 
 
 # --------------------------------------------------------------------------- данные: сверка материала

@@ -34,7 +34,7 @@ from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F
 from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _ROWS_MARKS, _Oracle
 
-PAY = QualifierKind.PAYMENT.value
+PAY = QualifierKind.INSURANCE.value
 _CLARIFY = "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость."
 
 
@@ -230,7 +230,7 @@ def test_inside_loose_and_broken_qualifiers(monkeypatch):
     )
     ferritin, glucose = parse.items
     assert parse.status == "picked" and [i.text for i in parse.items] == ["ферритин по омс", "глюкоза"]
-    assert [(q.kind, q.text, q.inside) for q in ferritin.qualifiers] == [(QualifierKind.PAYMENT, "по омс", True)]
+    assert [(q.kind, q.text, q.inside) for q in ferritin.qualifiers] == [(QualifierKind.INSURANCE, "по омс", True)]
     assert ferritin.beside == "" and glucose.qualifiers == ()
     assert [(q.kind, q.text) for q in parse.loose] == [(QualifierKind.CONDITION, "срочно")]
 

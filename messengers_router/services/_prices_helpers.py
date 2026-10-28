@@ -3602,7 +3602,7 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
     items: list[dict[str, Any]] = []
     for phrase in phrases:
         fragment = str(phrase.text)
-        if any(item.kind == turn_parse.QualifierKind.PAYMENT for item in getattr(phrase, "qualifiers", ())):
+        if any(item.kind == turn_parse.QualifierKind.INSURANCE for item in getattr(phrase, "qualifiers", ())):
             # Оплату у позиции отметила LLM разметки (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2): розничный прайс цены по ОМС /
             # ДМС не отвечает — «Не распознал» словами пациента, без строк и без суда; соседние позиции — своими ценами.
             items.append(
