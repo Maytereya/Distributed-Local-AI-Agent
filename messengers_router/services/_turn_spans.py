@@ -66,6 +66,10 @@ _SCHEMA: dict[str, Any] = {
 PROMPT_QUALIFIERS = "turn_spans_qualifiers"
 _QUALIFIER_TOKENS = 64
 _QUALIFIER_TIMEOUT_S = 2.0
+# Длинный перечень — прежним промптом: ответ с уточнениями растёт со списком и не укладывается в остаток секунд хода (карточка 28.10,
+# g0711 — 28 слов: разметка с уточнениями — тайм-аут 12,3 с после классификатора, прежним промптом — ответила); условие у позиции —
+# свойство коротких вопросов («ферритин по ОМС, глюкоза»).
+_QUALIFIER_MAX_WORDS = 16
 _SCHEMA_QUALIFIERS: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -173,10 +177,16 @@ def timeout_for(n_words: int) -> float:
     return min(_TIMEOUT_MAX_S, _TIMEOUT_BASE_S + _TIMEOUT_PER_WORD_S * n_words)
 
 
+def _qualified(toks: Sequence[_Word]) -> bool:
+    """Спрашивать ли уточнения позиции: выключатель on и реплика не длиннее `_QUALIFIER_MAX_WORDS` слов."""
+
+    return qualifiers_enabled() and len(toks) <= _QUALIFIER_MAX_WORDS
+
+
 def prompt(reply: str, toks: Sequence[_Word]) -> tuple[str, str]:
     """Инструкция (system) и данные хода (user): реплика пациента — данные, а не инструкция (SEC-3)."""
 
-    template = load_prompt_text(PROMPT_QUALIFIERS if qualifiers_enabled() else SITE)
+    template = load_prompt_text(PROMPT_QUALIFIERS if _qualified(toks) else SITE)
     system, _, data = template.partition("<<DATA>>")
     numbered = " ".join(f"{k}:{w.text}" for k, w in enumerate(toks, 1))
     return system.strip(), data.replace("<<QUESTION>>", reply).replace("<<WORDS>>", numbered).strip()
@@ -277,7 +287,7 @@ async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[
         return _with_ms(decided, started)
     toks = words(reply)
     system, user = prompt(reply, toks)
-    qualified = qualifiers_enabled()
+    qualified = _qualified(toks)
     tokens = min(_TOKENS_MAX, _TOKENS_FIXED + _TOKENS_PER_WORD * len(toks)) + (_QUALIFIER_TOKENS if qualified else 0)
     try:
         raw, _usage = await llm_runtime.generate_structured(

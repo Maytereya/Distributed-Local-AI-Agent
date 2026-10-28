@@ -258,3 +258,27 @@ def test_inside_loose_and_broken_qualifiers(monkeypatch):
 def test_answer_without_the_field_is_a_parse_without_qualifiers(monkeypatch):
     parse = _parse(monkeypatch, "ферритин и глюкоза", {"phrases": [[1, 1], [3, 3]]})
     assert parse.status == "picked" and all(item.qualifiers == () for item in parse.items) and parse.loose == ()
+
+
+@pytest.mark.parametrize(("words", "asked"), [(16, True), (17, False)])
+def test_long_list_is_marked_without_qualifiers(words, asked, monkeypatch):
+    """Перечень длиннее 16 слов — прежним промптом: ответ с уточнениями растёт со списком и не укладывается в остаток секунд хода
+    (карточка 28.10, g0711 — 28 слов, тайм-аут разметки)."""
+
+    from ollama import GenerateResponse as _Response
+
+    from messengers_router.runtime_config import config as cfg
+
+    systems: list[str] = []
+
+    class _Spy:
+        async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+            systems.append(system or "")
+            return _Response(model="m", response=json.dumps({"phrases": [[1, 1]], "qualifiers": []}), done=True)
+
+    monkeypatch.setattr(cfg, "MR_POSITION_QUALIFIERS", "on", raising=False)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Spy())
+    monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+    reply = " ".join(["ферритин", *(f"глюкоза{k}" for k in range(words - 1))])
+    asyncio.run(S.parse_turn_spans(reply, facet=None, catalog=_CATALOG))
+    assert systems and ('"qualifiers"' in systems[0]) is asked
