@@ -55,6 +55,36 @@ def material(question: str) -> tuple[str, str]:
     return " ".join(q.text for q in words), " ".join(text.split())
 
 
+def marks_enabled() -> bool:
+    """`[MESSENGER_ROUTER] qualifier_marks = on` (этап 4; нужны `position_qualifiers = on` и разметка `turn_spans`)."""
+
+    from . import _turn_spans  # разметка импортирует сервисы цены — импорт на вызове
+
+    return str(getattr(_cfg, "MR_QUALIFIER_MARKS", "off") or "off").strip().lower() == "on" and _turn_spans.qualifiers_enabled()
+
+
+def to_mark(question: str) -> tuple[str, ...]:
+    """Уточнения единственной позиции разбора этой реплики, которые выбор строки отмечает «есть в строке» (этап 4): все виды,
+    кроме оплаты (её решает этап 2 — без розничной цены). Выключатель off, позиция не одна, уточнений нет — пусто."""
+
+    if not marks_enabled():
+        return ()
+    from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
+
+    parse = turn_understanding.parse_for(question)
+    if parse is None or not parse.decided or len(parse.items) != 1:
+        return ()
+    return tuple(dict.fromkeys(q.text for q in parse.items[0].qualifiers if q.kind != turn_parse.QualifierKind.PAYMENT))
+
+
+def note_missing(missing: Sequence[str]) -> tuple[str, ...]:
+    """Ненайденные уточнения выбора — в телеметрию хода (`price_qual_missing`, число) и вызывающему."""
+
+    if missing:
+        turn_telemetry.note(price_qual_missing=len(missing))
+    return tuple(missing)
+
+
 def _stems(text: str) -> list[str]:
     return [word for word in _normalise_catalog_text(text).split() if len(word) >= _MIN_STEM]
 

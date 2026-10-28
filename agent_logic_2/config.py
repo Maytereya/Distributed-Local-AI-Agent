@@ -214,6 +214,7 @@ class MessengerRouterConfig:
     strong_family_letter: str
     position_qualifiers: str
     qualifier_pool: str
+    qualifier_marks: str
     basket_fail_unpriced: str
     topic_by_llm: str
     booking_target_slot_llm: str
@@ -684,6 +685,11 @@ settings = Settings(
         # по данным МИС (`biomatNames`) материал не принимают, не кандидаты; строки с ним — в пул («посев кала» не выбирает общий
         # посев). Нужен `position_qualifiers = on`. off — как было. [MESSENGER_ROUTER] qualifier_pool
         qualifier_pool=_get_enum("MESSENGER_ROUTER", "qualifier_pool", default="off", allowed={"off", "on"}),
+        # Уточнения позиции, этап 4: выбор строки цены тем же вызовом отмечает по каждому уточнению пациента (метод, материал,
+        # условие, сопутствующая услуга), есть ли оно в выбранных строках; нет — заголовок «Точно в таком виде в прайсе нет. Есть:»
+        # пишет код («ВПЧ количественным методом», «антитела … суммарные»). Нужен `position_qualifiers = on`. off — как было.
+        # [MESSENGER_ROUTER] qualifier_marks
+        qualifier_marks=_get_enum("MESSENGER_ROUTER", "qualifier_marks", default="off", allowed={"off", "on"}),
         # Корзина при сбое выбора LLM (решение владельца 27.10, узел 7 проверки ответов без LLM; BUG-2026-10-27-LLM-QUEUE-GIVES-UP,
         # шаг 3): слабые позиции — варианты кода **названиями без цен** и оффер оператора, «Итого» нет; сильные (по данным) — с
         # ценой, как были. off — как было: два варианта и больше — с ценами и в итоге. [MESSENGER_ROUTER] basket_fail_unpriced
@@ -969,6 +975,7 @@ MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_STRONG_FAMILY_LETTER = settings.messenger_router.strong_family_letter
 MR_POSITION_QUALIFIERS = settings.messenger_router.position_qualifiers
 MR_QUALIFIER_POOL = settings.messenger_router.qualifier_pool
+MR_QUALIFIER_MARKS = settings.messenger_router.qualifier_marks
 MR_BASKET_FAIL_UNPRICED = settings.messenger_router.basket_fail_unpriced
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm

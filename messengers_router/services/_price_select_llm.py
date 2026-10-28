@@ -169,6 +169,7 @@ class PriceSelection:
     status: str = "picked"
     names: tuple[str, ...] = ()
     reason: str = ""  # код причины пустого выбора (`none_fit`)
+    missing: tuple[str, ...] = ()  # уточнения пациента, которых LLM не нашла в выбранных строках (этап 4: заголовок «в таком виде нет»)
 
 
 def _row_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -588,16 +589,23 @@ def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
 
 
 async def _ask(
-    question: str, pool: list[dict[str, Any]], *, judge_qualifier: bool = False, price_answer: bool = True
-) -> tuple[list[dict[str, Any]], list[str], str] | None:
+    question: str,
+    pool: list[dict[str, Any]],
+    *,
+    judge_qualifier: bool = False,
+    price_answer: bool = True,
+    qualifiers: Sequence[str] = (),
+) -> tuple[list[dict[str, Any]], list[str], str, tuple[str, ...]] | None:
     """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
-    выбора) или None — сбой."""
+    выбора, уточнения пациента, которых в выбранных строках нет) или None — сбой. Уточнения (`qualifiers`, этап 4) LLM отмечает
+    тем же вызовом; без отметок (не спрашивали, ответ не по контракту) — ненайденных нет, заголовок прежний."""
 
     options = _options(question, pool)
-    choice = await choose(price_task(judge_qualifier=judge_qualifier, price_answer=price_answer), question, options)
+    choice = await choose(price_task(judge_qualifier=judge_qualifier, price_answer=price_answer), question, options, qualifiers=qualifiers)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
-    return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
+    missing = tuple(text for text, found in zip(qualifiers, choice.in_rows) if not found) if choice.in_rows else ()
+    return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason, missing
 
 
 # Условия, которые меняют саму услугу для пациента. «Комплекс/программа» сюда не входят:
@@ -863,12 +871,13 @@ async def select_price_rows(
         if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons) and journal_phrase:
             _record_synonym_suggestion(journal_phrase, found_terms, [], source=journal_source)
 
-    first = await _ask(question, pool, judge_qualifier=judge_qualifier, price_answer=price_answer)
+    marks = _qualifier_pool.to_mark(question)
+    first = await _ask(question, pool, judge_qualifier=judge_qualifier, price_answer=price_answer, qualifiers=marks)
     if first is None:
         return settle(*unavailable())
-    chosen, terms, reason = first
+    chosen, terms, reason, missing = first
     if chosen:
-        picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
+        picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)), missing=_qualifier_pool.note_missing(missing))
         return settle(picked)
     # Суд условия (`judge_qualifier`): «условия нет» (`qualifier_absent`, правило 3 промпта) — вердикт окончательный.
     # Второй круг искал бы «почти то» (это и запрещает П2), а у класса A под `turn_parse = on` упирался в лимит
@@ -903,7 +912,7 @@ async def select_price_rows(
     if not pool_by_terms:
         journal_miss(terms, reason)
         return settle(none_fit(reason))
-    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier, price_answer=price_answer)
+    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier, price_answer=price_answer, qualifiers=marks)
     if second is None:
         return settle(*unavailable())
     if not second[0]:
@@ -912,7 +921,7 @@ async def select_price_rows(
     chosen = _prefer_base_variants(second[0], question)
     if journal_phrase:
         _record_synonym_suggestion(journal_phrase, terms, chosen, source=journal_source)
-    picked = PriceSelection(rows=tuple(chosen), search_terms=tuple(terms))
+    picked = PriceSelection(rows=tuple(chosen), search_terms=tuple(terms), missing=_qualifier_pool.note_missing(second[3]))
     return settle(picked)
 
 

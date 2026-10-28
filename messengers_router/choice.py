@@ -40,7 +40,7 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Callable, Sequence
 
@@ -96,6 +96,7 @@ class Choice:
     terms: tuple[str, ...] = ()
     latency_ms: int = 0
     cached: bool = False
+    in_rows: tuple[bool, ...] = ()  # по уточнению пациента — есть ли оно в выбранных вариантах (`qualifiers` вызова); () — не спрашивали
 
     @property
     def failed(self) -> bool:
@@ -160,6 +161,7 @@ class _Verdict:
     outcome: str = ""
     reason: str = ""
     terms: tuple[str, ...] = ()
+    in_rows: tuple[bool, ...] = ()
 
 
 _CACHEABLE = frozenset({Status.PICKED, Status.NONE_FIT, Status.OUTCOME})
@@ -169,8 +171,9 @@ _CACHE: "OrderedDict[str, tuple[float, _Verdict]]" = OrderedDict()
 # --------------------------------------------------------------------------- промпт и схема
 
 
-def answer_schema(task: Task, options: Sequence[Option]) -> dict[str, Any]:
-    """JSON Schema ответа: выбрать можно только из списка; пустой выбор разрешён."""
+def answer_schema(task: Task, options: Sequence[Option], qualifiers: Sequence[str] = ()) -> dict[str, Any]:
+    """JSON Schema ответа: выбрать можно только из списка; пустой выбор разрешён. С уточнениями пациента — ещё `in_rows`:
+    по отметке на уточнение (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 4)."""
 
     count = len(options)
     picks: dict[str, Any] = {"type": "array", "maxItems": min(task.max_picks or count, count)}
@@ -188,6 +191,8 @@ def answer_schema(task: Task, options: Sequence[Option]) -> dict[str, Any]:
             "items": {"type": "string", "maxLength": _MAX_TERM_LEN},
             "maxItems": min(task.max_terms, _MAX_TERMS),
         }
+    if qualifiers:
+        props["in_rows"] = {"type": "array", "items": {"type": "boolean"}, "minItems": len(qualifiers), "maxItems": len(qualifiers)}
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
@@ -206,11 +211,13 @@ def _options_block(task: Task, options: Sequence[Option]) -> str:
     return "\n".join(f"{i}. {o.text}" for i, o in enumerate(options, 1))
 
 
-def render(task: Task, question: str, options: Sequence[Option], *, asked: str = "") -> tuple[str, str]:
+def render(task: Task, question: str, options: Sequence[Option], *, asked: str = "", qualifiers: Sequence[str] = ()) -> tuple[str, str]:
     """(инструкция для роли system, данные хода для роли user).
 
     `asked` — вопрос бота, на который отвечает реплика (`<<ASKED>>`, клиент `pending_reply`): данные хода, как и
     реплика (в вопросе бывают слова пациента), та же чистка. Промпт без `<<ASKED>>` — прежний запрос байт в байт.
+    `qualifiers` — уточнения пациента к услуге (слова пациента, отмеченные разметкой хода): блок после данных хода и просьба
+    отметить по каждому, есть ли оно в выбранных вариантах (`in_rows`). Без уточнений — прежний запрос байт в байт.
     """
 
     system, mark, data = load_prompt_text(task.site).partition(_DATA_MARK)
@@ -223,6 +230,13 @@ def render(task: Task, question: str, options: Sequence[Option], *, asked: str =
         .replace("<<OPTIONS>>", _options_block(task, options))
         .replace("<<QUESTION>>", _clean_question(question))
     )
+    if qualifiers:
+        listed = "\n".join(f'{k}. "{_clean_question(text)}"' for k, text in enumerate(qualifiers, 1))
+        user = (
+            f"{user}\n\nУточнения пациента к услуге:\n{listed}\n"
+            '"in_rows" — по каждому уточнению по порядку: true, если оно есть в выбранных позициях (по смыслу, не по буквам), '
+            "иначе false; позиций не выбрано — false."
+        )
     return system.strip(), user
 
 
@@ -237,6 +251,15 @@ def _index_of(task: Task, options: Sequence[Option], item: Any) -> int | None:
     if isinstance(item, bool) or not isinstance(item, int):
         return None
     return item - 1 if 1 <= item <= len(options) else None
+
+
+def _in_rows(data: Any, count: int) -> tuple[bool, ...]:
+    """Отметки уточнений; не по контракту — нет отметок (выбор строк от них не зависит, заголовок — прежний)."""
+
+    marks = data.get("in_rows") if isinstance(data, dict) else None
+    if not count or not isinstance(marks, list) or len(marks) != count or not all(isinstance(mark, bool) for mark in marks):
+        return ()
+    return tuple(marks)
 
 
 def _judge(task: Task, options: Sequence[Option], data: Any) -> _Verdict:
@@ -302,6 +325,7 @@ def _choice(verdict: _Verdict, options: Sequence[Option], *, latency_ms: int = 0
         terms=verdict.terms,
         latency_ms=latency_ms,
         cached=cached,
+        in_rows=verdict.in_rows,
     )
 
 
@@ -352,6 +376,7 @@ async def choose(
     legacy: LegacyWire | None = None,
     shadow: bool = False,
     asked: str = "",
+    qualifiers: Sequence[str] = (),
 ) -> Choice:
     """Какие варианты подходят к реплике пациента — решает LLM, разбирает и проверяет код.
 
@@ -361,14 +386,16 @@ async def choose(
     :param legacy: прежний промпт клиента — перенос без смены промпта
     :param shadow: решение тени — вне бюджета хода и предохранителя, в телеметрии `shadow: true`
     :param asked: вопрос бота, на который отвечает реплика (данные хода, `render`)
+    :param qualifiers: уточнения пациента к услуге — отметить, есть ли каждое в выборе (`Choice.in_rows`, `render`)
     :return: выбор; при сбое — UNAVAILABLE / INVALID, политику выбирает вызывающий
     """
 
     options = tuple(options)
+    qualifiers = tuple(qualifiers) if legacy is None else ()
     try:
         if legacy is None:
-            system, user = render(task, question, options, asked=asked)
-            schema: Any = answer_schema(task, options)
+            system, user = render(task, question, options, asked=asked, qualifiers=qualifiers)
+            schema: Any = answer_schema(task, options, qualifiers)
             gen_options: dict[str, Any] = {"temperature": 0, "num_predict": task.num_predict}
         else:
             system, user = None, legacy.prompt(question, options)
@@ -407,6 +434,8 @@ async def choose(
     else:
         data = legacy.answer(str(raw or ""), options)
     verdict = _judge(task, options, data)
+    if qualifiers and verdict.status is not Status.INVALID:
+        verdict = replace(verdict, in_rows=_in_rows(data, len(qualifiers)))
     if verdict.status is Status.INVALID:
         logger.warning("choose_invalid: %s %r", task.name, str(raw or "")[:200])
     _cache_put(key, verdict)

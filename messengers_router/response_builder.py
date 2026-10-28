@@ -51,6 +51,7 @@ from .renderer import (
     service_bundle_needs_operator,
 )
 from .services import Services
+from .test_assist_answer import PRICED_PARTLY_HEADING
 
 _DEFAULT_CITY = "Самара"
 _COMPOUND_PRICE_PENDING_KEY = "_compound_price_pending"
@@ -277,6 +278,19 @@ def _sync_compound_price_pending(state: SessionState, payload: dict[str, Any]) -
     state.last_entities.pop(_COMPOUND_PRICE_PENDING_KEY, None)
 
 
+def _qualifiers_partly(text: str, payload: dict[str, Any]) -> str:
+    """Уточнения позиции, этап 4 (DESIGN-2026-10-28-POSITION-QUALIFIERS): выбор строки отметил, что уточнения пациента
+    («количественным методом», «суммарные») в выбранных строках нет, — заголовок «Точно в таком виде в прайсе нет. Есть:», как у
+    подбора анализов, вместо «нашёл следующее / варианты стоимости». Пишет код по отметкам LLM, слова кодом не сверяются."""
+
+    if not payload.get("qualifiers_missing") or not str(text or "").strip():
+        return text
+    first, sep, rest = str(text).partition("\n")
+    if first.startswith(("По услуге «", "По запросу «")) and first.rstrip().endswith(":"):
+        return f"{PRICED_PARTLY_HEADING}{sep}{rest}"
+    return f"{PRICED_PARTLY_HEADING}\n{text}"  # ответ одной строкой («Ферритин — 530 руб.») — без своего заголовка
+
+
 def build_price_response(
     flow_label: str, evidence: Evidence, state: SessionState, memory: MemoryStore | None = None
 ) -> ResponseEnvelope | None:
@@ -302,7 +316,7 @@ def build_price_response(
             render_entities["service_name"] = service_name_effective
             render_entities.pop("test_name", None)
     shown_context.sync_price(state, price_payload, render_entities)
-    text = format_price_for_patient(price_payload, render_entities)
+    text = _qualifiers_partly(format_price_for_patient(price_payload, render_entities), price_payload)
     if price_payload.get("operator_offer") and memory is not None and text.strip():
         # Корзина без выбора LLM (`basket_fail_unpriced`): названия без цен — и оффер оператора вопросом.
         mark_operator_offer_pending(state, memory)
@@ -320,7 +334,7 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
     _sync_policy_context(state, payload)
     _sync_compound_price_pending(state, payload)
     shown_context.sync_bundle(state, payload)
-    text = format_service_bundle_for_patient(payload, state.last_entities)
+    text = _qualifiers_partly(format_service_bundle_for_patient(payload, state.last_entities), payload)
     # Defensive fallback: если рендер вернул пустой текст, показываем
     # пациенту инструкцию о том, как сформулировать запрос правильно.
     # Бывает, когда в state остался stale service_name (например,

@@ -790,7 +790,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
                 return verdict
             # Сбой судьи — ход как без судьи: прежний выбор строки и его политика (L-13), а не ответ правил мимо неё.
         judged = _parse_phrase_judged_by_llm(str(query or ""))
-        return await select_price_rows(
+        selection = await select_price_rows(
             str(query or ""),
             retail_rows_clean,
             candidates=proposal,
@@ -802,6 +802,10 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             budget_clarify=True,  # отказ лимита решений хода — уточнение (DESIGN-2026-10-22-TURN-DECISION-BUDGET)
             general_as_none_fit=True,  # «слишком общее» — уточнение, не цены правил (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3)
         )
+        missing[:] = getattr(selection, "missing", ())
+        return selection
+
+    missing: list[str] = []  # уточнения пациента, которых выбор строки не нашёл в строках (этап 4) — заголовок ответа
 
     def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:
         name = _llm_selection_service_name(query_text, rows, reply=str(query or ""))
@@ -820,6 +824,8 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
                 "note": "price_info: price_llm_select",
             }
         payload["entities_used"] = {**entities, "service_name_effective": name}
+        if missing:
+            payload["qualifiers_missing"] = list(missing)
         return payload
 
     shown_before = None if doctor_id else _rows_shown_before(str(query or ""), retail_rows_clean)
@@ -994,7 +1000,7 @@ async def service_bundle_info(
             if verdict is not None:
                 return verdict
             # Сбой судьи — ход как без судьи (прежний выбор строки и политика L-13).
-        return await select_price_rows(
+        selection = await select_price_rows(
             str(query or ""),
             retail_rows,
             candidates=proposal,
@@ -1005,11 +1011,17 @@ async def service_bundle_info(
             budget_clarify=True,  # отказ лимита решений хода — уточнение (DESIGN-2026-10-22-TURN-DECISION-BUDGET)
             general_as_none_fit=True,  # «слишком общее» — уточнение, не цены правил (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3)
         )
+        missing[:] = getattr(selection, "missing", ())
+        return selection
+
+    missing: list[str] = []  # уточнения пациента, которых выбор строки не нашёл в строках (этап 4) — заголовок ответа
 
     def _llm_variants(rows: list[dict[str, Any]]) -> dict[str, Any]:
         llm_payload = _llm_family_payload(_llm_selection_service_name(query_text, rows, reply=str(query or "")), rows)
         llm_payload["top_n_applied"] = top_limit
         llm_payload["entities_used"] = entities
+        if missing:
+            llm_payload["qualifiers_missing"] = list(missing)
         return llm_payload
 
     llm_rows: list[dict[str, Any]] | None = [family_row] if family_row is not None else _rows_shown_before(str(query or ""), retail_rows)
@@ -1153,6 +1165,8 @@ async def service_bundle_info(
         out["service_name"] = service_name
         out["llm_selected"] = True
         out["entities_used"] = {**entities, "service_name_effective": service_name}
+        if missing:
+            out["qualifiers_missing"] = list(missing)
 
     compound_payload = _build_compound_price_clarify_payload(
         query_text=query_text,
