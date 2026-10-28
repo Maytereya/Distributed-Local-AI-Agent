@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-from . import expects, pending_answer, turn_names, turn_understanding
+from . import booking_target, expects, pending_answer, turn_names, turn_understanding
 from .expects import EXPECTS_KEY
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
@@ -31,11 +31,14 @@ from .policies import (
     looks_like_branch_hint,
     match_branch_hint,
     normalize_appointment_action,
+    parse_date_time_ru,
     quick_fill_core_entities,
     service_name_conflicts_with_doctor,
 )
-from .doctor_name_port import cached_doctor_fios
+from .doctor_name_port import cached_doctor_fios, resolve_cached_doctor_name_candidate
+from .llm_mode_policy import fail_offer
 from .russian_nlu import normalize_ru
+from .service_phrase import extract_service_phrase
 from .services import Services, resolve_price_service_name_from_catalog
 
 log = logging.getLogger(__name__)
@@ -411,7 +414,21 @@ async def prelock_active_appointment_turn(
     if pending_answer.picked(expects.Question.APPOINTMENT_BRANCH):
         return {}
 
+    # Ответ на вопрос цели записи под `booking_target_llm = on`: цель, филиал и дату реплики размечает LLM, значения — данные
+    # (DESIGN-2026-10-28-booking-target-by-meaning); разрез по буквам их не пишет. Сбой под узлом `booking_target` — запись
+    # держится, честный оффер даст `booking_target.apply`; без узла — прежний разрез.
+    parse = None
+    if booking_target.enabled() and booking_target.target_turn(state_entities, pending):
+        parse = await booking_target.understand(text)
+        if not parse.ok and fail_offer(booking_target.FAIL_NODE):
+            return {}
     slot_updates = quick_fill_entities_from_text(text, state_entities, missing_rules, services)
+    if parse is not None and parse.ok:
+        target_slots = booking_target_slots(parse, state_entities, services)
+        slot_updates.update(target_slots)
+        booking_target.note(parse, target_slots, "slots")
+    elif parse is not None:
+        booking_target.note(parse, {}, "rules")
 
     if (
         _is_appointment_waiting_doctor_or_service(pending)
@@ -1086,8 +1103,15 @@ def quick_fill_entities_from_text(
     """
     t = text.strip()
     out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
+    target_parse = booking_target.acting(text)
+    if target_parse is not None:
+        # Цель, филиал и дату этой реплики разметила LLM (`booking_target`): разрез по буквам их не пишет. Цель уже в решении хода
+        # (её судят роль и заземление); филиал и дата — из разметки здесь: заземление ответа на вопрос цели их не принимает.
+        for key in [key for key in out if booking_target.owned(key)]:
+            out.pop(key, None)
+        out.update(_booking_branch_and_date(target_parse, state_entities, services))
 
-    price_service_slot = any("service_name" in str(rule or "") for rule in missing_rules) and (
+    price_service_slot = target_parse is None and any("service_name" in str(rule or "") for rule in missing_rules) and (
         detect_price_intent(t)
         or str(state_entities.get("_last_label") or "") == "PRICE"
         or pending_label == "PRICE"
@@ -1120,40 +1144,104 @@ def quick_fill_entities_from_text(
     # ----------------------------
     # Branch resolution
     # ----------------------------
-    if not state_entities.get("branch_id"):
+    if not state_entities.get("branch_id") and target_parse is None:
         branch_hint = extract_branch_hint(t, state_entities)
 
         if branch_hint:
-            # Если мы уже показывали список адресов пользователю, резолвим только внутри него.
-            shown_options = branch_options_to_indexable(state_entities.get("appointment_branch_options"))
-            branches = shown_options
-            if not branches:
-                branches = _safe_get_branches(services)
-                city_hint = str(out.get("city") or state_entities.get("city") or "").strip().lower()
-                if city_hint:
-                    city_filtered = []
-                    for b in branches:
-                        if not isinstance(b, dict):
-                            continue
-                        hay = f"{b.get('name', '')} {b.get('aliases', '')}".lower()
-                        if city_hint in hay:
-                            city_filtered.append(b)
-                    if city_filtered:
-                        branches = city_filtered
-            idx = build_branch_index(branches)
-            bid, bname = match_branch_hint(branch_hint, idx)
-            if bid and not str(bid).startswith("shown_"):
-                out["branch_id"] = bid
-            if bname and not state_entities.get("branch_name"):
-                out["branch_name"] = bname
-            if (
-                not shown_options
-                and not bid
-                and not state_entities.get("branch_name")
-                and looks_like_branch_hint(branch_hint)
-            ):
-                out["branch_name"] = branch_hint[:80]
+            out.update(_branch_slots(branch_hint, state_entities, out.get("city") or state_entities.get("city"), services))
 
+    return out
+
+
+def _branch_slots(
+    branch_hint: str,
+    state_entities: dict[str, Any],
+    city: Any,
+    services: Services,
+    *,
+    raw_fallback: bool = True,
+) -> dict[str, Any]:
+    """Филиал по подсказке — по справочнику филиалов (или по показанным вариантам); `raw_fallback` — подсказку без совпадения,
+    похожую на адрес, писать в слот как есть (прежний разрез по буквам)."""
+
+    out: dict[str, Any] = {}
+    # Если мы уже показывали список адресов пользователю, резолвим только внутри него.
+    shown_options = branch_options_to_indexable(state_entities.get("appointment_branch_options"))
+    branches = shown_options
+    if not branches:
+        branches = _safe_get_branches(services)
+        city_hint = str(city or "").strip().lower()
+        if city_hint:
+            city_filtered = []
+            for b in branches:
+                if not isinstance(b, dict):
+                    continue
+                hay = f"{b.get('name', '')} {b.get('aliases', '')}".lower()
+                if city_hint in hay:
+                    city_filtered.append(b)
+            if city_filtered:
+                branches = city_filtered
+    idx = build_branch_index(branches)
+    bid, bname = match_branch_hint(branch_hint, idx)
+    if bid and not str(bid).startswith("shown_"):
+        out["branch_id"] = bid
+    if bname and not state_entities.get("branch_name"):
+        out["branch_name"] = bname
+    if (
+        raw_fallback
+        and not shown_options
+        and not bid
+        and not state_entities.get("branch_name")
+        and looks_like_branch_hint(branch_hint)
+    ):
+        out["branch_name"] = branch_hint[:80]
+    return out
+
+
+def booking_target_slots(
+    parse: booking_target.BookingParse,
+    state_entities: dict[str, Any],
+    services: Services | None,
+) -> dict[str, Any]:
+    """Цель, филиал и дата хода записи — из слов разметки LLM (`booking_target`); значения — данные.
+
+    Цель — кандидаты по словам группы (специальность, врач справочника, фраза услуги); значение по смыслу решают роль
+    (`role_pick`) и суд услуги (`judge_booking_service`). Несколько целей — одной фразой через «и» (суд услуги покажет варианты).
+    """
+
+    out: dict[str, Any] = {}
+    target = " и ".join(part.strip() for part in parse.target if part.strip())
+    if target:
+        specialty = extract_specialty(target.lower())
+        if specialty:
+            out["specialty"] = specialty
+        if not (state_entities.get("doctor_name") or state_entities.get("doctor_id")):
+            doctor = resolve_cached_doctor_name_candidate(target)
+            if doctor:
+                out["doctor_name"] = doctor
+        service = (extract_service_phrase(target) or target).strip()
+        if service and not service_name_conflicts_with_doctor(service, out.get("doctor_name")):
+            out["service_name"] = service
+    out.update(_booking_branch_and_date(parse, state_entities, services))
+    return out
+
+
+def _booking_branch_and_date(
+    parse: booking_target.BookingParse,
+    state_entities: dict[str, Any],
+    services: Services | None,
+) -> dict[str, Any]:
+    """Филиал — только совпадение со справочником или с показанными вариантами: подсказка без совпадения в слот не пишется
+    (принцип 1 — «осетинской 4» не филиал, бот спросит филиал списком по данным). Дата — структурный разбор слов даты."""
+
+    out: dict[str, Any] = {}
+    branch = parse.branch[0].strip() if parse.branch else ""
+    if branch and services is not None and not state_entities.get("branch_id"):
+        hint = extract_branch_hint(branch, state_entities) or branch
+        out.update(_branch_slots(hint, state_entities, state_entities.get("city"), services, raw_fallback=False))
+    date = " ".join(part.strip() for part in parse.date if part.strip())
+    if date:
+        out.update({key: value for key, value in parse_date_time_ru(date).items() if value is not None})
     return out
 
 

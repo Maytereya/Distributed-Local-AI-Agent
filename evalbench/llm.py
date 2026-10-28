@@ -172,6 +172,10 @@ def adversary_answer(site: str, prompt: str) -> str | None:
         numbered = prompt.split("Слова сообщения с номерами:")[-1]
         count = len(re.findall(r"(?:^|\s)(\d+):", numbered))
         return json.dumps({"phrases": [list(range(1, count + 1))] if count else []})
+    if site == "booking_target":  # разметка цели записи по ролям (DESIGN-2026-10-28-booking-target-by-meaning): вся реплика — «филиал», действие — записаться
+        numbered = prompt.split("Пронумерованные слова сообщения:")[-1]
+        count = len(re.findall(r"(?:^|\s)(\d+):", numbered))
+        return json.dumps({"action": "book", "target": [], "branch": [[1, count]] if count else [], "date": []})
     if site == "price_kind_ambiguous":
         return json.dumps({"kind": _pick(_PRICE_KINDS, prompt), "reason": "так"}, ensure_ascii=False)
     fixed = {

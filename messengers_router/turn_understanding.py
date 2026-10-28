@@ -49,7 +49,7 @@ from dataclasses import dataclass, field, replace
 from collections.abc import Awaitable
 from typing import Any, Sequence
 
-from . import turn_names, turn_parse, turn_telemetry
+from . import booking_target, turn_names, turn_parse, turn_telemetry
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
 from .services import _turn_phrases, _turn_spans
@@ -181,13 +181,14 @@ def agree_telemetry() -> bool:
 def begin_turn() -> None:
     """Новый ход: понимание прошлого хода не читается (тесты и стенд гоняют ходы в одном цикле);
     память разбора реплики — новая, на этот ход (`turn_parse`, во всех режимах выключателя); имена LLM прошлого
-    хода — тоже (`turn_names`)."""
+    хода — тоже (`turn_names`); разметка цели записи — тоже (`booking_target`)."""
 
     _CURRENT.set(None)
     _ACTED.set(())
     _INTENT.set(None)
     turn_parse.begin()
     turn_names.begin()
+    booking_target.begin()
 
 
 def observe_intent(label: str, confidence: float, topic_source: dict[str, Any] | None) -> None:

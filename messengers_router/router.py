@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import address_flow, booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import address_flow, booking_slots, booking_target, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -3473,6 +3473,10 @@ async def _complete_route_after_doctor_guard(
     # Понимание хода (ход (б), шаг 1): услуги и свойство ценовой реплики — один раз, до
     # подстановки каталога, которая иначе сводит список к одной услуге. В тени только пишется.
     await turn_understanding.observe_price_turn(decision.label, user_text=user_text, pending=memory.get_pending(state))
+    # Цель, филиал и дата записи — из разметки LLM, а не разрезом по буквам (`booking_target_llm`); до роли и суда услуги.
+    decision = await booking_target.apply(
+        decision, user_text=user_text, state_entities=state.last_entities, pending=memory.get_pending(state), services=services
+    )
     decision = await role_pick.apply(decision, user_text, services)  # ход (г): роль решает LLM по каталогу МИС
     decision = await _inject_catalog_candidates(
         decision,
