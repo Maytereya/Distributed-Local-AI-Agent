@@ -1982,6 +1982,12 @@ def _relabel_test_assist_catalog_hit_as_price(
         return decision
     if not str((decision.entities or {}).get("service_name") or "").strip():
         return decision
+    if button_flow.topic_firm(flags):
+        # Подбор анализов задала кнопка: совпадение с каталогом по буквам тему не перебивает — названное подбор находит по данным
+        # хода (`test_assist_answer`, цена — кодом), а не цена ближайшей строки. Список из разметки хода (`understanding_list_is_price`
+        # выше) — решение LLM, не буквы: он остаётся ценой (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
+        turn_telemetry.note(button_topic_firm="p1")
+        return decision
     if "result_delivery_info" in flags:
         return decision
     if detect_test_assist_goal_phrasing(user_text):
@@ -3006,8 +3012,12 @@ async def _apply_post_nlu_guardrails(
             state.last_entities.pop(k, None)
 
     # Тему хода решила LLM (`topic_by_llm`, ход (б), этап 4): детектор «без записи» её не перебивает — метка ADDRESS есть
-    # и у LLM (STEP-2026-10-21-B-TOPIC-BY-LLM, g0716: список анализов «можно ли за один визит» уходил в адреса).
-    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags:
+    # и у LLM (STEP-2026-10-21-B-TOPIC-BY-LLM, g0716: список анализов «можно ли за один визит» уходил в адреса). Так же —
+    # тему кнопки под `button_topic_firm` (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
+    keeps_button = button_flow.topic_firm(decision.flags)
+    if keeps_button and decision.label in {"APPOINTMENT", "TEST_ASSIST"} and detect_nonbookable_walkin_intent(user_text, state.last_entities):
+        turn_telemetry.note(button_topic_firm="walkin")
+    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags and not keeps_button:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         by_llm = None

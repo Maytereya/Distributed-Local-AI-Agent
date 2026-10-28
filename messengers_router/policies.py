@@ -460,10 +460,6 @@ _QF_BRANCH_FREEFORM_RE = re.compile(
     r"([А-ЯЁа-яё\-]{4,40})(?:\s*,?\s*([0-9]{1,4}[A-Za-zА-Яа-яЁё]?))?\s*$",
     re.I,
 )
-_NEAREST_SCHEDULE_HINT_RE = re.compile(
-    r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b",
-    re.I,
-)
 # Упоминание врача/приёма — отличает «график работы ВРАЧА» (DOCTOR_SCHEDULE)
 # от «график работы ФИЛИАЛА/клиники» (ADDRESS).
 _DOCTOR_MENTION_RE = re.compile(
@@ -1127,10 +1123,6 @@ def detect_unsupported_catalog(text: str) -> UnsupportedCatalogMatch | None:
 def extract_specialty(text: str) -> str | None:
     value = extract_specialty_from_text(text or "")
     return value or None
-
-
-def has_nearest_schedule_hint(text: str) -> bool:
-    return bool(_NEAREST_SCHEDULE_HINT_RE.search(text or ""))
 
 
 def apply_verified_doctor_override(label: str, flags: set[str], text: str) -> tuple[str, set[str]]:

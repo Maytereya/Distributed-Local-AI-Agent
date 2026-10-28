@@ -228,6 +228,7 @@ class MessengerRouterConfig:
     test_assist_from_data: str
     test_assist_price: str
     walkin_by_llm: str
+    button_topic_firm: str
     price_select_named: str
     bare_name_overview: str
     booking_options_price: str
@@ -757,6 +758,10 @@ settings = Settings(
         # адреса и фраза «… без записи» — по решению LLM. Свой выключатель — связку 21.10 с `service_answer_from_data` владелец
         # развязал 26.10 (топ-5 разбора 95 цен, п. 2). off — как было (детектор по буквам). [MESSENGER_ROUTER] walkin_by_llm
         walkin_by_llm=_get_enum("MESSENGER_ROUTER", "walkin_by_llm", default="off", allowed={"off", "on"}),
+        # Тему ответа задала кнопка (`button_answer_topic`) — переклейки после NLU по буквам её не перебивают, как тему от LLM
+        # (`topic_by_llm`): «без записи» в адреса и П1 по совпадению с каталогом в цену; «Подобрать анализы» решает LLM по данным
+        # (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM, С6 шаг 2). off — как было. [MESSENGER_ROUTER] button_topic_firm
+        button_topic_firm=_get_enum("MESSENGER_ROUTER", "button_topic_firm", default="off", allowed={"off", "on"}),
         # Выбор строки прайса на пути ответа о цене (топ-5 разбора 95 цен, п. 3, классы F + P1): промпты `*_general_named` с
         # правилами 6 «Cito — это срочно» и 7 «позиция для другого пациента, которого пациент не называл
         # (плод, ребёнок до года), — не та»; второй круг по редким словам терминов LLM — и
@@ -972,6 +977,7 @@ MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_TEST_ASSIST_PRICE = settings.messenger_router.test_assist_price
 MR_WALKIN_BY_LLM = settings.messenger_router.walkin_by_llm
+MR_BUTTON_TOPIC_FIRM = settings.messenger_router.button_topic_firm
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview
 MR_BOOKING_OPTIONS_PRICE = settings.messenger_router.booking_options_price

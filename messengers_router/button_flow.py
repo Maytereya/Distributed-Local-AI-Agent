@@ -37,6 +37,11 @@
   «Цена анализа» и «Сколько стоит анализ» — анализы (со сроком). Режим `doctor` сужает только «Цену приёма врача»: на «Цену
   анализа» пациенты ведут и УЗИ, и процедуры (набор buttons_v1, wb-metric 25.10: у 84 из 264 размеченных правильный ответ —
   не только анализ), `all` — обе. Как сужать строки — путь цены (`services.prices`).
+* `button_topic_firm` (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM) — тему ответа, которую задала кнопка (`button_answer_topic`),
+  переклейки после NLU по буквам не перебивают, как тему от LLM (`topic_by_llm`): «без записи» (`policy_nonbookable_walkin`) и
+  П1 по совпадению с каталогом (`test_assist_catalog_hit_is_price`, `understanding_list_is_price`). На «Подобрать анализы»
+  подбор решает LLM по данным хода (`test_assist_answer`), а не буквы: «подберите анализы, где сдать кровь» уходил в список
+  филиалов, «комплексный анализ на ИППП» — в цену чужой строки.
 """
 
 from __future__ import annotations
@@ -98,6 +103,13 @@ def price_scope_mode() -> str:
 
     mode = str(getattr(_cfg, "MR_BUTTON_PRICE_SCOPE", "off") or "").strip().lower()
     return mode if mode in ("doctor", "all") else "off"
+
+
+def topic_firm(flags: Iterable[Any] | None) -> bool:
+    """`[MESSENGER_ROUTER] button_topic_firm = on` и тему хода задала кнопка (флаг `button_answer_topic`): переклейки после NLU
+    по буквам её не перебивают. off — как было."""
+
+    return _on("MR_BUTTON_TOPIC_FIRM") and "button_answer_topic" in set(flags or ())
 
 
 def marks_questions() -> bool:

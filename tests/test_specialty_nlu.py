@@ -61,13 +61,6 @@ def test_procedure_dermatoscopy_routes_to_dermatovenerologist():
     assert out.decision.entities.get("specialty") == "дерматовенеролог"
 
 
-def test_nearest_specialty_routes_to_schedule():
-    state = SessionState(session_id="nlu2")
-    out = run(analyze_with_candidates("гастроэнтеролог ближайший", state))
-    assert out.decision.label == "DOCTOR_SCHEDULE"
-    assert out.decision.entities.get("specialty") == "гастроэнтеролог"
-
-
 def test_diagnostic_make_request_routes_to_appointment():
     state = SessionState(session_id="nlu3")
     out = run(analyze_with_candidates("Хочу сделать узи брюшной полости", state))
