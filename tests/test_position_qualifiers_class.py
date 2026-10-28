@@ -112,15 +112,20 @@ _LIST_CASES = [
     ("сколько стоит ферритин по омс, глюкоза", ("ферритин по омс", "глюкоза"), ("ферритин по омс", "по омс")),
     ("глюкоза и ферритин по полису сколько стоят", ("глюкоза", "ферритин"), ("ферритин", "по полису")),
     ("по ДМС ферритин и глюкоза сколько", ("ферритин", "глюкоза"), ("ферритин", "по ДМС")),
+    # Слабая позиция (не дословное название: «ТТГ» ≠ «ТТГ (TSH) тиреотропный гормон»), которую резолвер разрешает, — условие рядом с ней
+    # не теряется (свип 28.10, lc_c03: путь слабой позиции `beside` не читал); и внутри группы.
+    ("сколько стоит ТТГ по омс, глюкоза", ("ТТГ", "глюкоза"), ("ТТГ", "по омс")),
+    ("сколько стоит ТТГ по омс, глюкоза", ("ТТГ по омс", "глюкоза"), ("ТТГ по омс", "по омс")),
 ]
 
 
 @pytest.mark.parametrize(("reply", "phrases", "qualifier"), _LIST_CASES)
 def test_condition_takes_the_price_from_its_position_only(reply, phrases, qualifier, mini_prod_world, monkeypatch):  # noqa: F811
     of, words = qualifier
-    oracle = SpansOracle(phrases, inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[(of, words, PAY)])
+    oracle = SpansOracle(phrases, inner=_Rows(("Ферритин", "Глюкоза", "ТТГ")), qualifiers=[(of, words, PAY)])
     [turn], [row] = _run([reply], oracle, mini_prod_world, monkeypatch, _sid("list", reply, of))
-    assert not _rub(turn["text"], "Ферритин"), turn["text"]
+    named = "ТТГ" if "ТТГ" in reply else "Ферритин"
+    assert not _rub(turn["text"], named), turn["text"]
     assert _rub(turn["text"], "Глюкоза"), turn["text"]
     assert "Не распознал" in turn["text"] and words.lower() in turn["text"].lower(), turn["text"]  # словами пациента
     assert row["tu_qualifiers"] == PAY
@@ -157,15 +162,16 @@ def test_condition_after_a_price_does_not_take_the_shown_row(follow_up, conditio
 # --------------------------------------------------------------------------- встречные
 
 
-@pytest.mark.parametrize("of", ["ферритин", None])
+@pytest.mark.parametrize(("first", "row"), [("ферритин", "Ферритин"), ("ТТГ", "ТТГ")])  # сильная и слабая позиция
+@pytest.mark.parametrize("attached", [True, False])
 @pytest.mark.parametrize("words", ["сколько стоит", "какая цена"])
-def test_price_words_marked_as_a_qualifier_keep_the_prices(words, of, mini_prod_world, monkeypatch):  # noqa: F811
+def test_price_words_marked_as_a_qualifier_keep_the_prices(words, attached, first, row, mini_prod_world, monkeypatch):  # noqa: F811
     """Класс карточки 28.10: живая LLM разметки звала «оплатой» слова вопроса о цене — цену это не снимает."""
 
-    reply = f"{words} ферритин и глюкоза" if words == "сколько стоит" else f"ферритин и глюкоза {words}"
-    oracle = SpansOracle(("ферритин", "глюкоза"), inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[(of, words, PAY)])
-    [turn], _rows = _run([reply], oracle, mini_prod_world, monkeypatch, _sid("words", words, str(of)))
-    assert _rub(turn["text"], "Ферритин") and _rub(turn["text"], "Глюкоза"), turn["text"]
+    reply = f"{words} {first} и глюкоза" if words == "сколько стоит" else f"{first} и глюкоза {words}"
+    oracle = SpansOracle((first, "глюкоза"), inner=_Rows((row, "Глюкоза")), qualifiers=[(first if attached else None, words, PAY)])
+    [turn], _rows = _run([reply], oracle, mini_prod_world, monkeypatch, _sid("words", words, first, str(attached)))
+    assert _rub(turn["text"], row) and _rub(turn["text"], "Глюкоза"), turn["text"]
 
 
 def test_list_without_qualifiers_keeps_both_prices(mini_prod_world, monkeypatch):  # noqa: F811

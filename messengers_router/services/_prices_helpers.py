@@ -3636,6 +3636,13 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
             items.append({"service_name": fragment, "prices": [], "fragment": fragment, "strong": [], "unsatisfiable": True})
             continue
         top_rows = _select_patient_price_rows(retail_rows, service_name, limit=2) if service_name else []
+        if top_rows and beside and _qualifiers_on() and _strong_phrase_guard_on() and _match_drops_unsatisfiable_qualifier(
+            beside, " ".join([fragment, *(str(row.get("serviceName") or row.get("name") or "") for row in top_rows)]), retail_rows
+        ):
+            # Уточнения позиции (этап 2): рядом со слабой позицией, которую резолвер разрешил («ТТГ» → «ТТГ (TSH) …»), LLM разметки
+            # отметила слово вне прайса («по омс») — суд условия, как у сильной фразы (свип 28.10, lc_c03: условие терялось).
+            items.append({"service_name": fragment, "prices": [], "fragment": fragment, "strong": [], "judge": top_rows, "condition": beside})
+            continue
         items.append(
             {
                 "service_name": service_name or fragment,
@@ -3646,6 +3653,15 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
             }
         )
     return items
+
+
+def _qualifiers_on() -> bool:
+    """`position_qualifiers = on`: `beside` позиции заполняет разметка хода по смыслу (под off — генератор окон по соседству слов, и
+    путь слабой позиции его не читает, как было)."""
+
+    from . import _turn_spans  # разметка импортирует этот модуль — импорт на вызове
+
+    return _turn_spans.qualifiers_enabled()
 
 
 def _position_material(phrase: Any) -> dict[str, str]:
