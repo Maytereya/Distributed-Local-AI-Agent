@@ -62,15 +62,27 @@ def failed(text: str) -> bool:
 def insurance_marked(text: str) -> bool:
     """Разметка этой реплики пометила оплату страховкой — ОМС, ДМС, полис (`position_qualifiers = on`): у позиции или ни к одной.
     Метка — сведение, не вердикт (карточка 28.10: живая LLM метила так и «цену»): перевод на оператора — только вместе с судом
-    условия, который сказал «условия в строке нет» (решение владельца 28.10: цену по ОМС и ДМС называет оператор)."""
+    условия, который сказал «условия в строке нет» (решение владельца 28.10: цену по ОМС и ДМС называет оператор). С вердиктом по
+    метке (`insurance_confirmed`) это правило — запасное: действует, когда отдельный вопрос об оплате не ответил."""
 
     from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
 
     parse = turn_understanding.parse_for(text)
-    if parse is None or not parse.decided:
+    if parse is None or not parse.decided or parse.insurance == "denied":  # вопрос об оплате сказал «не страховка» — метки нет
         return False
     insurance = turn_parse.QualifierKind.INSURANCE
     return any(q.kind == insurance for q in parse.loose) or any(item.has(insurance) for item in parse.items)
+
+
+def insurance_confirmed(text: str) -> bool:
+    """Пациент спрашивает цену по ОМС / ДМС / страховке — так сказали оба вызова LLM: разметка пометила оплату, отдельный вопрос
+    подтвердил (`_turn_spans._insurance_verdict`). Решение владельца 28.10: такую цену называет оператор — перевод хода до выбора
+    строк (суд условия корзины пропускал «по ДМС» и «по полису»)."""
+
+    from .. import turn_understanding  # понимание хода импортирует сервисы цены — импорт на вызове
+
+    parse = turn_understanding.parse_for(text)
+    return parse is not None and parse.decided and parse.insurance == "confirmed"
 
 
 def loose_qualifier(text: str) -> bool:

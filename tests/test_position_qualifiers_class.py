@@ -10,8 +10,10 @@
 Инварианты класса (принцип 1; решение 22.07 — «по ОМС» — честное «не нашёл»):
 - позиция с условием, которого нет в прайсе, не получает розничную цену — при любой границе её группы (условие внутри группы или
   LLM его оторвала) и в любом месте списка; соседние позиции — своими ценами (BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS);
-- условие — оплата по ОМС / ДМС / полису (суд отверг позицию и разметка пометила оплату страховкой) — перевод хода на оператора, цен
-  нет (решение владельца 28.10: цену по ДМС не называем вовсе, по ОМС — оперменеджер);
+- условие — оплата по ОМС / ДМС / полису — перевод хода на оператора, цен нет (решение владельца 28.10: цену по ДМС не называем
+  вовсе, по ОМС — оперменеджер). Вердикт — отдельный вопрос LLM по словам, которые разметка пометила оплатой (`choose_payment_insurance`):
+  «да» — перевод до выбора строк, даже если суд условия пропустил бы условие (свипы 28.10: суд корзины пропускал «по ДМС», «по полису»
+  и «по омс» при верной метке); «нет» — метка снята, цены как без неё; вопрос не ответил — прежнее правило (суд отверг позицию + метка);
 - условие ни к одной услуге — у каждой позиции; вопрос без названия после цены («а сколько стоит по омс?») не берёт показанную строку —
   судья П2 по услуге контекста (BUG-2026-10-27-OMS-FOLLOWUP-PRICED);
 - слова вопроса о цене, которые LLM отметила уточнением («сколько стоит», «какая цена»), цену не снимают (гард их не видит);
@@ -122,10 +124,64 @@ _LIST_CASES = [
 ]
 
 
+class _Lenient(_Rows):
+    """Суд, который условие пропускает (как живая LLM на «по ДМС», «по полису», «по омс» в свипах 28.10): строки с началом `rows` и на
+    реплике с условием, и у позиции с «[добавлено: …]»."""
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        seen = f"{system}\n\n{prompt}" if system else prompt
+        if not any(mark in seen for mark in _ROWS_MARKS):
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        self.rows_calls += 1
+        options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        picks = [n for n, text in options if text.split(" → ", 1)[-1].startswith(self.rows)]
+        answer = {"picks": picks} if _BASKET_MARK in seen else {"picks": picks, "reason": "none", "search_terms": []}
+        return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
+
+
+_CONFIRMED_CASES = [
+    # (ходы, фразы разметки, уточнение (фраза или None, слова))
+    (["сколько стоит ферритин по ДМС, глюкоза"], ("ферритин", "глюкоза"), ("ферритин", "по ДМС")),
+    (["ТТГ по омс, глюкоза сколько стоит"], ("ТТГ по омс", "глюкоза"), ("ТТГ по омс", "по омс")),
+    (["ферритин и глюкоза по полису сколько стоят"], ("ферритин", "глюкоза"), (None, "по полису")),
+    (["сколько стоит ферритин через страховую"], ("ферритин",), ("ферритин", "через страховую")),
+    (["сколько стоит ферритин", "а сколько стоит по дмс?"], ("ферритин",), (None, "по дмс")),
+]
+
+
+@pytest.mark.parametrize(("turns", "phrases", "qualifier"), _CONFIRMED_CASES)
+def test_confirmed_insurance_hands_off_even_when_the_judge_lets_it_pass(turns, phrases, qualifier, mini_prod_world, monkeypatch):  # noqa: F811
+    """Вопрос об оплате сказал «по ОМС / ДМС / страховке» — перевод хода до выбора строк: суд условия, который условие пропускает,
+    уже не спрашивают (позиция, весь список, одна услуга, вопрос после цены)."""
+
+    of, words = qualifier
+    inner = _Lenient(("Ферритин", "Глюкоза", "ТТГ"))
+    oracle = SpansOracle(phrases, inner=inner, qualifiers=[(of, words, PAY)], insurance=True)
+    record, rows = _run(turns, oracle, mini_prod_world, monkeypatch, _sid("confirmed", *turns))
+    turn, row = record[-1], rows[-1]
+    assert turn["handoff"] and not _priced(turn["text"]) and _HANDOFF in turn["text"], turn["text"]
+    assert row["tu_insurance"] == "confirmed" and row["price_insurance"] == "confirmed"
+    if len(turns) == 1:
+        assert inner.rows_calls == 0  # строки не выбирались: перевод до выбора
+    else:
+        assert _rub(record[0]["text"], "Ферритин"), record[0]["text"]
+
+
+@pytest.mark.parametrize("insurance", [False, None])  # вопрос об оплате: «нет» / не ответил (прежнее правило — суд пропустил слово)
+def test_price_word_marked_as_insurance_keeps_the_prices(insurance, mini_prod_world, monkeypatch):  # noqa: F811
+    """Класс карточки 28.10: живая LLM разметки метила оплатой «платно», «сертификат», «цену» — вопрос об оплате метку снимает, цены
+    как без неё; не перевод."""
+
+    oracle = SpansOracle(("ферритин", "глюкоза"), inner=_Rows(("Ферритин", "Глюкоза")), qualifiers=[("ферритин", "платно", PAY)], insurance=insurance)
+    [turn], [row] = _run(["ферритин платно и глюкоза сколько стоят"], oracle, mini_prod_world, monkeypatch, _sid("paid", str(insurance)))
+    assert not turn["handoff"] and _rub(turn["text"], "Ферритин") and _rub(turn["text"], "Глюкоза"), turn["text"]
+    assert row["tu_insurance"] == ("denied" if insurance is False else "unavailable") and "price_insurance" not in row
+
+
 @pytest.mark.parametrize(("reply", "phrases", "qualifier"), _LIST_CASES)
 def test_insurance_at_a_position_hands_the_turn_to_the_operator(reply, phrases, qualifier, mini_prod_world, monkeypatch):  # noqa: F811
-    """Решение владельца 28.10: цену по ОМС и ДМС называет оператор — суд условия отверг позицию, разметка пометила оплату страховкой:
-    перевод хода, цен в ответе нет (и у соседа: по ДМС цены не называем вовсе)."""
+    """Вопрос об оплате не ответил — прежнее правило (решение владельца 28.10: цену по ОМС и ДМС называет оператор): суд условия отверг
+    позицию, разметка пометила оплату страховкой — перевод хода, цен в ответе нет (и у соседа: по ДМС цены не называем вовсе)."""
 
     of, words = qualifier
     oracle = SpansOracle(phrases, inner=_Rows(("Ферритин", "Глюкоза", "ТТГ")), qualifiers=[(of, words, PAY)])
@@ -286,6 +342,32 @@ def test_inside_loose_and_broken_qualifiers(monkeypatch):
     assert [(q.kind, q.text, q.inside) for q in ferritin.qualifiers] == [(QualifierKind.INSURANCE, "по омс", True)]
     assert ferritin.beside == "срочно" and glucose.beside == "срочно" and glucose.qualifiers == ()  # ни к одной — у каждой позиции
     assert [(q.kind, q.text) for q in parse.loose] == [(QualifierKind.CONDITION, "срочно")]
+
+
+@pytest.mark.parametrize(("kind", "picks", "verdict"), [(PAY, [1], "confirmed"), (PAY, [], "denied"), ("condition", [1], "")])
+def test_insurance_verdict_asks_only_about_marked_words(kind, picks, verdict, monkeypatch):
+    """Вопрос об оплате — только по словам с меткой «insurance», варианты — сами эти слова; без метки вопроса нет."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    from tests.spans_oracle import INSURANCE_MARK
+
+    asked: list[str] = []
+
+    class _Two:
+        async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+            if INSURANCE_MARK in prompt:
+                asked.append(prompt.split(INSURANCE_MARK, 1)[1])
+                return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)
+            answer = {"phrases": [[1, 1], [5, 5]], "qualifiers": [{"of": 1, "words": [2, 3], "kind": kind}]}
+            return GenerateResponse(model="m", response=json.dumps(answer), done=True)
+
+    monkeypatch.setattr(cfg, "MR_POSITION_QUALIFIERS", "on", raising=False)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Two())
+    monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+    parse = asyncio.run(S.parse_turn_spans("ферритин по ДМС и глюкоза", facet=None, catalog=_CATALOG))
+    assert parse.insurance == verdict
+    assert (["1. по ДМС"] if verdict else []) == [line for chunk in asked for line in chunk.splitlines() if line[:1].isdigit()]
 
 
 def test_answer_without_the_field_is_a_parse_without_qualifiers(monkeypatch):

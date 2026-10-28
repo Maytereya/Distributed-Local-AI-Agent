@@ -30,7 +30,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from .. import llm_runtime, turn_telemetry
-from ..choice import Strength
+from ..choice import Option, Status, Strength, Task, choose
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
 from ..turn_parse import ParsedPhrase, ParseStatus, PhraseParse, Qualifier, QualifierKind
@@ -89,6 +89,10 @@ _SCHEMA_QUALIFIERS: dict[str, Any] = {
     },
     "required": ["phrases", "qualifiers"],
 }
+# Вердикт по метке «оплата»: метка разметки — сведение (живая LLM метила так и «цену», и «платно», и «сертификат»), суд условия
+# корзины пропускал «по ДМС», «по полису» и даже «по омс» (свипы 28.10, код c661056: 15 цен из 15 оставшихся — при верной метке).
+# Отдельный короткий вопрос: какие из отмеченных слов — оплата по ОМС / ДМС / страховке.
+INSURANCE_TASK = Task(name="payment_insurance", num_predict=48, timeout_s=4.0, queue_timeout_ms=_QUEUE_TIMEOUT_MS)
 
 
 def enabled() -> bool:
@@ -330,7 +334,23 @@ async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[
         # Уточнение ни к одной услуге («ферритин и глюкоза по омс») относится ко всем: у каждой позиции — в `beside`, к суду условия.
         extra = " ".join(q.text for q in loose)
         items = [replace(item, beside=" ".join(part for part in (item.beside, extra) if part)) for item in items]
-    return _with_ms(_result(reply, status, "llm", len(toks), items, loose), started)
+    parse = _result(reply, status, "llm", len(toks), items, loose)
+    return _with_ms(replace(parse, insurance=await _insurance_verdict(reply, parse)), started)
+
+
+async def _insurance_verdict(reply: str, parse: PhraseParse) -> str:
+    """Вердикт по метке «оплата» (решение владельца 28.10: цену по ОМС и ДМС называет оператор): отмеченные слова — варианты выбора,
+    LLM выбирает те, что про оплату по ОМС / ДМС / страховке. `confirmed` — хоть одно; `denied` — ни одного (метка снята: «цена»,
+    «платно», «сертификат»); `unavailable` — вопрос не ответил (действует прежнее правило: суд условия отверг позицию и метка есть).
+    "" — метки нет, вопрос не задаётся."""
+
+    marked = [q.text for q in (*parse.loose, *(q for item in parse.items for q in item.qualifiers)) if q.kind == QualifierKind.INSURANCE]
+    if not marked:
+        return ""
+    choice = await choose(INSURANCE_TASK, reply, [Option(id=str(k), text=text) for k, text in enumerate(marked)])
+    verdict = "unavailable" if choice.failed else "confirmed" if choice.status is Status.PICKED and choice.ids else "denied"
+    turn_telemetry.note(tu_insurance=verdict)
+    return verdict
 
 
 def _ms(started: float) -> int:

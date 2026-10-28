@@ -22,12 +22,20 @@ from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services._prices_helpers import _PRICE_TOKEN_RE
 
 SPANS_MARK = "Слова сообщения с номерами:"
+INSURANCE_MARK = "Слова пациента об оплате"  # вопрос об оплате по метке разметки (`choose_payment_insurance`)
 
 
 def is_spans(prompt: str) -> bool:
     """Запрос — разметка слов `turn_spans`."""
 
     return SPANS_MARK in (prompt or "")
+
+
+def insurance_response(prompt: str, confirm: bool) -> GenerateResponse:
+    """Ответ на вопрос об оплате: все отмеченные слова — оплата по ОМС / ДМС / страховке (`confirm`) или ни одно."""
+
+    numbers = [int(head) for head, dot, _rest in (line.partition(". ") for line in prompt.split(INSURANCE_MARK, 1)[1].splitlines()) if dot and head.isdigit()]
+    return GenerateResponse(model="m", response=json.dumps({"picks": numbers if confirm else []}), done=True)
 
 
 def _words(prompt: str) -> list[str]:
@@ -89,7 +97,8 @@ class SpansOracle:
 
     `phrases` можно сменить между ходами (`oracle.phrases = (...)`): у каждого хода своя реплика. `asked` — места, куда пришёл
     ход (`spans` / `spans:down` / `inner`), для проверки, что разметку вообще спросили. `qualifiers` — уточнения позиции в ответе
-    (см. `spans_response`; None — ответ без поля).
+    (см. `spans_response`; None — ответ без поля). `insurance` — ответ на вопрос об оплате по метке «insurance»: True — все
+    отмеченные слова про ОМС / ДМС / страховку, False — ни одно, None — вопрос недоступен (прежнее правило «суд + метка»).
     """
 
     def __init__(
@@ -97,10 +106,12 @@ class SpansOracle:
         phrases: Iterable[str] | None = (),
         inner: Any = None,
         qualifiers: Iterable[tuple[str | None, str, str]] | None = None,
+        insurance: bool | None = None,
     ) -> None:
         self.phrases = tuple(phrases) if phrases is not None else None
         self.inner = inner
         self.qualifiers = tuple(qualifiers) if qualifiers is not None else None
+        self.insurance = insurance
         self.asked: list[str] = []
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
@@ -110,6 +121,11 @@ class SpansOracle:
                 raise ConnectionError("тест: разметка недоступна")
             self.asked.append("spans")
             return spans_response(prompt, self.phrases, self.qualifiers)
+        if INSURANCE_MARK in (prompt or ""):
+            self.asked.append("insurance" if self.insurance is not None else "insurance:down")
+            if self.insurance is None:
+                raise ConnectionError("тест: вопрос об оплате недоступен")
+            return insurance_response(prompt, self.insurance)
         if self.inner is None:
             raise ConnectionError("тест: LLM недоступна для этого места")
         self.asked.append("inner")

@@ -215,6 +215,9 @@ class PhraseParse:
     ms: int = 0
     split: tuple[ParsedPhrase, ...] = ()
     loose: tuple[Qualifier, ...] = ()  # уточнения ни к одной услуге (`of = 0`): условие на весь вопрос или вопрос без названия
+    # Вердикт по метке «оплата» (`insurance`): отдельный вопрос LLM — платит ли пациент по ОМС / ДМС / страховке (`confirmed`), нет
+    # (`denied`), вопрос не ответил (`unavailable`); "" — метки не было (`_turn_spans._insurance_verdict`).
+    insurance: str = ""
 
     @property
     def is_list(self) -> bool:
@@ -244,6 +247,7 @@ class PhraseParse:
                 {
                     "qualifiers": [[f"{q.kind}:{q.text}" for q in item.qualifiers] for item in self.items],
                     "loose": [f"{q.kind}:{q.text}" for q in self.loose],
+                    **({"insurance": self.insurance} if self.insurance else {}),
                 }
                 if self.loose or any(item.qualifiers for item in self.items)
                 else {}

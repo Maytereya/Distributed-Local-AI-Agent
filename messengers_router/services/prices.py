@@ -586,6 +586,9 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     """
 
     await _prefetch_price_snapshots()
+    # Цену по ОМС / ДМС / страховке называет оператор (решение владельца 28.10): разметка и вопрос об оплате сказали «не по прайсу».
+    if _price_by_parse.insurance_confirmed(str(query or "")):
+        return _insurance_handoff(entities, "confirmed")
 
     async def _load_with_retry(fn: Any, *args: Any) -> Any:
         last_exc: Exception | None = None
@@ -959,6 +962,9 @@ async def service_bundle_info(
 ) -> dict[str, Any]:
     top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
     await _prefetch_price_snapshots()
+    # Цену по ОМС / ДМС / страховке называет оператор (решение владельца 28.10): разметка и вопрос об оплате сказали «не по прайсу».
+    if _price_by_parse.insurance_confirmed(str(query or "")):
+        return _insurance_handoff(entities, "confirmed")
     # Нормализуем пациентские синонимы к терминам каталога (BUG-2026-06-23-01:
     # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
     entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
