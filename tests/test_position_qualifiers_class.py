@@ -376,8 +376,8 @@ def test_insurance_verdict_asks_only_about_marked_words(kind, picks, verdict, mo
     parse, spent = asyncio.run(go())
     assert parse.insurance == verdict
     assert (["1. по ДМС"] if verdict else []) == [line for chunk in asked for line in chunk.splitlines() if line[:1].isdigit()]
-    # Решение хода тратит только вердикт, закрывший ход: «не страховка» — возвращено пути цены (карточка c3x: «платно делаете уколы»).
-    assert spent == (2 if verdict == "confirmed" else 1)
+    # Вопрос об оплате решения хода не тратит (карточка c3x: «платно делаете уколы» — второму кругу выбора строки не хватало решения).
+    assert spent == 1
 
 
 def test_answer_without_the_field_is_a_parse_without_qualifiers(monkeypatch):
