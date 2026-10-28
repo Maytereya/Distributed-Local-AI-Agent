@@ -6,8 +6,8 @@
 (`topic_by_llm`) гард уже не перебивает (STEP-2026-10-21-B-TOPIC-BY-LLM); тема кнопки — тот же смысл, не буквы.
 
 Та же карточка: когда гард отпустил тему, её следом перебивает П1 — совпадение реплики с каталогом по буквам
-(`test_assist_catalog_hit_is_price`, `understanding_list_is_price`) переклеивает подбор в цену ближайшей строки («комплексный
-анализ на ИППП» → «TORCH-инфекции — 3 800 руб.», чужая цена); на этом листе П1 и без гарда переклеивал 9 ходов (6 — провал).
+(`test_assist_catalog_hit_is_price`) переклеивает подбор в цену ближайшей строки («комплексный анализ на ИППП» → «TORCH-инфекции —
+3 800 руб.», чужая цена). Список из разметки хода (`understanding_list_is_price`) — решение LLM, не буквы, — остаётся ценой.
 
 Инвариант класса: под `button_topic_firm = on` ход, тему которого задала кнопка, остаётся в теме кнопки — ни гард «без записи», ни
 П1 его не переклеивают (в журнале хода `button_topic_firm = walkin | p1`); подбор решает LLM по данным хода; та же реплика без
@@ -102,12 +102,12 @@ def test_typed_question_without_button_is_untouched(reply, mini_prod_world, monk
     assert "button_topic_firm" not in on["telemetry"], on["telemetry"]
 
 
-def _p1_relabel(tel: dict) -> bool:
-    return any(str(s).split(":")[0] in {"test_assist_catalog_hit_is_price", "understanding_list_is_price"} for s in tel.get("tu_relabel_src") or [])
+def _p1_relabel(tel: dict, rows: tuple[str, ...] = ("test_assist_catalog_hit_is_price",)) -> bool:
+    return any(str(s).split(":")[0] in rows for s in tel.get("tu_relabel_src") or [])
 
 
 # Подбор, где реплика называет услугу каталога: П1 переклеивал её в цену по совпадению букв.
-_NAMED = ["анализ на ферритин", "общий анализ крови и ферритин"]
+_NAMED = ["анализ на ферритин", "анализ на ттг", "витамин д"]
 
 
 @pytest.mark.parametrize("reply", _NAMED)
@@ -122,6 +122,20 @@ def test_on_p1_keeps_the_button_topic(reply, mini_prod_world, monkeypatch):  # n
     tel = _dialog(mini_prod_world, monkeypatch, [(_BUTTON, GATEWAY_V1_TITLES[_BUTTON]), reply], switch="on")[1]["telemetry"]
     assert not _p1_relabel(tel) and tel.get("tu_label_final") == "TEST_ASSIST", tel
     assert tel.get("button_topic_firm") == "p1", tel
+
+
+def test_on_list_from_turn_parse_stays_price(mini_prod_world, monkeypatch):  # noqa: F811
+    """Список из разметки хода — решение LLM, не буквы: `understanding_list_is_price` под on остаётся (подбор по данным хода
+    выбирает не больше 6 строк и на длинном списке ложно сказал бы «остального нет», g0320 / g0382)."""
+
+    off = _dialog(mini_prod_world, monkeypatch, [(_BUTTON, GATEWAY_V1_TITLES[_BUTTON]), _LIST], switch="off")[1]["telemetry"]
+    on = _dialog(mini_prod_world, monkeypatch, [(_BUTTON, GATEWAY_V1_TITLES[_BUTTON]), _LIST], switch="on")[1]["telemetry"]
+    assert off.get("tu_relabel_src") == on.get("tu_relabel_src"), (off, on)
+    assert on.get("tu_label_final") == off.get("tu_label_final"), (off, on)
+    assert on.get("button_topic_firm") != "p1", on
+
+
+_LIST = "общий анализ крови и ферритин"
 
 
 @pytest.mark.parametrize("reply", _NAMED)

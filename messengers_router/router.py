@@ -1965,12 +1965,6 @@ def _relabel_test_assist_catalog_hit_as_price(
     if decision.label != "TEST_ASSIST":
         return decision
     flags = set(decision.flags or set())
-    if button_flow.topic_firm(flags):
-        # Подбор анализов задала кнопка: совпадение с каталогом по буквам тему не перебивает — названные анализы подбор находит
-        # по данным хода (`test_assist_answer`, с ценой строки), а не цена ближайшей строки (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
-        if "catalog_service_exact" in flags or (turn_understanding.acting() is not None and turn_understanding.acting().is_list):
-            turn_telemetry.note(button_topic_firm="p1")
-        return decision
     # Понимание хода (ход (б), шаг 1, `on`): список узнанных каталогом услуг — цена, как одна
     # узнанная услуга (П1). Вопрос о сроке сюда не доходит как цена: ему отвечает
     # `_maybe_readiness_reply` — срок из МИС или перевод (READINESS-AS-PRICE).
@@ -1987,6 +1981,12 @@ def _relabel_test_assist_catalog_hit_as_price(
     if "catalog_service_exact" not in flags:
         return decision
     if not str((decision.entities or {}).get("service_name") or "").strip():
+        return decision
+    if button_flow.topic_firm(flags):
+        # Подбор анализов задала кнопка: совпадение с каталогом по буквам тему не перебивает — названное подбор находит по данным
+        # хода (`test_assist_answer`, цена — кодом), а не цена ближайшей строки. Список из разметки хода (`understanding_list_is_price`
+        # выше) — решение LLM, не буквы: он остаётся ценой (STEP-2026-10-28-C6-BUTTON-TOPIC-FIRM).
+        turn_telemetry.note(button_topic_firm="p1")
         return decision
     if "result_delivery_info" in flags:
         return decision
