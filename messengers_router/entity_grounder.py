@@ -725,6 +725,15 @@ async def ground_decision_entities(
                 flags.add("entity_dropped_stale_service_name_in_reschedule")
                 continue
 
+            parsed = await turn_understanding.service_slot(label, user_text)
+            if parsed is not None:
+                # Слот-услуга — из разбора хода, не слова реплики (Н-1, Д3): «а как к нему подготовиться?» после цены ферритина
+                # разбор пуст — слот не пишется, в нём остаётся показанное, а не «Нему подготовиться» (`pending_in_frame`).
+                if parsed:
+                    out[key] = parsed
+                else:
+                    flags.add("entity_dropped_service_not_in_parse")
+                continue
             # Стараемся брать услугу из текущей реплики, а не "как есть" из LLM,
             # чтобы не залипали ложные service_name.
             phrase: str | None = None
@@ -739,7 +748,7 @@ async def ground_decision_entities(
                 reply_phrase = extract_service_phrase(user_text)
                 phrase_in_reply = bool(reply_phrase)
                 phrase = reply_phrase or extract_service_phrase(str(value or ""))
-            strict_catalog_labels = {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}
+            strict_catalog_labels = turn_understanding.CATALOG_CHECKED_LABELS
             if phrase:
                 if _is_doctor_like_service_collision(
                     label=label,

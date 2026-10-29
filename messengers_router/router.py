@@ -1713,6 +1713,22 @@ _GROUNDER_REJECTED_SLOT_FLAGS: dict[str, frozenset[str]] = {
 }
 
 
+async def _service_slot_from_parse(quick: dict[str, Any], label: str, user_text: str, *, missing: list[str]) -> dict[str, Any]:
+    """Слот-услуга, которого не хватает ходу, — под `pending_in_frame` из разбора хода, как у грундера
+    (`turn_understanding.service_slot`, Д3-слот), а не из слов реплики: «а как к нему подготовиться?» — показанная услуга,
+    а не «Нему подготовиться»; «а что нужно перед ним?» — тоже она, а не переспрос. Пусто — слот не пишется. off — как было."""
+
+    if "service_name" not in quick and not any("service_name" in str(rule) for rule in missing):
+        return quick
+    parsed = await turn_understanding.service_slot(label, user_text)
+    if parsed is None:
+        return quick
+    if parsed:
+        return {**quick, "service_name": parsed}
+    turn_telemetry.note(tu_slot_dropped="quick_fill")
+    return {k: v for k, v in quick.items() if k != "service_name"}
+
+
 def _suppress_grounder_rejected_slots(
     quick: dict[str, Any] | None,
     decision_flags: set[str] | frozenset[str] | None,
@@ -2832,7 +2848,8 @@ async def _pending_slot_value(label: str, slot: str, user_text: str) -> str:
     """Значение вопроса-слота, который одна функция признала ответом, а правила не разобрали (`pending_slot_value`).
 
     off (`pending_in_frame`) — реплика целиком, как было. on — слот-услуга (`pending_answer.SERVICE_SLOTS`) получает позицию из
-    разбора хода (`turn_understanding.service_phrase`; список — фразы через запятую): реплика целиком в названии услуги на
+    разбора хода (`turn_understanding.service_slot` — одна функция для всех писателей слота; список — фразы через запятую,
+    «услуги нет» — показанная прошлым ответом одна услуга): реплика целиком в названии услуги на
     следующем ходе — вопрос пациента вместо услуги («По запросу «Откуда берут биоматериал…»», класс L-13; Н-1 карты
     «Понимания»). Разбор пуст или сбой — слот не пишется: ход без услуги её уточнит, а не покажет чужую. Разбор подготовки —
     тот же, что прочтёт инструмент (`observe_prepare_turn`: раз за ход). Фраза — вход инструмента этого хода, не контекст:
@@ -2841,8 +2858,7 @@ async def _pending_slot_value(label: str, slot: str, user_text: str) -> str:
 
     if not pending_answer.in_frame_on() or slot not in pending_answer.SERVICE_SLOTS:
         return pending_answer.slot_value(user_text)
-    await turn_understanding.observe_prepare_turn(label, user_text=user_text)
-    return pending_answer.slot_value(turn_understanding.service_phrase(user_text))
+    return pending_answer.slot_value(await turn_understanding.service_slot(label, user_text) or "")
 
 
 def _slot_filled_by_rules(user_text: str, state: SessionState, services: Services, memory: MemoryStore) -> bool:
@@ -3916,6 +3932,8 @@ async def _complete_route_after_doctor_guard(
             if quick_now:
                 quick_now = await _sanitize_doctor_in_entities(quick_now, services, label=decision.label)
                 quick_now = _suppress_grounder_rejected_slots(quick_now, decision.flags)
+            quick_now = await _service_slot_from_parse(quick_now or {}, decision.label, user_text, missing=missing_now)
+            if quick_now:
                 memory.merge_entities(state, quick_now, label=decision.label)
         elif decision.label == "APPOINTMENT" and state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
             # В активном сценарии записи продолжаем извлекать филиал/дату/время
@@ -3970,8 +3988,6 @@ async def _complete_route_after_doctor_guard(
             value = await _pending_slot_value(str(pend_label), slot, user_text)
             if value:
                 memory.merge_entities(state, {slot: value}, label=str(pend_label))
-                if slot in pending_answer.SERVICE_SLOTS and pending_answer.in_frame_on():
-                    shown_context.parsed_input(state)  # фраза разбора — вход инструмента хода; контекст после — показанное
 
     fill_date_from_schedule_windows(state, decision.label)
     _test_assist_guess_as_name(decision, state, memory, test_assist_guess, user_text)

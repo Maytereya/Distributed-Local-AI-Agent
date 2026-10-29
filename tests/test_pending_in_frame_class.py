@@ -267,8 +267,8 @@ def test_several_memos_shown_leave_no_single_service():
     state = SessionState(session_id="s")
     for shown, service in ((["ТТГ (TSH)", "Антитела к рецепторам ТТГ"], None), ([], None), (["Ферритин"], "Ферритин")):
         shown_context.begin_turn(state)
-        state.last_entities["service_name"] = "ттг"
-        shown_context.parsed_input(state)
+        state.last_entities["service_name"] = "Ттг"  # слияние сущностей меняет регистр
+        shown_context.parsed_input("ттг")
         shown_context.sync_prepare(state, {"prepare": "…", "prepare_shown": shown})
         shown_context.finish_turn(state)
         assert state.last_entities.get("service_name") == service and state.last_entities.get(shown_context.SHOWN_KEY) == shown
@@ -284,12 +284,12 @@ def test_end_of_turn_drops_only_the_unshown_phrase():
     state = SessionState(session_id="s")
     shown_context.begin_turn(state)
     state.last_entities["service_name"] = "ВПЧ"
-    shown_context.parsed_input(state)
+    shown_context.parsed_input("ВПЧ")
     shown_context.finish_turn(state)
     assert "service_name" not in state.last_entities
     shown_context.begin_turn(state)
     state.last_entities["service_name"] = "ВПЧ"
-    shown_context.parsed_input(state)
+    shown_context.parsed_input("ВПЧ")
     state.last_entities["service_name"] = "Папилломавирус 16/18 (колич.)"  # показала цена хода
     shown_context.finish_turn(state)
     assert state.last_entities["service_name"] == "Папилломавирус 16/18 (колич.)"

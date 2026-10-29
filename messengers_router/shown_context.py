@@ -125,12 +125,12 @@ def remember(state: SessionState, names: list[str]) -> None:
         state.last_entities.pop("test_name", None)
 
 
-def parsed_input(state: SessionState) -> None:
-    """Слот-услуга этого хода — фраза разбора (ответ на вопрос кнопки или свой вопрос в её рамке, `pending_in_frame`): её читает
-    инструмент хода, а контекст следующего хода — то, что ответ показал (Н-1, второй ход: «ВПЧ» в слоте и памятка «Папилломавирус
-    16/18» на экране → «а сколько стоит?» отвечало ценой жидкостной цитологии, которой пациент не видел)."""
+def parsed_input(phrases: str) -> None:
+    """Слот-услуга этого хода — позиции разбора, слова пациента (`turn_understanding.service_slot`, `pending_in_frame`): их читает
+    инструмент хода, а контекст следующего хода — то, что ответ показал (И-5.5; Н-1, второй ход: «ВПЧ» в слоте и памятка
+    «Папилломавирус 16/18» на экране → «а сколько стоит?» отвечало ценой жидкостной цитологии, которой пациент не видел)."""
 
-    _PARSED.set(str(state.last_entities.get("service_name") or "").strip())
+    _PARSED.set(_norm(phrases))
 
 
 def sync_prepare(state: SessionState, payload: dict[str, Any]) -> None:
@@ -138,7 +138,7 @@ def sync_prepare(state: SessionState, payload: dict[str, Any]) -> None:
     карточек справочника — услуги клиники): одна — она (`remember`), несколько или ни одной (памятка базы знаний, общая памятка,
     «памятки нет») — без единственной услуги. Без фразы разбора в слоте — как было: подготовка контекст не пишет."""
 
-    if not _PARSED.get():
+    if not _PARSED.get() or _norm(str(state.last_entities.get("service_name") or "")) != _PARSED.get():
         return
     _PARSED.set("")
     names = [str(name) for name in payload.get("prepare_shown") or [] if str(name or "").strip()]
@@ -153,7 +153,7 @@ def finish_turn(state: SessionState) -> None:
 
     parsed = _PARSED.get()
     _PARSED.set("")
-    if parsed and str(state.last_entities.get("service_name") or "").strip() == parsed:
+    if parsed and _norm(str(state.last_entities.get("service_name") or "")) == parsed:
         state.last_entities.pop("service_name", None)
 
 
