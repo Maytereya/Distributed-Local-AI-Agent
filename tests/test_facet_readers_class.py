@@ -11,6 +11,8 @@
 - подготовка — памятка (PREPARE); «где / когда» и «нужна ли запись» — адреса (ADDRESS, как вариант П1 `where_when`);
   «ни одно» — данные клиники или честный оффер (OTHER, как у П1 `p1_facet_none_offer`);
 - ответ на вопрос кнопки цены — цена: тему задала кнопка;
+- строки одной услуги с разными сроками — каждая со своей ценой и сроком (как цена списком), не перевод; у строки нет срока —
+  перевод, как было;
 - off — как было.
 Через обработчик эндпоинта; LLM — подделка клиента Ollama, решение проходит настоящий `choose()`.
 """
@@ -24,6 +26,7 @@ import pytest
 from messengers_router import router, turn_understanding
 from messengers_router.mess_types import RouteDecision
 from tests.test_facet_by_llm_class import _FACET_MARK, _dialog, _relabels
+from tests.spans_oracle import SPANS_MARK, spans_response
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _PRICE_TEMPLATE = "Не нашёл актуальную стоимость"
@@ -76,3 +79,36 @@ def test_answer_to_price_button_question_stays_a_price(monkeypatch):
     assert asyncio.run(router._route_by_turn_facet(decision, user_text="ЭКГ самара")) is decision
     plain = RouteDecision(label="PRICE")
     assert asyncio.run(router._route_by_turn_facet(plain, user_text="ЭКГ самара")).label == "ADDRESS"
+
+
+_CULTURE_NAME = "Посев мочи с идентификацией культур"
+_CULTURE = f"{_CULTURE_NAME} — какой срок получения результата?"
+_CULTURE_SPANS = {SPANS_MARK: lambda prompt: spans_response(prompt, [_CULTURE_NAME]).response}
+
+
+def test_readiness_of_service_with_rows_of_different_deadlines_lists_them(mini_prod_world, monkeypatch):  # noqa: F811
+    out, _ = _dialog(mini_prod_world, monkeypatch, [(_CULTURE, "PRICE", "readiness")], switch="on", extra_answers=_CULTURE_SPANS)
+    turn = out[0]
+    assert "readiness_from_mis" in (turn["telemetry"].get("tu_acted") or []), turn["telemetry"]
+    text = turn["text"]
+    assert "Посев мочи с идентификацией культур" in text, text
+    assert "1 100 руб. — 6 дней" in text and "1 050 руб. — 3–5 дней" in text, text
+    assert "оператор" not in text.lower(), text
+
+
+def test_readiness_of_rows_with_different_deadlines_off_is_as_before(mini_prod_world, monkeypatch):  # noqa: F811
+    # Off — как было: у строк одного названия сроки разные — честный перевод.
+    from messengers_router.services import _readiness_select as rs
+
+    rows = [
+        {"serviceName": "Посев мочи с идентификацией культур", "deadline": "6", "cost": 1100.0},
+        {"serviceName": "Посев мочи с идентификацией культур", "deadline": "3-5", "cost": 1050.0},
+    ]
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_FACET_BY_LLM", "off", raising=False)
+    assert rs._deadline_items("Посев мочи с идентификацией культур", rows) == []
+    monkeypatch.setattr(cfg, "MR_FACET_BY_LLM", "on", raising=False)
+    assert [i["variant"] for i in rs._deadline_items("Посев мочи с идентификацией культур", rows)] == ["1 100 руб.", "1 050 руб."]
+    rows[1]["deadline"] = " "
+    assert rs._deadline_items("Посев мочи с идентификацией культур", rows) == []  # у строки нет срока — перевод, как было
