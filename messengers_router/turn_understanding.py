@@ -475,16 +475,25 @@ _NO_SERVICE_NAMED = frozenset({turn_parse.ParseStatus.NONE_FIT, turn_parse.Parse
 CATALOG_CHECKED_LABELS = frozenset({"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"})
 
 
+def service_slot_on() -> bool:
+    """Слот-услуга — из разбора хода (`service_slot`): под `pending_in_frame` (Н-1) и под `facet_by_llm` (шаг 2). Тип вопроса
+    по LLM снимает переклейку по буквам обратно в тему прошлого хода (`flow_prepare_followup_override`), которая прятала слова
+    вопроса в слоте: «а запишите меня» после памятки шло в памятку, а под `facet_by_llm` — в запись, и та читает слот
+    («запись на Нему подготовиться», финальная карточка набора 22). Защита слота включается вместе с ним. Оба off — как было."""
+
+    from .pending_answer import in_frame_on  # не на уровне модуля: функция ответа импортирует понимание хода
+
+    return in_frame_on() or facet_by_llm()
+
+
 async def service_slot(label: str, user_text: str) -> str | None:
-    """Слот-услуга темы без проверки каталогом — из разбора хода этой реплики (`pending_in_frame = on`; класс Н-1 «реплика —
+    """Слот-услуга темы без проверки каталогом — из разбора хода этой реплики (`service_slot_on`; класс Н-1 «реплика —
     значением слота», Д3-слот): позиции разбора через запятую; разбор решил «услуги нет» — показанная прошлым ответом услуга,
     если она одна, иначе ""; сбой — "" (слот не пишется: неизвестно, не назвал ли пациент новую услугу). Одна точка для обоих писателей слота из реплики — грундера сущностей
     решения и дозаполнения хода. Разбор подготовки строится здесь же — тот, что прочтёт инструмент (`observe_prepare_turn`:
     раз за ход, второго решения LLM нет). None — как было: выключатель off, тема с проверкой каталогом или разбора нет."""
 
-    from .pending_answer import in_frame_on  # не на уровне модуля: функция ответа импортирует понимание хода
-
-    if label in CATALOG_CHECKED_LABELS or not in_frame_on():
+    if label in CATALOG_CHECKED_LABELS or not service_slot_on():
         return None
     await observe_prepare_turn(label, user_text=user_text)
     status = parse_status(user_text)
