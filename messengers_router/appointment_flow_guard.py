@@ -435,7 +435,9 @@ def run_appointment_precheck(
         verdict = pending_answer.continues(*_FLOW_QUESTIONS, expects.Question.SLOT_VALUE)
         if verdict is not None:
             pending_answer.acted("appointment_precheck")
-            switch = not verdict
+            # Структурный ответ потока записи (да / нет, дата, город, филиал, ФИО) — сужение до LLM, его «другая тема» модели не
+            # переигрывает: «на Ленина» на выбор услуги записи — ответ о филиале (многоходовые наборы 30.10: L4a, L4c, S2).
+            switch = not verdict and not should_keep_appointment_flow_override(user_text)
         else:
             switch = not _answers_branch_question(state, user_text) and is_likely_topic_switch_from_appointment(user_text)
         if switch:

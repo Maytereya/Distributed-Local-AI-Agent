@@ -202,6 +202,10 @@ def test_handler_reask_is_limited_under_on(monkeypatch):
         ("Какой анализ интересует?\n\n" + OPERATOR_HINT_TEXT, {"type": "slot_value"}, (expects.Question.SLOT_VALUE,), ""),
         ("Соединяю с оператором.", None, (), ""),
         ("Результат по ссылке: https://naykalab.ru/getanaliz.php?fam=X\n\n" + OFFER, {"type": "operator_offer"}, (expects.Question.OPERATOR_OFFER,), ""),
+        ("3) Подготовка: памятки нет — подскажет оператор. " + OFFER + "\nЕсли нужно, подскажу филиалы.", None, (), "offer_not_expected"),
+        ("Памятки нет. " + OFFER + "\nКакой филиал вам удобен?", {"type": "operator_offer"}, (expects.Question.OPERATOR_OFFER,), "two_questions"),
+        ("Например: «Сколько стоит УЗИ?». " + OFFER, {"type": "operator_offer"}, (expects.Question.OPERATOR_OFFER,), ""),
+        ("Услуги нет. Если хотите уточнить, переведу на оператора. Перевести?", None, (), "offer_not_expected"),
     ],
 )
 def test_one_question_check(text, field, asked, violation):
@@ -325,3 +329,61 @@ def test_request_to_connect_without_invitation_is_as_before(d21_world, monkeypat
     for cfg in ({}, ON):
         record = uc.run(d21_world, monkeypatch, [uc.say("сколько стоит ферритин", services=("ферритин",)), uc.say("соедините")], cfg=cfg, session=f"no-invite-{bool(cfg)}")
         assert not record[-1]["handoff"], record[-1]["text"]
+
+
+# --------------------------------------------------------------------------- оффер вопросом в тексте ответа — висящий вопрос
+
+
+_BUNDLE_OFFER = uc.say("сколько стоит ЭКГ и какая подготовка", topic="PRICE", services=("ЭКГ",))
+
+
+def test_offer_inside_a_composite_answer_is_the_hanging_question(d21_world, monkeypatch):  # noqa: F811
+    """Обзор цены с пунктом подготовки «…подскажет оператор. Перевести на оператора?» (вложен текстом инструмента, мимо
+    `mark_operator_offer_pending`): под on `_expects = operator_offer`, «да» — перевод (И-2); off — поля нет, «да» не переводит."""
+
+    on = uc.run(d21_world, monkeypatch, [_BUNDLE_OFFER, uc.say("да")], cfg=ON, session="bundle-offer-on")
+    assert OFFER in on[0]["text"] and "3) Подготовка" in on[0]["text"], on[0]["text"]
+    assert (on[0]["expects"] or {}).get("type") == "operator_offer" and on[0]["telemetry"].get("rendered_offer") == "armed"
+    assert on[1]["handoff"], on[1]["text"]
+    off = uc.run(d21_world, monkeypatch, [_BUNDLE_OFFER, uc.say("да")], session="bundle-offer-off")
+    assert off[0]["text"] == on[0]["text"] and (off[0]["expects"] or {}).get("type") != "operator_offer"
+    assert not off[1]["handoff"], off[1]["text"]
+
+
+def test_no_after_the_offer_inside_a_composite_answer_is_not_a_handoff(d21_world, monkeypatch):  # noqa: F811
+    record = uc.run(d21_world, monkeypatch, [_BUNDLE_OFFER, uc.say("нет")], cfg=ON, session="bundle-offer-no")
+    assert not record[1]["handoff"], record[1]["text"]
+
+
+def test_offer_text_with_another_hanging_question_becomes_a_line(monkeypatch):
+    """Висит вопрос бота (вопрос-слот), а в тексте ответа ещё и оффер вопросом: оффер — строка без «?», поле — вопрос бота (И-1)."""
+
+    from messengers_router import router
+    from messengers_router.mess_types import ResponseEnvelope, SessionState
+    from messengers_router.memory import MemoryStore
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_EXPECTS_BY_UNDERSTANDING", "on", raising=False)
+    memory, state = MemoryStore(), SessionState(session_id="offer-line")
+    memory.set_pending(state, label="PREPARE", missing_slots=["service_name"])
+    expects.begin_turn(state)
+    expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
+    response = ResponseEnvelope(text="Памятки нет — подскажет оператор. Перевести на оператора?\nК какой процедуре нужна подготовка?", handoff=False)
+    router._finish_turn(state, memory, response)
+    assert OFFER not in response.text and OPERATOR_HINT_TEXT in response.text, response.text
+    assert state.last_entities[expects.EXPECTS_KEY]["type"] == "slot_value" and not state.last_entities.get("_operator_offer_pending")
+
+
+@pytest.mark.parametrize("reply", ["на Ленина", "завтра после 17", "да"])
+def test_structural_answer_of_the_booking_is_not_overruled_by_a_new_topic_verdict(reply, d21_world, monkeypatch):  # noqa: F811
+    """Структурный ответ потока записи (филиал, дата, да / нет) — сужение до LLM: «другая тема» модели на вопрос шага записи его не
+    переигрывает, запись идёт дальше, как без выключателя (многоходовые наборы 30.10: «на Ленина» на выбор услуги записи
+    спрашивал «перейти к новому вопросу?»)."""
+
+    dialog = [_TO_CARDIO, uc.say(reply, pending="new_topic", topic="OTHER")]
+    off = uc.run(d21_world, monkeypatch, dialog, session=f"struct-off-{reply}")
+    on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session=f"struct-on-{reply}")
+    assert _SWITCH not in on[1]["text"], on[1]["text"]
+    # Повтор того же вопроса под on несёт строку анти-залипа (вариант (А)) — прочее как без выключателя.
+    plain = [(t["text"].removesuffix(f"\n\n{OPERATOR_HINT_TEXT}"), t["handoff"]) for t in on]
+    assert plain == [(t["text"], t["handoff"]) for t in off]
