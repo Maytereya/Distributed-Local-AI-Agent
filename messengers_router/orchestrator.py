@@ -978,6 +978,8 @@ async def run_pipeline(
     """
 
     turn_understanding.begin_turn()
+    # Висящий вопрос на входе хода — для рамки полного понимания (шаг 0): к построению плана его уже снимает ответ.
+    turn_understanding.note_asked(memory.get_pending(state) if memory is not None else None)
     shown_context.begin_turn(state)
     ctx = OrchestratorContext(text=text, state=state, button_id=button_id)
     async with _timed_stage(ctx, "early_guards"):

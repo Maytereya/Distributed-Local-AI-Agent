@@ -223,6 +223,7 @@ class MessengerRouterConfig:
     address_followup_llm: str
     address_named_street: str
     turn_understanding_one: str
+    turn_understanding_full: str
     service_answer_from_data: str
     test_assist_from_data: str
     test_assist_price: str
@@ -740,6 +741,11 @@ settings = Settings(
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
         # По умолчанию on — как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
         turn_understanding_one=_get_enum("MESSENGER_ROUTER", "turn_understanding_one", default="on", allowed={"off", "on"}),
+        # Ход (б), шаг 0 (консилиум 30.10, STEP-2026-10-30-B-STEP0-FULL): полное понимание хода на КАЖДОМ ходе — тема и кто
+        # её решил, рамка кнопки, висящий вопрос и ответ на него, сущности — копиями уже принятых решений, в debug
+        # (`understanding_full`) и телеметрию; новых вызовов LLM нет, ответы не меняются. off — как было (и сверка темы с меткой
+        # решения, а не плана). [MESSENGER_ROUTER] turn_understanding_full
+        turn_understanding_full=_get_enum("MESSENGER_ROUTER", "turn_understanding_full", default="shadow", allowed={"off", "shadow"}),
         # Ответ о клинике — только по её данным (решения владельца 21.10, «ни в коем случае не выдумывать»): «есть ли / делаете
         # ли / берёте ли X» решает LLM по прайсу и памяткам пациенту (`choose`, задача `service_answer`) там, где бот иначе
         # написал бы свободный текст или сдался бы без данных; текст печатает код, нет данных — честный оффер оператора.
@@ -991,6 +997,7 @@ MR_ADDRESS_BRANCH_FLAGS = settings.messenger_router.address_branch_flags
 MR_ADDRESS_FOLLOWUP_LLM = settings.messenger_router.address_followup_llm
 MR_ADDRESS_NAMED_STREET = settings.messenger_router.address_named_street
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
+MR_TURN_UNDERSTANDING_FULL = settings.messenger_router.turn_understanding_full
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_TEST_ASSIST_PRICE = settings.messenger_router.test_assist_price

@@ -479,6 +479,12 @@ def leaf_frame() -> button_menu.ButtonAction | None:
     return button_menu.action_for(button_id) if button_id else None
 
 
+def leaf_frame_id() -> str:
+    """Id листа без своего вопроса, в рамку которого вопрос рамки вернул эту реплику; иначе пусто (полное понимание хода)."""
+
+    return str(_REFRAMED_LEAF.get() or "")
+
+
 def mixed_topic() -> bool:
     """Ход отвечает на смешанное сообщение: тема — кнопки, и её не перебивает надёжное правило другой темы."""
 

@@ -92,6 +92,43 @@ class ServiceMention:
 
 
 @dataclass(frozen=True)
+class Frame:
+    """Рамка кнопки хода (шаг 0, контракт полного понимания): `kind` — `press` (лист нажат на этом ходе), `question` (реплика —
+    ответ на вопрос кнопки), `leaf` (реплика после листа без своего вопроса), `address` (реплика после адресного листа);
+    `held` — тема хода — тема кнопки (рамку не перебили)."""
+
+    button: str
+    kind: str
+    topic: str = ""
+    held: bool = False
+
+
+@dataclass(frozen=True)
+class Expects:
+    """Висящий вопрос бота и ответ на него (шаг 0): тип вопроса (`_expects.type`), исход одной функции ответа
+    (`pending_answer.Outcome`) и кто решил. Текста вопроса здесь нет — в нём бывает ФИО пациента."""
+
+    type: str
+    outcome: str = ""
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class TurnEntities:
+    """Сущности хода (шаг 0 — копия решения хода, не новое решение): позже их строит разбор хода (шаг 5)."""
+
+    service: str = ""
+    doctor: str = ""
+    specialty: str = ""
+    branch: str = ""
+    city: str = ""
+    date: str = ""
+
+    def present(self) -> list[str]:
+        return [name for name in ("service", "doctor", "specialty", "branch", "city", "date") if getattr(self, name)]
+
+
+@dataclass(frozen=True)
 class TurnUnderstanding:
     services: tuple[ServiceMention, ...] = ()
     services_rule: str = ""
@@ -101,6 +138,12 @@ class TurnUnderstanding:
     # Названа ли в реплике услуга — одно решение хода (U6, ход (б), этап 2): ставит производитель под `turn_understanding_one`
     # (`_decide_named`), планировщик цены читает. None — не решено (выключатель off): читатель идёт прежним путём.
     names_service: bool | None = None
+    # Контракт полного понимания (ход (б), шаг 0, консилиум 30.10): тема хода, рамка кнопки, висящий вопрос и ответ, сущности.
+    # Заполняет только `observe_turn` (полное понимание, `full()`); у понимания цены (`current()`) — None, его читатели не меняются.
+    intent: TurnIntent | None = None
+    frame: Frame | None = None
+    expects: Expects | None = None
+    entities: TurnEntities | None = None
 
     def for_text(self, text: str) -> bool:
         """Читатель берёт понимание, только если его вход — реплика хода (как `PhraseParse.for_text`):
@@ -165,6 +208,10 @@ class TurnIntent:
 _CURRENT: contextvars.ContextVar[TurnUnderstanding | None] = contextvars.ContextVar("mr_turn_understanding", default=None)
 _INTENT: contextvars.ContextVar[TurnIntent | None] = contextvars.ContextVar("mr_turn_intent", default=None)
 _ACTED: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_turn_understanding_acted", default=())
+_FULL: contextvars.ContextVar[TurnUnderstanding | None] = contextvars.ContextVar("mr_turn_understanding_full", default=None)
+# Вопрос кнопки, висевший на входе хода: (лист, тема вопроса); нет — None.
+_ASKED: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("mr_turn_understanding_asked", default=None)
+FULL_MODES = ("off", "shadow")
 
 
 def mode() -> str:
@@ -186,6 +233,8 @@ def begin_turn() -> None:
     _CURRENT.set(None)
     _ACTED.set(())
     _INTENT.set(None)
+    _FULL.set(None)
+    _ASKED.set(None)
     turn_parse.begin()
     turn_names.begin()
 
@@ -215,6 +264,135 @@ def check_planned(label: str) -> None:
     current_intent = _INTENT.get()
     if current_intent is not None and current_intent.final != str(label):
         turn_telemetry.note(tu_intent_mismatch=f"{current_intent.final}>{label}")
+
+
+def full_mode() -> str:
+    """`[MESSENGER_ROUTER] turn_understanding_full = off | shadow` (ход (б), шаг 0); неизвестное значение — shadow."""
+
+    raw = str(getattr(_cfg, "MR_TURN_UNDERSTANDING_FULL", "shadow") or "").strip().lower()
+    return raw if raw in FULL_MODES else "shadow"
+
+
+def note_asked(pending: Any) -> None:
+    """Начало хода: какой лист кнопки задал висящий вопрос (рамка полного понимания); off — ничего."""
+
+    if full_mode() != "shadow" or not isinstance(pending, dict):
+        return
+    from . import button_flow
+
+    button = button_flow.question_button(pending)
+    if button:
+        _ASKED.set((button, str(pending.get("label") or "")))
+
+
+def full() -> TurnUnderstanding | None:
+    """Полное понимание этого хода (шаг 0, тень): его пока никто не читает для решений — только debug и телеметрия."""
+
+    return _FULL.get()
+
+
+def _entities_of(entities: dict[str, Any] | None) -> TurnEntities:
+    """Сущности решения хода → `TurnEntities` (первый непустой ключ). ФИО пациента сюда не входит."""
+
+    source = entities if isinstance(entities, dict) else {}
+
+    def first(*keys: str) -> str:
+        return next((str(source[key]) for key in keys if source.get(key)), "")
+
+    return TurnEntities(
+        service=first("service_name", "test_name"),
+        doctor=first("doctor_name"),
+        specialty=first("specialty"),
+        branch=first("branch_name", "filial"),
+        city=first("city"),
+        date=first("date_from", "date_hint"),
+    )
+
+
+def _frame_of(flags: Sequence[Any], label: str, pending: dict[str, Any] | None) -> Frame | None:
+    """Рамка кнопки — из того, что уже решили кнопочные слои хода (копия, без нового решения)."""
+
+    from . import address_flow, button_flow
+
+    held = "button_answer_topic" in flags
+    pressed = button_flow.pressed(flags)
+    if pressed:
+        return Frame(button=pressed, kind="press", topic=label, held=True)
+    leaf = button_flow.leaf_frame()
+    if leaf is not None:
+        return Frame(button=button_flow.leaf_frame_id(), kind="leaf", topic=str(leaf.label or ""), held=label == leaf.label)
+    asked = _ASKED.get() or ((button_flow.question_button(pending), str((pending or {}).get("label") or "")) if pending else None)
+    if asked and asked[0]:
+        return Frame(button=asked[0], kind="question", topic=asked[1], held=held)
+    address = address_flow.address_button()
+    if address:
+        return Frame(button=address, kind="address", topic="ADDRESS", held=label == "ADDRESS")
+    return None
+
+
+def _expects_of() -> Expects | None:
+    from . import pending_answer
+
+    found = pending_answer.current()
+    if found is None:
+        return None
+    return Expects(type=str(found.type), outcome=str(getattr(found.outcome, "value", found.outcome)), source=str(getattr(found.source, "value", found.source)))
+
+
+def _intent_of(label: str, confidence: float, decision_source: str) -> TurnIntent:
+    """Тема хода: наблюдатель после NLU (`observe_intent`), а на путях мимо NLU (кнопка, prelock записи, обработчик висящего
+    вопроса) — копия решения хода с его источником."""
+
+    observed = _INTENT.get()
+    if observed is not None:
+        return observed
+    return TurnIntent(label=str(label), source=str(decision_source or "?"), rule="", confidence=float(confidence or 0.0))
+
+
+def observe_turn(*, label: str, confidence: float, decision_source: str, flags: Sequence[Any], entities: dict[str, Any] | None, plan_label: str, user_text: str, pending: dict[str, Any] | None) -> None:
+    """Полное понимание хода (ход (б), шаг 0, тень) — одна точка, когда план построен (`router.build_plan`): тема, рамка кнопки,
+    висящий вопрос и ответ, сущности — копиями уже принятых решений; новых вызовов LLM нет, ответы не меняются. Понимание цены
+    этого хода (`current()`) — основа объекта. Сбой — только след `tu_full_error`, ход идёт как без тени."""
+
+    if full_mode() != "shadow":
+        return
+    try:
+        intent = _intent_of(label, confidence, decision_source)
+        base = _CURRENT.get() or TurnUnderstanding(reply=str(user_text or ""))
+        flag_list = list(flags or ())
+        frame = _frame_of(flag_list, str(label), pending if isinstance(pending, dict) else None)
+        expects = _expects_of()
+        entities_seen = _entities_of(entities)
+        _FULL.set(replace(base, intent=intent, frame=frame, expects=expects, entities=entities_seen))
+        seen: dict[str, Any] = {"tu_full_intent_src": intent.source}
+        if frame is not None:
+            seen["tu_frame"] = f"{frame.kind}:{frame.button}:{'held' if frame.held else 'free'}"
+        if expects is not None:
+            seen["tu_expects"] = f"{expects.type}:{expects.outcome}"
+        if entities_seen.present():
+            seen["tu_entities"] = entities_seen.present()
+        turn_telemetry.note(**seen)
+        if intent.final != str(plan_label):
+            turn_telemetry.note(tu_plan_mismatch=f"{intent.final}>{plan_label}")
+    except Exception as exc:  # тень не ломает ход
+        logger.warning("turn_understanding_full_failed", exc_info=True)
+        turn_telemetry.note(tu_full_error=type(exc).__name__)
+
+
+def full_debug() -> dict[str, Any] | None:
+    """Полное понимание хода для debug (`understanding_full`); off или ход без плана — None."""
+
+    tu = _FULL.get()
+    if tu is None:
+        return None
+    return {
+        **tu.as_debug(),
+        "mentions": [{"phrase": m.phrase, "strength": m.strength, "chosen": m.chosen, "source": m.source} for m in tu.services],
+        "intent": tu.intent.as_debug() if tu.intent else None,
+        "frame": vars(tu.frame) if tu.frame else None,
+        "expects": vars(tu.expects) if tu.expects else None,
+        "entities": vars(tu.entities) if tu.entities else None,
+    }
 
 
 def current() -> TurnUnderstanding | None:

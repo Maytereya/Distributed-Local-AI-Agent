@@ -2537,7 +2537,19 @@ def build_plan(
     # какой бы веткой ни пришла реплика.
     _capture_appointment_wish(decision, user_text, state, memory)
     turn_understanding.check_planned(decision.label)
-    return planner_build_plan(decision, state, user_text, memory, runtime_options=runtime_options)
+    plan = planner_build_plan(decision, state, user_text, memory, runtime_options=runtime_options)
+    # Полное понимание хода (ход (б), шаг 0, тень): одна точка — план построен; копии решений, без LLM, ответ не меняет.
+    turn_understanding.observe_turn(
+        label=decision.label,
+        confidence=decision.confidence,
+        decision_source=decision.source,
+        flags=sorted(decision.flags),
+        entities=decision.entities,
+        plan_label=plan.label,
+        user_text=user_text,
+        pending=memory.get_pending(state),
+    )
+    return plan
 
 
 async def execute_plan(plan: Plan, state: SessionState, services: Services) -> Evidence:
@@ -3899,6 +3911,8 @@ def _debug_meta(
         "nlu_trace": nlu_trace,
         "understanding": understanding.as_debug() if (understanding := turn_understanding.current()) else None,
         "intent": topic.as_debug() if (topic := turn_understanding.intent()) else None,
+        # Полное понимание хода (шаг 0, `turn_understanding_full = shadow`); off — ключа нет.
+        **({"understanding_full": full_debug} if (full_debug := turn_understanding.full_debug()) else {}),
         # Разбор реплики на фразы (L-15b) — на ценовых ходах (единственный режим с T7 шага 3б); на прочих ключа нет.
         **({"turn_parse": parse_debug} if (parse_debug := turn_parse.debug()) else {}),
         # Отпечаток рантайма (DATA-13): сборка, модель, хэши промптов и реестра тем, TZ, срезы — без хостов и секретов.
