@@ -2724,14 +2724,15 @@ def _slot_value_keeps_topic(decision: RouteDecision, state: SessionState, memory
     LLM), остаётся в теме вопроса.
 
     Висит вопрос-слот («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?», реквизиты результата):
-    LLM решила «это ответ» — метка темы вопроса, `continue` (смена темы классификатором не сбрасывает вопрос), флаг
-    `pending_slot_value`: значение слота кладёт блок quick-fill хода. Значение, разобранное правилами (сужение без LLM),
+    LLM решила «это ответ» или «свой вопрос в теме кнопки» (`in_frame`) — метка темы вопроса, `continue` (смена темы
+    классификатором не сбрасывает вопрос), флаг `pending_slot_value`: значение слота кладёт блок quick-fill хода
+    (`_pending_slot_value`). Значение, разобранное правилами (сужение без LLM),
     решение хода не трогает — как было; нет, сбой, срочное — как было (BUG-2026-10-08-SLOT-REPLY-LOST-TO-LLM,
     BUG-2026-10-08-PREPARE-ANESTHESIA-IN-QUERY; один путь вместо `slot_reply_llm`).
     """
 
     found = pending_answer.slot_answer()
-    if found is None or found.outcome is not pending_answer.Outcome.ANSWER or found.source is not pending_answer.Source.LLM:
+    if found is None or not found.in_topic or found.source is not pending_answer.Source.LLM:
         return decision
     if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"} or decision.needs_handoff:
         return decision
@@ -2739,6 +2740,22 @@ def _slot_value_keeps_topic(decision: RouteDecision, state: SessionState, memory
     if pend_label not in pending_answer.slot_topics() or not missing_slots(pend_label, state.last_entities):
         return decision
     return _relabel(decision, "pending_slot_value", label=pend_label, context_action="continue", flags=set(decision.flags) | {"pending_slot_value"})
+
+
+async def _pending_slot_value(label: str, slot: str, user_text: str) -> str:
+    """Значение вопроса-слота, который одна функция признала ответом, а правила не разобрали (`pending_slot_value`).
+
+    off (`pending_in_frame`) — реплика целиком, как было. on — слот-услуга (`pending_answer.SERVICE_SLOTS`) получает позицию из
+    разбора хода (`turn_understanding.service_phrase`; список — фразы через запятую): реплика целиком в названии услуги на
+    следующем ходе — вопрос пациента вместо услуги («По запросу «Откуда берут биоматериал…»», класс L-13; Н-1 карты
+    «Понимания»). Разбор пуст или сбой — слот не пишется: ход без услуги её уточнит, а не покажет чужую. Разбор подготовки — тот же, что прочтёт инструмент (`observe_prepare_turn`: раз за ход).
+    Цель подбора — свободные слова пациента, как было.
+    """
+
+    if not pending_answer.in_frame_on() or slot not in pending_answer.SERVICE_SLOTS:
+        return pending_answer.slot_value(user_text)
+    await turn_understanding.observe_prepare_turn(label, user_text=user_text)
+    return pending_answer.slot_value(turn_understanding.service_phrase(user_text))
 
 
 def _slot_filled_by_rules(user_text: str, state: SessionState, services: Services, memory: MemoryStore) -> bool:
@@ -3811,11 +3828,13 @@ async def _complete_route_after_doctor_guard(
         if pend_label == "APPOINTMENT":
             await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
         slot = pending_answer.SLOT_TOPICS.get(str(pend_label or ""))
-        value = pending_answer.slot_value(user_text)
-        if slot and value and "pending_slot_value" in decision.flags and missing_slots(str(pend_label), state.last_entities):
-            # Одна функция решила, что реплика — ответ на вопрос-слот (`_slot_value_keeps_topic`): правила её не разобрали —
-            # реплика целиком в слот; что это за памятка или анализы, решает инструмент темы.
-            memory.merge_entities(state, {slot: value}, label=str(pend_label))
+        if slot and "pending_slot_value" in decision.flags and missing_slots(str(pend_label), state.last_entities):
+            # Одна функция решила, что реплика — ответ на вопрос-слот или свой вопрос в теме кнопки (`_slot_value_keeps_topic`):
+            # правила её не разобрали — значение слота из понятого (`_pending_slot_value`); что это за памятка или анализы,
+            # решает инструмент темы.
+            value = await _pending_slot_value(str(pend_label), slot, user_text)
+            if value:
+                memory.merge_entities(state, {slot: value}, label=str(pend_label))
 
     fill_date_from_schedule_windows(state, decision.label)
     _test_assist_guess_as_name(decision, state, memory, test_assist_guess, user_text)

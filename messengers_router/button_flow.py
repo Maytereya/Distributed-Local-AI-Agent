@@ -255,7 +255,7 @@ def answer_topic(pending: Any) -> str:
     if mode == "off" or not question_button(pending) or (label in _JUDGED_UNDER_SWITCH and not _judges_price()):
         return ""
     found = pending_answer.slot_answer()
-    if found is None or found.outcome is not pending_answer.Outcome.ANSWER:
+    if found is None or not found.in_topic:  # ответ или свой вопрос в теме кнопки (`in_frame`)
         return ""
     return label
 
@@ -270,7 +270,7 @@ def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any, spe
     if (
         llm_runtime.turn_decisions_spent() <= spent_before
         or answered is None
-        or answered.outcome is not pending_answer.Outcome.ANSWER  # прочие исходы ход не закрывают — их уже вернула функция (Q5)
+        or not answered.in_topic  # прочие исходы ход не закрывают — их уже вернула функция (Q5)
         or answered.type != Question.SLOT_VALUE.value
         or not judged_by_llm(pending)
     ):

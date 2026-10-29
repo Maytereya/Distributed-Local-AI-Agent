@@ -435,6 +435,17 @@ def parse_for(text: str) -> turn_parse.PhraseParse | None:
     return turn_parse.acting_for(text)
 
 
+def service_phrase(text: str) -> str:
+    """Позиции-услуги реплики для слота-услуги (`pending_in_frame`): фразы решённого разбора этой реплики — слова пациента об
+    услугах, список — через запятую (следующий ход разберёт его снова списком: корзина, а не одна из услуг). Пустой разбор, сбой
+    LLM (даже с разрезом по разделителям) или разбора этой реплики нет — "": реплика целиком значением услуги не становится (Н-1)."""
+
+    parse = parse_for(text)
+    if parse is None or not parse.decided:
+        return ""
+    return ", ".join(item.text for item in parse.items)
+
+
 def parse_status(text: str) -> str | None:
     """Чем кончился разбор этой реплики (`turn_parse.ParseStatus`), без права действовать по нему: читателю с политикой
     сбоя (подготовка, `prepare_by_parse`) нужно отличить «услуги нет» (`empty`) и сбой (`unavailable`, `invalid`, `too_many`,
