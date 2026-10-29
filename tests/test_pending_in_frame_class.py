@@ -145,13 +145,16 @@ def test_no_parse_writes_no_slot(phrases, mini_prod_world, monkeypatch):  # noqa
     assert "Откуда" not in turns[2]["text"] and "Откуда" not in _service(turns[2]), turns[2]
 
 
-def test_list_writes_no_slot(mini_prod_world, monkeypatch):  # noqa: F811
-    """Две услуги в своём вопросе — одной позицией слот не станет (иначе следующий ход ответил бы про одну из них)."""
+@pytest.mark.parametrize("outcome", ["domain", "answer"])
+def test_list_is_the_positions_not_one_of_them(outcome, mini_prod_world, monkeypatch):  # noqa: F811
+    """Две услуги в реплике — обе позиции разбора (не одна из них и не реплика): слот закрыт, и инструмент подготовки зовут, а не
+    переспрашивают название (стенд 30.10, g0363: «Можно ли сдать ОАК ребенку … и ОАМ?» — памятка, а не «Напишите название»)."""
 
     reply = "Можно ли сдать ОАК ребенку в год из пальца и ОАМ?"
-    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), reply], in_frame="on", judge={reply: "domain"}, phrases=("ОАК", "ОАМ"))
+    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), reply], in_frame="on", judge={reply: outcome}, phrases=("ОАК", "ОАМ"))
     assert turns[1]["telemetry"].get("tu_parse_status") == "picked" and turns[1]["telemetry"].get("tu_parse_n") == 2, turns[1]["telemetry"]
-    assert not _service(turns[1]), turns[1]["state"]
+    assert _service(turns[1]) == "ОАК, ОАМ", turns[1]["state"]
+    assert turns[1]["telemetry"].get("prepare_subject") == "parse", turns[1]["telemetry"]
 
 
 def test_goal_slot_keeps_free_words(mini_prod_world, monkeypatch):  # noqa: F811
