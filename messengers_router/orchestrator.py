@@ -956,7 +956,28 @@ async def render(
     )
     if ctx.response is not None and getattr(ctx.response, "text", None):
         ctx.response.text = scrub_internal_disclosure(ctx.response.text)
+    _observe_turn_at_render(ctx, memory)
     return ctx
+
+
+def _observe_turn_at_render(ctx: OrchestratorContext, memory: Any | None) -> None:
+    """Полное понимание хода (шаг 0, тень) на путях, которые не дошли до плана (ранний выход, деградация каталога,
+    обработчик висящего вопроса): строится из итогового решения хода; построенное у плана не трогает."""
+
+    if turn_understanding.full() is not None or turn_understanding.full_mode() != "shadow":
+        return
+    decision = ctx.decision
+    label = decision.label if decision is not None else f"early:{ctx.short_circuit_reason or '?'}"
+    turn_understanding.observe_turn(
+        label=label,
+        confidence=decision.confidence if decision is not None else 0.0,
+        decision_source=decision.source if decision is not None else "early",
+        flags=sorted(decision.flags) if decision is not None else (),
+        entities=decision.entities if decision is not None else None,
+        plan_label=ctx.plan.label if ctx.plan is not None else label,
+        user_text=ctx.text,
+        pending=memory.get_pending(ctx.state) if memory is not None else None,
+    )
 
 
 async def run_pipeline(

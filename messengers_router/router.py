@@ -3468,7 +3468,9 @@ async def _resolve_nlu_decision_before_doctor_guard(
                 **firm,
             )
             decision = nlu_result.decision
-            if topic_policy.frame_policy_on():
+            # Рамка кнопки хода — одно решение (`note_frame`, без LLM): по нему действует таблица политик (`frame_policy`),
+            # его же читает полное понимание хода (тень шага 0).
+            if topic_policy.frame_policy_on() or turn_understanding.full_mode() == "shadow":
                 button_flow.note_frame(answer_topic, decision.label, decision.flags, pending_before_nlu)
             turn_telemetry.note(tu_label_nlu=decision.label)
             turn_understanding.observe_intent(decision.label, decision.confidence, (nlu_result.trace or {}).get("topic_source"))

@@ -310,11 +310,13 @@ def _entities_of(entities: dict[str, Any] | None) -> TurnEntities:
 
 
 def _frame_of(flags: Sequence[Any], label: str, pending: dict[str, Any] | None) -> Frame | None:
-    """Рамка кнопки — из того, что уже решили кнопочные слои хода (копия, без нового решения)."""
+    """Рамка кнопки — из того, что уже решили кнопочные слои хода (копия, без нового решения): держится ли рамка — решение
+    `button_flow.note_frame` (его же читает таблица политик), без него — флаг темы ответа на вопрос кнопки."""
 
     from . import address_flow, button_flow
 
-    held = "button_answer_topic" in flags
+    decided = button_flow.turn_frame()
+    held = decided.held if decided is not None else "button_answer_topic" in flags
     pressed = button_flow.pressed(flags)
     if pressed:
         return Frame(button=pressed, kind="press", topic=label, held=True)

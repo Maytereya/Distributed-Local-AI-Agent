@@ -118,3 +118,17 @@ def test_observer_failure_is_swallowed_with_a_trace(mini_prod_world, monkeypatch
     assert [t["text"] for t in broken] == [t["text"] for t in off]
     assert broken[1]["telemetry"].get("tu_full_error") == "RuntimeError", broken[1]["telemetry"]
     assert broken[1]["full"] is None
+
+
+def test_frame_held_is_the_same_decision_the_policy_table_reads(mini_prod_world, monkeypatch):  # noqa: F811
+    """«Держится ли рамка» — одно решение (`button_flow.note_frame`): его читают и таблица политик, и полное понимание хода."""
+
+    from messengers_router import button_flow
+
+    seen: list[object] = []
+    real = button_flow.turn_frame
+    monkeypatch.setattr(button_flow, "turn_frame", lambda: seen.append(real()) or seen[-1])
+    reply = _dialog(mini_prod_world, monkeypatch, [_press("menu.price.test"), "а вы делаете узи щитовидки?"], full="shadow", free="new_topic")[1]
+    decided = seen[-1]
+    assert decided is not None and reply["full"]["frame"]["held"] is decided.held, (decided, reply["full"])
+    assert reply["full"]["frame"]["held"] is False, reply["full"]
