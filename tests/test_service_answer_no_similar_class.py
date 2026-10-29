@@ -62,8 +62,10 @@ def test_exact_prompt_is_the_old_one_with_synthetic_examples_in_both_places():
     exact = _text("messengers_router/prompts/choose_service_answer_exact.txt")
     assert exact == _text("app_data/prompts/mr_choose_service_answer_exact.txt")
     base = _text("messengers_router/prompts/choose_service_answer.txt").splitlines()
-    # Отличия — только примеры 2–3: синтетика вместо двух вопросов эталона (g0509, g0277; Гудхарт).
-    assert [line[:2] for line in exact.splitlines() if line not in base] == ["2.", "3."]
+    # Отличия — примеры 2–3: синтетика вместо двух вопросов эталона (g0509, g0277; Гудхарт) — и исход «general» (услуга не названа,
+    # STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA).
+    assert [line[:2] for line in exact.splitlines() if line not in base] == ["- ", "2.", "3."]
+    assert '"general"' in exact
     assert "ФКС с биопсией" not in exact and "детей 2 лет" not in exact
     assert '"similar"' in exact  # исход у модели остаётся
 

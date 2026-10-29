@@ -60,8 +60,10 @@ def test_data_row_found_in_the_second_round_is_printed_from_the_price(answer_wor
     assert "— Ежегодный Чекап — 2 055 руб." in out["text"], out["text"]  # название и цена — из прайса, не из LLM
 
 
-@pytest.mark.parametrize("svc", [verdict(outcome="not_about_clinic"), "не json"])
-def test_failure_or_not_about_clinic_keeps_the_price_answer(svc, answer_world, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("svc", [verdict(outcome="not_about_clinic"), verdict(outcome="general"), "не json"])
+def test_failure_not_about_clinic_or_general_keeps_the_price_answer(svc, answer_world, monkeypatch):  # noqa: F811
+    """Сбой, «не о клинике» и «общий вопрос» (услуга не названа — «Стоимость анализов») — уточнение пути цены, не оффер."""
+
     on = _turn(answer_world, monkeypatch, svc, switch="on")
     off = _turn(answer_world, monkeypatch, svc, switch="off")
     assert on["text"] == off["text"]
