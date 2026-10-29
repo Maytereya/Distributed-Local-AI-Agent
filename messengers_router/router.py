@@ -1714,7 +1714,7 @@ _GROUNDER_REJECTED_SLOT_FLAGS: dict[str, frozenset[str]] = {
 
 
 async def _service_slot_from_parse(quick: dict[str, Any], label: str, user_text: str, *, missing: list[str]) -> dict[str, Any]:
-    """Слот-услуга, которого не хватает ходу, — под `pending_in_frame` из разбора хода, как у грундера
+    """Слот-услуга, которого не хватает ходу, — под `pending_in_frame` или `facet_by_llm` из разбора хода, как у грундера
     (`turn_understanding.service_slot`, Д3-слот), а не из слов реплики: «а как к нему подготовиться?» — показанная услуга,
     а не «Нему подготовиться»; «а что нужно перед ним?» — тоже она, а не переспрос. Пусто — слот не пишется. off — как было."""
 

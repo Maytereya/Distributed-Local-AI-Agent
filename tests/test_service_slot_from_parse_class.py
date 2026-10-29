@@ -6,13 +6,16 @@
 грундер (`entity_grounder.ground_decision_entities`) клал в `service_name` фразу реплики по буквам (`extract_service_phrase`) —
 у темы без проверки каталогом (PREPARE) без проверки вовсе. Разбор хода (LLM) этой реплики пуст — «к нему» услугу не называет.
 
-Инвариант класса (тот же, что Н-1): под `pending_in_frame = on` значение слота-услуги темы без проверки каталогом — позиции разбора
+Инвариант класса (тот же, что Н-1): под `pending_in_frame = on` или `facet_by_llm = on` (Д3-слот-2: тип вопроса по LLM снимает
+переклейку по буквам, которая прятала мусор) значение слота-услуги темы без проверки каталогом — позиции разбора
 хода этой реплики; разбор решил «услуги нет» — показанная прошлым ответом услуга (одна строка), сбой — слот не пишется. Названная услуга («как подготовиться к узи
 брюшной полости») — в слоте, как была. off — как было. Через обработчик эндпоинта, на три-четыре хода; LLM — подделки настоящего
 типа (судья, классификатор, оракул разметки хода).
 """
 
 from __future__ import annotations
+
+import re
 
 import pytest
 
@@ -22,6 +25,13 @@ from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фи
 _PRICE = "menu.price.test"
 # Вопросы о подготовке к только что показанной услуге — местоимением, без названия: разбор хода пуст.
 _PRONOUN = ["а как к нему подготовиться?", "как подготовиться к этому анализу?", "а что нужно перед ним?"]
+
+
+def _question_words_in(question: str, text: str) -> set[str]:
+    """Слова вопроса пациента (длиннее трёх букв), которые ответ печатает целым словом — признак «вопрос в слоте услуги»."""
+
+    words = {w for w in re.findall(r"\w+", question.lower()) if len(w) > 3}
+    return words & set(re.findall(r"\w+", text.lower()))
 
 
 def _after_memo(world_dir, monkeypatch, followup: str, last: str, *, in_frame: str) -> list[dict]:
@@ -35,8 +45,20 @@ def test_pronoun_prepare_question_leaves_the_shown_service_in_the_slot(followup,
     assert _service(turns[1]) == "Ферритин", turns[1]["state"]
     assert turns[2]["label"] == "PREPARE", turns[2]
     assert _service(turns[2]) == "Ферритин", turns[2]["state"]
-    words = {w for w in followup.lower().strip("?").split() if len(w) > 3}
-    assert not any(w in turns[3]["text"].lower() for w in words), turns[3]["text"]
+    assert not _question_words_in(followup, turns[3]["text"]), turns[3]["text"]
+
+
+@pytest.mark.parametrize("followup", _PRONOUN)
+def test_facet_by_llm_alone_guards_the_slot_too(followup, mini_prod_world, monkeypatch):  # noqa: F811
+    """Конфиг деплоя 22 (финал набора): `facet_by_llm = on`, `pending_in_frame = off`. Тип вопроса по LLM снимает переклейку
+    по буквам обратно в памятку — «а запишите меня» идёт в запись и читает слот; слот — показанное, а не слова вопроса."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_FACET_BY_LLM", "on", raising=False)
+    turns = _after_memo(mini_prod_world, monkeypatch, followup, "а запишите меня", in_frame="off")
+    assert _service(turns[2]) == "Ферритин", turns[2]["state"]
+    assert not _question_words_in(followup, turns[3]["text"]), turns[3]["text"]
 
 
 def test_off_puts_the_question_words_in_the_slot_as_before(mini_prod_world, monkeypatch):  # noqa: F811
