@@ -144,6 +144,23 @@ FREE_TASK = Task(name="pending_free_reply", outcomes=("answer", "no", "pause", "
 # Тот же ответ на вопрос кнопки меню (`button_flow.judge_context`, `button_reply_judge`): судья видит нажатую кнопку и её тему —
 # полный вопрос в теме кнопки — ответ, а не «другая тема».
 FREE_BUTTON_TASK = Task(name="pending_free_reply_button", outcomes=FREE_TASK.outcomes, timeout_s=8, queue_timeout_ms=3000)
+# Вариант Б рамки кнопки (`button_frame_check = judge`, STEP-2026-10-29-BUTTON-FRAME): «другая тема» судьи разделена — «domain»
+# (свой вопрос в теме нажатой кнопки: наличие услуги на кнопке цены) — ответ в рамке кнопки, без отдельного вопроса рамки.
+FRAME_BUTTON_TASK = Task(
+    name="pending_free_reply_button_frame", outcomes=(*FREE_TASK.outcomes, "domain"), timeout_s=8, queue_timeout_ms=3000
+)
+_DOMAIN = "domain"
+
+
+def frame_judge_on() -> bool:
+    """Рамку кнопки проверяет сам судья ответа (вариант Б): `button_answer_topic = frame` и `button_frame_check = judge`."""
+
+    from .runtime_config import config as cfg
+
+    def _value(key: str) -> str:
+        return str(getattr(cfg, key, "") or "").strip().lower()
+
+    return _value("MR_BUTTON_ANSWER_TOPIC") == "frame" and _value("MR_BUTTON_FRAME_CHECK") == "judge"
 # Выбор, где можно взять несколько пунктов («обе»): те же исходы, что у `pending_reply.PENDING_TASK`, пунктов — до N.
 MANY_TASK = Task(name="pending_reply_many", outcomes=("yes", "no", "pause", "new_topic"), timeout_s=8, queue_timeout_ms=3000)
 
@@ -503,7 +520,7 @@ async def _free_answer(question_type: str, question: str, reply: str, *, filled:
     — если LLM не сказала «другая тема», `confirm_topic`); иначе LLM (`FREE_TASK`, у вопроса кнопки под `button_reply_judge` —
     `FREE_BUTTON_TASK` с кнопкой и её темой); сбой — запасной путь (как было)."""
 
-    task, asked = (FREE_BUTTON_TASK, button) if button else (FREE_TASK, question)
+    task, asked = ((FRAME_BUTTON_TASK if frame_judge_on() else FREE_BUTTON_TASK), button) if button else (FREE_TASK, question)
     if _anchor(_normalize_confirmation_text(reply)) is Outcome.NO:
         return _remember(Answer(question_type, Outcome.NO, source=Source.FAST, text=reply))  # «нет» — не фамилия
     if filled and confirm_topic:
@@ -524,7 +541,10 @@ async def _free_answer(question_type: str, question: str, reply: str, *, filled:
         choice = None
     if choice is None or choice.status not in (Status.OUTCOME, Status.NONE_FIT):
         return _remember(Answer(question_type, Outcome.NONE, source=Source.FALLBACK, text=reply))
-    outcome = Outcome(choice.outcome) if choice.status is Status.OUTCOME else Outcome.NONE
+    if choice.status is Status.OUTCOME and choice.outcome == _DOMAIN:
+        outcome = Outcome.ANSWER  # вариант Б: свой вопрос в теме кнопки — ответ в рамке кнопки
+    else:
+        outcome = Outcome(choice.outcome) if choice.status is Status.OUTCOME else Outcome.NONE
     return _refunded(_remember(Answer(question_type, outcome, source=Source.LLM, text=reply)))
 
 

@@ -167,3 +167,49 @@ def test_leaf_not_listed_holds_no_frame(mini_prod_world, monkeypatch):  # noqa: 
 
     turn = _leaf_dialog(mini_prod_world, monkeypatch, [_press(_LEAF), _LEAF_REPLY], switch="frame", frame="same", leaves="menu.price.promo")[1]
     assert "button_frame" not in turn["telemetry"], turn["telemetry"]
+
+
+# Вариант Б (`button_frame_check = judge`): «другую тему» проверяет сам судья ответа — исход «domain» (свой вопрос в теме кнопки).
+_FRAME_JUDGE_MARK = "пациент спрашивает о другом, но в теме нажатой кнопки"
+_BUTTON_JUDGE_MARK = "определи, написал ли пациент в теме нажатой кнопки"
+
+
+def _judge_dialog(world_dir, monkeypatch, *, check: str, outcome: str):
+    from messengers_router.runtime_config import config as cfg
+    from tests import test_button_answer_topic_class as harness
+
+    monkeypatch.setattr(cfg, "MR_BUTTON_FRAME_CHECK", check, raising=False)
+    monkeypatch.setattr(cfg, "MR_BUTTON_REPLY_JUDGE", "on", raising=False)
+    real = harness._LLM
+
+    class _Judge(real):
+        def __init__(self, answers):
+            answers = {
+                _FRAME_JUDGE_MARK: json.dumps({"picks": [], "outcome": outcome}),
+                _FRAME_MARK: json.dumps({"picks": [], "outcome": "same"}),
+                _BUTTON_JUDGE_MARK: json.dumps({"picks": [], "outcome": outcome}),  # прежний судья (вариант А)
+                **answers,
+            }
+            super().__init__(answers)
+
+    monkeypatch.setattr(harness, "_LLM", _Judge)
+    return _dialog(world_dir, monkeypatch, [_press("menu.price.test"), _AVAILABILITY], switch="frame", free=None)[1]
+
+
+def test_variant_b_domain_by_the_judge_keeps_the_frame_without_frame_question(mini_prod_world, monkeypatch):  # noqa: F811
+    turn = _judge_dialog(mini_prod_world, monkeypatch, check="judge", outcome="domain")
+    tel = turn["telemetry"]
+    assert tel.get("nlu_topic_by_llm") == "button_answer" and turn["label"] == "PRICE", tel
+    assert "button_frame" not in tel, tel  # второго вопроса нет
+
+
+def test_variant_b_new_topic_takes_the_general_path(mini_prod_world, monkeypatch):  # noqa: F811
+    turn = _judge_dialog(mini_prod_world, monkeypatch, check="judge", outcome="new_topic")
+    assert turn["telemetry"].get("nlu_topic_by_llm") != "button_answer" and "button_frame" not in turn["telemetry"], turn["telemetry"]
+
+
+def test_variant_a_is_the_default(mini_prod_world, monkeypatch):  # noqa: F811
+    """`question` (по умолчанию): судья прежний (без «domain»), «другую тему» проверяет отдельный вопрос рамки."""
+
+    turn = _judge_dialog(mini_prod_world, monkeypatch, check="question", outcome="new_topic")
+    assert turn["telemetry"].get("button_frame") == "same", turn["telemetry"]

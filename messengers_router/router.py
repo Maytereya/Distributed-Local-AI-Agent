@@ -2806,8 +2806,8 @@ async def _handle_button_reframe(
     found = pending_answer.slot_answer()
     if found is None or found.outcome is not pending_answer.Outcome.NEW_TOPIC or found.rest:
         return None
-    if button_flow.frame_firm() and button_flow.question_button(pending):
-        await button_flow.reframe(user_text, pending)
+    if button_flow.frame_firm() and button_flow.question_button(pending) and not pending_answer.frame_judge_on():
+        await button_flow.reframe(user_text, pending)  # вариант Б (`button_frame_check = judge`) — рамку проверил сам судья
     return None
 
 

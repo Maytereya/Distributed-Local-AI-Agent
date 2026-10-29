@@ -230,6 +230,7 @@ class MessengerRouterConfig:
     button_topic_firm: str
     promo_by_llm: str
     button_leaf_frame: str
+    button_frame_check: str
     price_not_found_by_data: str
     insurance_topic: str
     price_select_named: str
@@ -771,6 +772,11 @@ settings = Settings(
         # услуга решает каталог МИС), «Акции и скидки» 55 → 39 % (общий список акций), стенд 29.10. Включать по листу, по замеру
         # (STEP-2026-10-29-BUTTON-FRAME). [MESSENGER_ROUTER] button_leaf_frame
         button_leaf_frame=_get_str("MESSENGER_ROUTER", "button_leaf_frame", default=""),
+        # Кто под `button_answer_topic = frame` проверяет «другую тему» судьи ответа на вопрос кнопки: `question` — отдельный
+        # короткий вопрос рамки (`choose_button_frame`, вариант А), `judge` — сам судья с исходом «в теме кнопки» (`domain`,
+        # промпт `choose_pending_free_reply_button_frame`, вариант Б). Выбор — по замеру (решение владельца 29.10).
+        # [MESSENGER_ROUTER] button_frame_check
+        button_frame_check=_get_enum("MESSENGER_ROUTER", "button_frame_check", default="question", allowed={"question", "judge"}),
         # Путь цены сдался («Не нашёл актуальную стоимость … Уточните название», цен нет): сначала данные клиники
         # (`service_answer`, место `price_not_found`, без «похожего») — строки прайса и памяток, нет данных — честный оффер
         # (STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA). off — как было. [MESSENGER_ROUTER] price_not_found_by_data
@@ -992,6 +998,7 @@ MR_WALKIN_BY_LLM = settings.messenger_router.walkin_by_llm
 MR_BUTTON_TOPIC_FIRM = settings.messenger_router.button_topic_firm
 MR_PROMO_BY_LLM = settings.messenger_router.promo_by_llm
 MR_BUTTON_LEAF_FRAME = settings.messenger_router.button_leaf_frame
+MR_BUTTON_FRAME_CHECK = settings.messenger_router.button_frame_check
 MR_PRICE_NOT_FOUND_BY_DATA = settings.messenger_router.price_not_found_by_data
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
