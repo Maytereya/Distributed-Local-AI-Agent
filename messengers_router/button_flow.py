@@ -122,6 +122,28 @@ def side_answer_on() -> bool:
     return _on("MR_BUTTON_SIDE_ANSWER")
 
 
+def config_conflicts() -> list[str]:
+    """Несовместимые сочетания ключей кнопки — громко при старте и в отпечатке рантайма (`debug.runtime.config_conflicts`).
+
+    `button_answer_topic = frame` + `button_frame_check = judge` отдают проверку «другой темы» судье ответа (вариант Б:
+    шаг переклейки пропускается, `pending_answer.frame_judge_on`); но задачу с исходом `domain` судья берёт только с
+    нажатой кнопкой в данных (`judge_context`), а её даёт лишь `button_reply_judge = on`. Без него «другую тему» в
+    ответе на вопрос кнопки не проверяет никто (Н-7, STEP-2026-10-30-BUTTON-KEYS-CONFLICT).
+    """
+
+    out: list[str] = []
+    if pending_answer.frame_judge_on() and not reply_judge_on():
+        out.append("button_frame_check=judge требует button_reply_judge=on: «другую тему» в ответе на вопрос кнопки не проверяет никто")
+    return out
+
+
+def warn_config_conflicts() -> list[str]:
+    conflicts = config_conflicts()
+    for text in conflicts:
+        logger.warning("CONFIG CONFLICT: %s", text)
+    return conflicts
+
+
 def price_scope_mode() -> str:
     """`[MESSENGER_ROUTER] button_price_scope = off | doctor | all`: какие кнопки цены сужают поиск своей областью прайса."""
 

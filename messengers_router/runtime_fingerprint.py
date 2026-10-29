@@ -16,7 +16,8 @@
 - `prompts` — на ключ: хэш действующего текста, откуда он (`host` — `app_data/prompts/mr_*`, `bundle` — пакет) и
   `differs` — копия хоста разошлась с пакетом (правило двух локаций);
 - `topic_registry` — хэш файла и разбирается ли он (DATA-12: битый — бот работает на последнем исправном);
-- `tz` — пояс процесса.
+- `tz` — пояс процесса;
+- `config_conflicts` — несовместимые сочетания ключей конфига (пусто — их нет; Н-7: `button_flow.config_conflicts`).
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from typing import Any
 
 import yaml
 
-from . import prompt_registry, topic_registry, turn_telemetry
+from . import button_flow, prompt_registry, topic_registry, turn_telemetry
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _REPO_DIR = _PACKAGE_DIR.parent
@@ -187,6 +188,7 @@ def runtime_fingerprint(*, fresh: bool = False) -> dict[str, Any]:
         ("prompts", _prompts),
         ("topic_registry", _topic_registry),
         ("tz", _tz),
+        ("config_conflicts", button_flow.config_conflicts),
     )
     for name, part in parts:
         try:
