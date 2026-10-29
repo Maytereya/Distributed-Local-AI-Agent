@@ -58,7 +58,7 @@ from dataclasses import dataclass, field, replace
 from collections.abc import Awaitable
 from typing import Any, Sequence
 
-from . import turn_names, turn_parse, turn_telemetry
+from . import shown_context, turn_names, turn_parse, turn_telemetry
 from .choice import NO_WORDS, Option, Status, Task, choose
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
@@ -467,6 +467,35 @@ def service_phrase(text: str) -> str:
     if parse is None or not parse.decided:
         return ""
     return ", ".join(item.text for item in parse.items)
+
+
+# Разбор решил: услуги в реплике нет (не сбой).
+_NO_SERVICE_NAMED = frozenset({turn_parse.ParseStatus.NONE_FIT, turn_parse.ParseStatus.EMPTY})
+# Темы, где названную услугу проверяет каталог (и судья LLM): слот-услугу им даёт каталог, не разбор.
+CATALOG_CHECKED_LABELS = frozenset({"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"})
+
+
+async def service_slot(label: str, user_text: str) -> str | None:
+    """Слот-услуга темы без проверки каталогом — из разбора хода этой реплики (`pending_in_frame = on`; класс Н-1 «реплика —
+    значением слота», Д3-слот): позиции разбора через запятую; разбор решил «услуги нет» — показанная прошлым ответом услуга,
+    если она одна, иначе ""; сбой — "" (слот не пишется: неизвестно, не назвал ли пациент новую услугу). Одна точка для обоих писателей слота из реплики — грундера сущностей
+    решения и дозаполнения хода. Разбор подготовки строится здесь же — тот, что прочтёт инструмент (`observe_prepare_turn`:
+    раз за ход, второго решения LLM нет). None — как было: выключатель off, тема с проверкой каталогом или разбора нет."""
+
+    from .pending_answer import in_frame_on  # не на уровне модуля: функция ответа импортирует понимание хода
+
+    if label in CATALOG_CHECKED_LABELS or not in_frame_on():
+        return None
+    await observe_prepare_turn(label, user_text=user_text)
+    status = parse_status(user_text)
+    if status is None:
+        return None
+    if status in _NO_SERVICE_NAMED:
+        # Услуги в реплике нет («а как к нему подготовиться?»): речь о показанном прошлым ответом, если он показал одну
+        # услугу (правило владельца 14.10 — в контексте услуга, названная пациенту одной строкой; `shown_context`).
+        shown = shown_context.previous()
+        return shown[0] if len(shown) == 1 else ""
+    return service_phrase(user_text)
 
 
 def parse_status(text: str) -> str | None:
