@@ -326,3 +326,18 @@ def test_offer_text_with_another_hanging_question_becomes_a_line(monkeypatch):
     router._finish_turn(state, memory, response)
     assert OFFER not in response.text and OPERATOR_HINT_TEXT in response.text, response.text
     assert state.last_entities[expects.EXPECTS_KEY]["type"] == "slot_value" and not state.last_entities.get("_operator_offer_pending")
+
+
+@pytest.mark.parametrize("reply", ["на Ленина", "завтра после 17", "да"])
+def test_structural_answer_of_the_booking_is_not_overruled_by_a_new_topic_verdict(reply, d21_world, monkeypatch):  # noqa: F811
+    """Структурный ответ потока записи (филиал, дата, да / нет) — сужение до LLM: «другая тема» модели на вопрос шага записи его не
+    переигрывает, запись идёт дальше, как без выключателя (многоходовые наборы 30.10: «на Ленина» на выбор услуги записи
+    спрашивал «перейти к новому вопросу?»)."""
+
+    dialog = [_TO_CARDIO, uc.say(reply, pending="new_topic", topic="OTHER")]
+    off = uc.run(d21_world, monkeypatch, dialog, session=f"struct-off-{reply}")
+    on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session=f"struct-on-{reply}")
+    assert _SWITCH not in on[1]["text"], on[1]["text"]
+    # Повтор того же вопроса под on несёт строку анти-залипа (вариант (А)) — прочее как без выключателя.
+    plain = [(t["text"].removesuffix(f"\n\n{OPERATOR_HINT_TEXT}"), t["handoff"]) for t in on]
+    assert plain == [(t["text"], t["handoff"]) for t in off]
