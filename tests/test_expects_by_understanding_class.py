@@ -209,3 +209,42 @@ def test_one_question_check(text, field, asked, violation):
         assert expects.one_question_violation(text, field) == violation
     finally:
         expects._ASKED.reset(token)
+
+
+# --------------------------------------------------------------------------- предпроверка записи читает одно решение (коммит 2)
+
+_SWITCH = "перейти к новому вопросу"
+_TO_CARDIO = uc.say("запишите к кардиологу", topic="APPOINTMENT")
+
+
+@pytest.mark.parametrize("reply", ["расскажите про вашу клинику", "а маме моей можно сделать массаж спины"])
+def test_new_topic_judged_by_llm_asks_the_switch_question_where_rules_did_not(reply, d21_world, monkeypatch):  # noqa: F811
+    """«Другая тема» модели на вопрос шага записи — вердикт: вопрос «перейти к новому вопросу?», а не запись дальше (off:
+    детекторы тем реплику не видели — «массаж спины» становился подтверждением чужой услуги)."""
+
+    dialog = [_TO_CARDIO, uc.say(reply, pending="new_topic", topic="OTHER")]
+    off = uc.run(d21_world, monkeypatch, dialog, session=f"off-{reply}")
+    on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session=f"on-{reply}")
+    assert _SWITCH not in off[1]["text"] and _SWITCH in on[1]["text"], (off[1]["text"], on[1]["text"])
+    assert on[1]["telemetry"].get("tu_expects_acted") == ["appointment_precheck"]
+
+
+def test_not_a_new_topic_judged_by_llm_keeps_the_booking_where_rules_switched(d21_world, monkeypatch):  # noqa: F811
+    """«Ничего из этого» модели — не смена темы: правило «`?` и ≥ 4 слов» больше не спрашивает «перейти к новому вопросу?»."""
+
+    dialog = [uc.press("menu.appointment.book"), uc.say("а у вас есть парковка возле клиники?", pending="none")]
+    off = uc.run(d21_world, monkeypatch, dialog, session="off-parking")
+    on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session="on-parking")
+    assert _SWITCH in off[1]["text"] and _SWITCH not in on[1]["text"], (off[1]["text"], on[1]["text"])
+    assert (on[1]["expects"] or {}).get("type") == "slot_value" and not on[1]["handoff"], on[1]["text"]
+
+
+@pytest.mark.parametrize("reply", ["а у вас есть парковка возле клиники?", "расскажите про вашу клинику"])
+def test_rules_decide_the_switch_when_the_llm_is_down(reply, d21_world, monkeypatch):  # noqa: F811
+    """Сбой LLM — решения нет: предпроверка решает своими правилами, как было (on = off)."""
+
+    for dialog in ([uc.press("menu.appointment.book"), uc.say(reply)], [_TO_CARDIO, uc.say(reply)]):
+        off = uc.run(d21_world, monkeypatch, dialog, session=f"off-down-{reply}-{dialog[0].text}")
+        on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session=f"on-down-{reply}-{dialog[0].text}")
+        assert [(t["text"], t["handoff"]) for t in on] == [(t["text"], t["handoff"]) for t in off]
+        assert not on[1]["telemetry"].get("tu_expects_acted"), on[1]["telemetry"]

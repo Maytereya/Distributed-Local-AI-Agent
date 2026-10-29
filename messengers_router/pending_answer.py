@@ -687,6 +687,35 @@ def by_understanding_on() -> bool:
     return str(getattr(cfg, "MR_EXPECTS_BY_UNDERSTANDING", "off") or "").strip().lower() == "on"
 
 
+# Вопросы, чей ответ заполняет недостающий слот `_pending` (тема висящего вопроса): вопрос-слот, услуга, действие и филиал записи.
+PENDING_QUESTIONS = (Question.SLOT_VALUE, Question.BOOKING_SERVICE, Question.APPOINTMENT_ACTION, Question.APPOINTMENT_BRANCH)
+
+
+def continues(*questions: Question) -> bool | None:
+    """Продолжает ли реплика висящий вопрос — одно решение хода для запасников (предпроверка записи, планировщик) под
+    `expects_by_understanding = on`: False — другая тема, True — нет (ответ, пункт, «да» / «нет», пауза, свой
+    вопрос в рамке, «ничего из этого» модели); None — решения нет: выключатель off, вопрос другого типа, сбой LLM (запасной путь
+    правил), хвост реплики идёт обычным путём. Тогда запасник решает по своим правилам, как было.
+
+    :param questions: типы вопроса, о которых спрашивает читатель; пусто — любой
+    """
+
+    if not by_understanding_on():
+        return None
+    found = current()
+    if found is None or not found.decided or found.rest:
+        return None
+    if questions and found.type not in {q.value for q in questions}:
+        return None
+    return found.outcome is not Outcome.NEW_TOPIC
+
+
+def acted(site: str) -> None:
+    """След хода: запасник `site` поступил по одному решению, а не по своим правилам (`tu_expects_acted`)."""
+
+    turn_telemetry.append("tu_expects_acted", site)
+
+
 def slot_value(text: str) -> str:
     """Реплика как значение слота: одна строка, без концевой пунктуации, разумной длины; длиннее — не значение слота."""
 

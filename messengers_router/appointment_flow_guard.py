@@ -313,7 +313,8 @@ def _flow_answer(
     if outcome in (pending_answer.Outcome.NO, pending_answer.Outcome.PAUSE):
         return _cancel_confirm(state, debug, factory, topic_switch=False)
     # «Другая тема» от модели — повод, не вердикт: смену темы подтверждают прежние проверки ниже (правила сужают), иначе
-    # запись идёт дальше («массаж спины» на список услуг — не новая тема).
+    # запись идёт дальше («массаж спины» на список услуг — не новая тема). Под `expects_by_understanding = on` — вердикт
+    # (`run_appointment_precheck`, `pending_answer.continues`).
     return _UNDECIDED
 
 
@@ -428,7 +429,16 @@ def run_appointment_precheck(
             # для текста (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH, `booking_target_slot_llm`).
             clear_on_appointment_end(state, memory)
             return None
-        if not _answers_branch_question(state, user_text) and is_likely_topic_switch_from_appointment(user_text):
+        # «Другая тема» на вопрос шага записи (`expects_by_understanding = on`) — решение одной функции ответа, вердикт, а не повод
+        # для детекторов тем и правила «`?` и ≥ 4 слов»; «не другая тема» (ответ, «ничего из этого») — запись идёт дальше. Правила —
+        # только без решения: выключатель, сбой LLM, вопрос без `_expects` (пожелание по времени, ФИО).
+        verdict = pending_answer.continues(*_FLOW_QUESTIONS, expects.Question.SLOT_VALUE)
+        if verdict is not None:
+            pending_answer.acted("appointment_precheck")
+            switch = not verdict
+        else:
+            switch = not _answers_branch_question(state, user_text) and is_likely_topic_switch_from_appointment(user_text)
+        if switch:
             mark_appointment_topic_switch_pending(state)
             expects.ask(expects.Question.APPOINTMENT_ABORT)
             return ResponseEnvelope(
