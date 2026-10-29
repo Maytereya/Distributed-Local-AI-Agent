@@ -25,7 +25,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _CLASSIFIER_MARKS = (_CLASSIFIER_MARK, "Ты уточняющий классификатор")

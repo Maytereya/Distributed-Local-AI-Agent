@@ -27,7 +27,7 @@ import yaml
 
 from evalbench import world as ev_world
 from messengers_router import choice, insurance_topic, llm_runtime
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_service_answer_class import _LLM, _REGIONS, _classifier, answer_world  # noqa: F401 — фикстура
 
 _MARK = "спрашивает ли пациент об обслуживании по полису ДМС или ОМС"
@@ -80,7 +80,6 @@ def _turns(world_dir, monkeypatch, replies: list[str], *, switch: str, answers: 
         return {"text": str(body.get("text") or ""), "handoff": bool(body.get("handoff"))}
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_NLU_ENGINE", "legacy_v2", raising=False)
         patch.setattr(cfg, "MR_INSURANCE_TOPIC", switch, raising=False)
         for key, value in (cfg_extra or {}).items():
             patch.setattr(cfg, key, value, raising=False)

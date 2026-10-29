@@ -31,7 +31,7 @@ _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
 _CEILINGS = {
     "re.compile": 256,  # 258 → 257: мёртвый `_PREPARE_TARGET_RE` — заголовок памятки передаётся всегда (STEP-2026-10-27-DEAD-RULES); 257 → 256: `_NEAREST_SCHEDULE_HINT_RE` — ветка `rule_schedule_nearest` не сработала на трафике (STEP-2026-10-28-C6-RULES-NEVER-FIRED)
     "регулярка-литерал в вызове re.*": 157,  # 160 → 158 → 157: мёртвые литералы `_extract_schedule_specialty` и `_extract_target_phrase` (STEP-2026-10-27-DEAD-RULES)
-    "список слов на уровне модуля (≥5 строк)": 100,  # 101 → 100: мёртвый `_CYR_TO_LAT` (`fold_cyrillic_homoglyphs` без вызовов) (STEP-2026-10-27-DEAD-RULES)
+    "список слов на уровне модуля (≥5 строк)": 99,  # 101 → 100: мёртвый `_CYR_TO_LAT` (`fold_cyrillic_homoglyphs` без вызовов) (STEP-2026-10-27-DEAD-RULES); 100 → 99: `_ALLOWED_CLARIFY_REASONS` снят с движком `llm_primary` (К2, 29.10)
 }
 
 _INLINE_RE = re.compile(r"re\.(?:search|match|fullmatch|findall|finditer|sub|subn|split)\(\s*r?[\"']")

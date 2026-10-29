@@ -18,7 +18,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime
 from tests.test_booking_slots_by_meaning import _LLM
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _FACET_MARK = "что именно пациент хочет узнать об анализе"
@@ -43,7 +43,6 @@ def _turn(world_dir, monkeypatch, *, rules: str, facet: Any) -> dict[str, Any]:
         return str(body.get("text") or "")
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_NLU_ENGINE", "legacy_v2", raising=False)
         patch.setattr(cfg, "MR_TOPIC_BY_LLM", rules, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)

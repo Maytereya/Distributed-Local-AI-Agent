@@ -31,10 +31,6 @@ class RuntimeOptions:
     queue_timeout_ms: int = 30000
 
     @property
-    def uses_llm_primary_nlu(self) -> bool:
-        return self.llm_mode in {"hybrid", "rich"}
-
-    @property
     def allows_refine_pass(self) -> bool:
         return self.llm_mode == "rich"
 

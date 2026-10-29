@@ -22,8 +22,8 @@ from messengers_router.runtime_config import config as cfg
 from tests.test_address_followup_class import _answer as _address_answer
 from tests.test_address_followup_class import _dialog as _address_dialog
 from tests.test_address_followup_class import _listed, _press
-from tests.test_llm_primary_rules_fallback_class import _down
-from tests.test_llm_primary_rules_fallback_class import _turn as _nlu_turn
+from tests._llm_helpers import _down
+from tests._llm_helpers import _turn as _nlu_turn
 from tests.test_p1_facet_class import _turn as _facet_turn
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
@@ -69,7 +69,7 @@ def test_address_followup_decided_by_llm_is_unchanged(outcome, mini_prod_world, 
 def _topic(world, monkeypatch, reply: str, *, nodes: str, answer) -> dict:
     _nodes(monkeypatch, nodes)
     monkeypatch.setattr(cfg, "MR_TOPIC_BY_LLM", "rule_test_assist", raising=False)
-    return _nlu_turn(world, monkeypatch, reply, engine="legacy_v2", fallback="off", answer=answer)
+    return _nlu_turn(world, monkeypatch, reply, answer=answer)
 
 
 @pytest.mark.parametrize("failure", [_down, "не json"], ids=["down", "invalid"])

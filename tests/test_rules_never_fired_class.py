@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from tests.test_llm_primary_rules_fallback_class import _down, _turn
+from tests._llm_helpers import _down, _turn
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 
@@ -22,7 +22,7 @@ def _answer(label: str) -> str:
 
 
 def _run(world, monkeypatch, reply: str, answer) -> dict:
-    return _turn(world, monkeypatch, reply, engine="legacy_v2", fallback="off", answer=answer)["telemetry"]
+    return _turn(world, monkeypatch, reply, answer=answer)["telemetry"]
 
 
 # «Специальность + ближайший / поскорее / самое раннее» — ветка `rule_schedule_nearest` решала DOCTOR_SCHEDULE по буквам без LLM.

@@ -134,8 +134,8 @@ class MessengerGenerateRequest(BaseModel):
     llm_mode: Literal["strict", "hybrid", "rich"] = Field(
         default="hybrid",
         description=(
-            "Режим участия LLM: strict — legacy/fallback NLU, "
-            "hybrid — llm_primary NLU, rich — llm_primary NLU + self-check/refine."
+            "Режим участия LLM: strict — NLU без LLM-классификатора, "
+            "hybrid — правило, иначе разбор LLM (legacy_v2), rich — то же + self-check/refine."
         ),
         examples=["hybrid", "rich"],
     )

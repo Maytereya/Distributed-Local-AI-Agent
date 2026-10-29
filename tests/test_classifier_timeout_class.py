@@ -23,7 +23,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 # `topic_by_llm` прода (деплой 18).
@@ -84,7 +84,6 @@ def _turn(world_dir, monkeypatch, text: str, *, guard: float, delay: float | Non
         return {"text": str(body.get("text") or ""), "decision": dbg.get("decision") or {}, "s": time.monotonic() - started}
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_NLU_ENGINE", "legacy_v2", raising=False)
         patch.setattr(cfg, "MR_TOPIC_BY_LLM", _PROD_TOPIC_BY_LLM, raising=False)
         patch.setattr(cfg, "MR_CLASSIFIER_TIMEOUT_S", guard, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())

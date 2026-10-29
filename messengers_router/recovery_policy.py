@@ -133,7 +133,7 @@ def _structured_clarify_text(decision: RouteDecision, flow_label: str, summary: 
     return _build_recovery_text(user_text, summary, flow_label)
 
 
-# Служебные коды уточнения разбора LLM (`classifier._postprocess_primary_decision`, контракт промпта): это не текст для
+# Служебные коды уточнения (контракт промпта классификатора; до 29.10 их ставил и снятый движок `llm_primary`): это не текст для
 # пациента. Правила кладут в `clarify_reason` готовый текст (больничный, сайт, «узнать анализы»), LLM — код.
 CLARIFY_REASON_CODES = frozenset({"intent_disambiguation", "slot_request", "context_repair", "low_confidence"})
 

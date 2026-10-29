@@ -78,7 +78,6 @@ def _dialog(
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
         for key, value in {
-            "MR_NLU_ENGINE": "legacy_v2",
             "MR_PENDING_BUTTONS": "on",
             "MR_CHOOSE_CACHE_TTL_S": 0,
             "MR_TOPIC_BY_LLM": "",

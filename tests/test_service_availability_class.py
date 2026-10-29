@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_service_answer_class import _SERVICE_ANSWER_MARK, _classifier, _number_of, answer_world, turn, verdict  # noqa: F401
 
 _G0277 = "Делают ли фкс с биопсией?"

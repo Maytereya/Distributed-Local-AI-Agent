@@ -44,7 +44,6 @@ def _turn(world_dir, monkeypatch, reply: str, *, shadow: str, answer: Any) -> di
         return str(body.get("text") or "")
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_NLU_ENGINE", "legacy_v2", raising=False)
         patch.setattr(cfg, "MR_TOPIC_SHADOW_LLM", shadow, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM({_CLASSIFIER_MARK: answer}))

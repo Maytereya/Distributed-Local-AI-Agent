@@ -15,7 +15,7 @@ import pytest
 from messengers_router import evidence_keys as ek
 from messengers_router import service_answer
 from messengers_router.mess_types import Evidence, RouteDecision
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_service_answer_class import _SERVICE_ANSWER_MARK, _classifier, _number_of, answer_world, turn, verdict  # noqa: F401
 
 _QUESTION = "сколько стоит устранение лапоухости"

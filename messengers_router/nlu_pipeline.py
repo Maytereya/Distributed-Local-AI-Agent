@@ -1,11 +1,8 @@
-"""NLU-пайплайн patient-router с rollout между legacy и LLM-primary.
+"""NLU-пайплайн patient-router: движок `legacy_v2` — правило, если сработало, иначе разбор LLM, и слияние двух решений.
 
-Ответственность модуля:
-1) Выбрать NLU engine по runtime mode и rollout flags.
-2) Для legacy-path выполнить deterministic+LLM merge.
-3) Для нового path выполнить guardrail -> LLM-primary -> postprocess.
-
-Legacy merge-policy сохранен как fallback/escape hatch.
+Движок `llm_primary` (guardrail → разбор LLM → постобработка) снят 29.10 (К2 карты мёртвого кода, решение владельца,
+консилиум): на проде не включался. Подпись `source="llm_primary"` у слитого решения осталась — это метка решения LLM
+внутри `legacy_v2` (`_merge`), на ней телеметрия `decision_source`.
 
 Модуль не управляет диалоговым состоянием и не рендерит ответы:
 он возвращает только NLU-решение и кандидаты для debug/аналитики.
@@ -161,7 +158,7 @@ def _rule_branch(rule: RouteDecision, text: str) -> str:
 def _note_topic_source(rule: RouteDecision | None, text: str) -> dict[str, str]:
     """Кто решил тему реплики на уровне NLU — замер хода (б), DEBT-1 (STEP-2026-10-20-B-TOPIC-SOURCE).
 
-    `nlu_src = rule` — ветка правила `legacy_v2` (или guardrail `llm_primary`), `nlu_rule` — её флаги; `nlu_src = llm` —
+    `nlu_src = rule` — ветка правила `legacy_v2`, `nlu_rule` — её флаги; `nlu_src = llm` —
     правило не сработало, решал LLM-классификатор. Подпись решения (`decision_source`) этого не различает: решение правила
     проходит слияние с подписью `llm_primary`. Только запись, на решение не влияет.
     """
@@ -249,25 +246,10 @@ def _llm_failed(decision: RouteDecision) -> bool:
     return bool({"ollama_timeout", "ollama_non_json"} & set(decision.flags or ()))
 
 
-def _engine_from_config() -> str:
-    raw = str(c.MR_NLU_ENGINE).strip().lower()
-    if raw in {"legacy_v2", "llm_primary"}:
-        return raw
-    return "legacy_v2"
-
-
-def _rules_fallback_from_config() -> str:
-    """`[MESSENGER_ROUTER] llm_primary_rules_fallback`: `off` (по умолчанию, как было) | `on`; нет ключа или мусор — `off`."""
-
-    raw = str(getattr(c, "MR_LLM_PRIMARY_RULES_FALLBACK", "off") or "").strip().lower()
-    return raw if raw in {"off", "on"} else "off"
-
-
 async def _analyze_legacy_with_candidates(
     text: str,
     state: SessionState,
     runtime_options: RuntimeOptions | None = None,
-    prefetched_llm: dict[str, Any] | None = None,
     button_topic: str = "",
     answer_topic: str = "",
     answer_topic_firm: bool = False,
@@ -304,12 +286,11 @@ async def _analyze_legacy_with_candidates(
         llm_context,
         runtime_options=runtime_options,
         prefetched_rule=None if by_llm else prefetched_rule,
-        prefetched_llm=prefetched_llm,
         skip_rule=by_llm,
     )
     fail_offered = False
     if by_llm and _llm_failed(llm):
-        # Сбой LLM — решает правило, как без выключателя (политика сбоя этапа 4, как `llm_primary_rules_fallback`). Под
+        # Сбой LLM — решает правило, как без выключателя (политика сбоя этапа 4). Под
         # `llm_fail_offer` с узлом `topic` — честный оффер: тему этой ветки правило решает по буквам («кровь ребёнку 10 мес» →
         # «без записи, все пункты»), её затем и отдали LLM (BUG-2026-10-27-LLM-QUEUE-GIVES-UP, шаг 4).
         fail_offered = fail_offer("topic")
@@ -337,10 +318,6 @@ async def _analyze_legacy_with_candidates(
         candidates=candidates,
         merged_from=source,
         trace={
-            "guardrail_pre": {},
-            "llm_primary_raw": "",
-            "llm_primary_sanitized": {},
-            "guardrail_post": {},
             "final_decision": {
                 "label": merged.label,
                 "confidence": merged.confidence,
@@ -348,41 +325,6 @@ async def _analyze_legacy_with_candidates(
             },
             "topic_source": topic_source,
         },
-    )
-
-
-async def _analyze_llm_primary_with_candidates(
-    text: str,
-    state: SessionState,
-    runtime_options: RuntimeOptions | None = None,
-) -> NLUResult:
-    seeded = seeded_context_for_nlu(state)
-    llm_context = dict(state.last_entities)
-    llm_context.update(seeded)
-
-    decision, trace = await classifier.analyze_llm_primary(text, llm_context, runtime_options=runtime_options)
-    failure = trace.get("llm_primary_failure")
-    if failure and _rules_fallback_from_config() == "on":
-        # Запасной путь правил (решение владельца 20.10, п. 2; BUG-2026-10-20-LLM-PRIMARY-NO-RULES-FALLBACK): разбор LLM
-        # не состоялся — ход решает код `legacy_v2` на том же (сбойном) ответе модели, без второго вызова LLM.
-        fallback = await _analyze_legacy_with_candidates(
-            text, state, runtime_options=runtime_options, prefetched_llm=dict(trace.get("llm_primary_sanitized") or {})
-        )
-        turn_telemetry.note(nlu_fallback="rules", nlu_fail=failure)
-        fallback.trace = {
-            **trace,
-            "rules_fallback": failure,
-            "final_decision": fallback.trace["final_decision"],
-            "topic_source": fallback.trace.get("topic_source"),
-        }
-        return fallback
-    topic_source = _note_topic_source(decision if (trace.get("guardrail_pre") or {}).get("hit") else None, text)
-    candidate = _candidate_from_decision("llm_primary", decision)
-    return NLUResult(
-        decision=decision,
-        candidates=[candidate],
-        merged_from=str(decision.source or "llm_primary"),
-        trace={**trace, "topic_source": topic_source},
     )
 
 
@@ -395,17 +337,12 @@ async def analyze_with_candidates(
     answer_topic_firm: bool = False,
 ) -> NLUResult:
     """`button_topic` — тема нажатой кнопки режима `pass` (подпись идёт как текст); `answer_topic` — тема кнопки, на чей
-    вопрос реплика — ответ (`button_answer_topic`; движок `llm_primary` её не читает), `answer_topic_firm` — её не
+    вопрос реплика — ответ (`button_answer_topic`), `answer_topic_firm` — её не
     перебивает и надёжное правило другой темы (смешанное сообщение, `button_topic_hint`); пусто — набранный текст."""
 
-    opts = runtime_options or RuntimeOptions()
     button: dict[str, Any] = {"button_topic": button_topic} if button_topic else {}  # только когда кнопка есть: путь текста не меняется
     if answer_topic:
         button["answer_topic"] = answer_topic
     if answer_topic_firm:
         button["answer_topic_firm"] = True
-    if not opts.uses_llm_primary_nlu:
-        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options, **button)
-    if _engine_from_config() != "llm_primary":
-        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options, **button)
-    return await _analyze_llm_primary_with_candidates(text, state, runtime_options=runtime_options)
+    return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options, **button)

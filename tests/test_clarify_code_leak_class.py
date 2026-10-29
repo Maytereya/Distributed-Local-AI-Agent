@@ -1,8 +1,9 @@
 """Служебные коды уточнения разбора LLM не доходят до пациента (BUG-2026-10-20-CLARIFY-CODE-LEAK, ход (и), шаг 1).
 
-Под `nlu_engine = llm_primary` разбор LLM ставит `clarify_reason` кодом контракта («slot_request»,
+Под снятым 29.10 движком `nlu_engine = llm_primary` разбор LLM ставил `clarify_reason` кодом контракта («slot_request»,
 «intent_disambiguation»), а ворота уточнения (`orchestrator.clarify_gate`) печатали `clarify_reason` пациенту как есть:
-на «хочу записаться» бот отвечал «slot_request», при сбое LLM — «intent_disambiguation». Правила кладут в то же поле готовый
+на «хочу записаться» бот отвечал «slot_request», при сбое LLM — «intent_disambiguation». Движок один — `legacy_v2`; инвариант
+держим на нём: коды остаются в контракте промпта и в `recovery_policy`. Правила кладут в то же поле готовый
 текст (больничный, сайт, «узнать анализы») — его печатаем как есть.
 
 Инвариант: текст ответа никогда не совпадает со служебным кодом и не содержит его — ни при каком ответе LLM, ни при её
@@ -74,17 +75,17 @@ _CLASSIFIER_ANSWERS = {
 _REPLIES = ["хочу записаться", "мне бы узнать насчёт анализов и врача", "сколько стоит", "здравствуйте, подскажите"]
 
 
-def _turn(world_dir, monkeypatch, reply: str, *, engine: str, answer) -> dict:
+def _turn(world_dir, monkeypatch, reply: str, *, answer) -> dict:
     from messengers_router.services import Services
 
     with ev_world.FrozenWorld(world_dir, "day"):
-        return _button_dialog(Services(), monkeypatch, [reply], switches={"MR_NLU_ENGINE": engine}, llm=_LLM({_CLASSIFIER_MARK: answer}))[-1]
+        return _button_dialog(Services(), monkeypatch, [reply], switches={}, llm=_LLM({_CLASSIFIER_MARK: answer}))[-1]
 
 
 @pytest.mark.parametrize("case", sorted(_CLASSIFIER_ANSWERS))
 @pytest.mark.parametrize("reply", _REPLIES)
 def test_clarify_code_never_reaches_the_patient(case, reply, mini_prod_world, monkeypatch):  # noqa: F811
-    turn = _turn(mini_prod_world, monkeypatch, reply, engine="llm_primary", answer=_CLASSIFIER_ANSWERS[case])
+    turn = _turn(mini_prod_world, monkeypatch, reply, answer=_CLASSIFIER_ANSWERS[case])
 
     text = turn["text"]
     assert text.strip(), turn

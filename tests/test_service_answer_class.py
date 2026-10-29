@@ -24,7 +24,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_prod" / "snapshots"
 _DOCTORS = Path(__file__).resolve().parent / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl"
@@ -143,7 +143,6 @@ def turn(world_dir, monkeypatch, reply: str, *, switch: str, answers: dict[str, 
         return {"text": str(body.get("text") or ""), "handoff": bool(body.get("handoff"))}
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_NLU_ENGINE", "legacy_v2", raising=False)
         patch.setattr(cfg, "MR_SERVICE_ANSWER_FROM_DATA", switch, raising=False)
         for key, value in (cfg_extra or {}).items():
             patch.setattr(cfg, key, value, raising=False)

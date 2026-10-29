@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 from messengers_router import topic_policy, turn_telemetry
-from tests.test_llm_primary_rules_fallback_class import _turn
+from tests._llm_helpers import _turn
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
@@ -88,7 +88,7 @@ def test_relabel_writes_itself_only_when_label_changes():
 def test_changed_label_is_explained_by_table(mini_prod_world, monkeypatch):  # noqa: F811
     changed = 0
     for reply in _REPLIES:
-        tel = _turn(mini_prod_world, monkeypatch, reply, engine="legacy_v2", fallback="off", answer=_LLM_ANSWER)["telemetry"]
+        tel = _turn(mini_prod_world, monkeypatch, reply, answer=_LLM_ANSWER)["telemetry"]
         if "tu_label_nlu" not in tel or tel["tu_label_nlu"] == tel.get("tu_label_final"):
             continue
         changed += 1
