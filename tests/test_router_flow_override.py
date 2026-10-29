@@ -3615,6 +3615,28 @@ def test_route_message_city_only_reply_keeps_price_label(monkeypatch):
     assert plan.label == "PRICE"
 
 
+@pytest.mark.parametrize("reply", ["Самара", "в самаре", "г. Самара"])
+def test_city_reply_to_price_question_keeps_decision_and_plan_one_topic(monkeypatch, reply):
+    """Н-5 (STEP-2026-10-30-PRICE-CITY-REPLY-NOT-DUPLICATE): переклейка `flow_price_city_reply_override` — не дубль ветки
+    `flow_policy._apply_pending_override`. Планировщик меняет только метку плана; без переклейки решение хода осталось бы
+    ADDRESS при плане PRICE, а состояние диалога ушло бы в `ADDRESS_FLOW` (следующий ход — по адресу). Инвариант класса:
+    ответ городом на висящий вопрос цены — решение, план и состояние диалога одной темы."""
+
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None, **_kwargs):
+        decision = RouteDecision(label="ADDRESS", confidence=0.9, entities={}, flags={"rule_address"}, needs_handoff=False)
+        return NLUResult(decision=decision, candidates=[], merged_from="llm")
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    state = SessionState(session_id=f"price-city-one-topic-{reply}", last_entities={"service_name": "ЭКГ"})
+    memory = MemoryStore()
+    memory.set_pending(state, label="PRICE", missing_slots=["_any_of:city,branch_name,branch_id"])
+
+    decision, plan, _evidence = route_via_endpoint(reply, state, Services(), memory)
+
+    assert decision.label == plan.label == "PRICE"
+    assert state.last_entities.get("_dialog_state") != "ADDRESS_FLOW", state.last_entities.get("_dialog_state")
+
+
 def test_route_message_operator_offer_yes_handoffs():
     state = SessionState(session_id="operator-offer-yes", last_entities={"_operator_offer_pending": True})
     services = Services()
