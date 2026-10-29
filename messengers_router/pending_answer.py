@@ -677,6 +677,16 @@ def picked_all(question_type: str | Question) -> tuple[str, ...]:
     return found.picks
 
 
+def by_understanding_on() -> bool:
+    """«Продолжает ли реплика висящий вопрос» решает одно решение хода — эта функция: `[MESSENGER_ROUTER]
+    expects_by_understanding = on` (шаг 3 деплоя 22, STEP-2026-10-30-EXPECTS-BY-UNDERSTANDING). off — запасники решают по форме
+    реплики, как было."""
+
+    from .runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_EXPECTS_BY_UNDERSTANDING", "off") or "").strip().lower() == "on"
+
+
 def slot_value(text: str) -> str:
     """Реплика как значение слота: одна строка, без концевой пунктуации, разумной длины; длиннее — не значение слота."""
 
