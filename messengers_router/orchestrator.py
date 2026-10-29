@@ -209,6 +209,7 @@ def _extract_recovery_response(
         summary=ctx.state.summary,
         max_unclear=3,
         pending_answered=pending_answer.answers_question(pending_answer.current()),
+        one_question=pending_answer.by_understanding_on(),
     )
     if recovery.kind == "handoff":
         return ResponseEnvelope(text=recovery.text or handoff_message("low_confidence"), handoff=True)

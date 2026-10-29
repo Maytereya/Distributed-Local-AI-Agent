@@ -270,6 +270,46 @@ def _turn_telemetry_to_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _one_hanging_question(request, monkeypatch):
+    """И-1 на каждом ответе гейта (Д2 звено 2, вариант (А); STEP-2026-10-30-EXPECTS-BY-UNDERSTANDING): под
+    `expects_by_understanding = on` в сообщении бота не больше одного висящего вопроса, и `_expects` — ровно он
+    (`expects.one_question_violation`). Проверяется конец каждого хода (`expects.finish_turn`) любого теста, который довёл ход
+    до ответа: нарушение — ошибка теста. Под off — как было (оффер поверх вопроса бота — известный дефект, его не проверяем).
+
+    Замер на всём гейте: `MR_I1_AUDIT=<файл.jsonl>` пишет строку на каждый ход (тест, режим, вид нарушения), `MR_I1_FORCE_ON=1` —
+    гейт целиком под `on` (тесты старого текста при этом падают — смотреть только журнал)."""
+
+    import json
+    import os
+
+    from messengers_router import expects, pending_answer
+    from messengers_router.runtime_config import config as rcfg
+
+    if os.environ.get("MR_I1_FORCE_ON") == "1":
+        monkeypatch.setattr(rcfg, "MR_EXPECTS_BY_UNDERSTANDING", "on", raising=False)
+    audit = os.environ.get("MR_I1_AUDIT", "")
+    real = expects.finish_turn
+    seen: list[str] = []
+
+    def finish_turn(state, response):
+        written = real(state, response)
+        violation = expects.one_question_violation(response.text, written, response.handoff)
+        on = pending_answer.by_understanding_on()
+        if violation and on:
+            seen.append(f"{violation}: {response.text!r}")
+        if audit:
+            row = {"test": request.node.nodeid, "on": on, "violation": violation, "offer": expects.OPERATOR_OFFER_QUESTION in (response.text or "")}
+            with open(audit, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return written
+
+    monkeypatch.setattr(expects, "finish_turn", finish_turn)
+    yield
+    if seen and not audit:
+        pytest.fail("И-1: в сообщении бота больше одного висящего вопроса — " + "; ".join(seen[:3]))
+
+
+@pytest.fixture(autouse=True)
 def _synonym_journal_to_tmp(tmp_path, monkeypatch):
     """Журнал синонимов цены (`price_synonym_suggestions.jsonl`) тесты пишут во временный каталог.
 

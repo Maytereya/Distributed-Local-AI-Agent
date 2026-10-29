@@ -236,6 +236,7 @@ class MessengerRouterConfig:
     pending_in_frame: str
     price_not_found_by_data: str
     frame_policy: str
+    expects_by_understanding: str
     insurance_topic: str
     price_select_named: str
     bare_name_overview: str
@@ -809,6 +810,12 @@ settings = Settings(
         # темой (Д3); срочное, перевод на оператора, существующая и идущая запись (`overrides`) — как всегда
         # (STEP-2026-10-30-FRAME-POLICY, Н-2). off — как было. [MESSENGER_ROUTER] frame_policy
         frame_policy=_get_enum("MESSENGER_ROUTER", "frame_policy", default="off", allowed={"off", "on"}),
+        # «Продолжает ли реплика висящий вопрос» решает одно решение хода — одна функция ответа (`pending_answer`, исход судьи);
+        # правила предпроверки записи, prelock, переклеек записи и планировщика — только сужение структурного ответа и путь при
+        # сбое LLM. Оффер оператора не ставится вопросом поверх вопроса бота: первый повтор — необязывающая строка, второй шаг
+        # без продвижения — один вопрос-оффер с причиной (Д2 звено 2, вариант (А), решение владельца 29.10; шаг 3 деплоя 22,
+        # STEP-2026-10-30-EXPECTS-BY-UNDERSTANDING). off — как было. [MESSENGER_ROUTER] expects_by_understanding
+        expects_by_understanding=_get_enum("MESSENGER_ROUTER", "expects_by_understanding", default="off", allowed={"off", "on"}),
         # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
         # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
         # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — «ответит оператор» и оффер; цена — путь цены.
@@ -1032,6 +1039,7 @@ MR_BUTTON_FRAME_CHECK = settings.messenger_router.button_frame_check
 MR_PENDING_IN_FRAME = settings.messenger_router.pending_in_frame
 MR_PRICE_NOT_FOUND_BY_DATA = settings.messenger_router.price_not_found_by_data
 MR_FRAME_POLICY = settings.messenger_router.frame_policy
+MR_EXPECTS_BY_UNDERSTANDING = settings.messenger_router.expects_by_understanding
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview

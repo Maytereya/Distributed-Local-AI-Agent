@@ -244,6 +244,13 @@ def keep_asking() -> bool:
     return True
 
 
+def replace_questions() -> None:
+    """Ответ хода заменён (оффер оператора вместо вопроса бота — предел переспросов, дедлайн, анти-залип): вопросов, которые
+    задал заменённый текст, в сообщении нет; поле ожидания — вопрос, который поставят после замены."""
+
+    _ASKED.set(())
+
+
 @contextlib.contextmanager
 def aside() -> Iterator[None]:
     """Побочный ответ внутри хода (уточняющий вопрос о вопросе бота, `pending_buttons`): вопросы, которые он задал, — не
@@ -324,6 +331,17 @@ def _armed(state: SessionState, question: Question) -> bool:
 
 
 def finish_turn(state: SessionState, response: ResponseEnvelope) -> dict[str, Any] | None:
+    """Конец хода: записать поле ожидания (`_finish`) и след нарушения И-1 (`tu_i1_violation`: вопрос бота и оффер оператора
+    вопросом в одном сообщении или оффер мимо поля — `one_question_violation`; наблюдатель, ответ не меняет)."""
+
+    written = _finish(state, response)
+    violation = one_question_violation(response.text, written, response.handoff)
+    if violation:
+        turn_telemetry.note(tu_i1_violation=violation)
+    return written
+
+
+def _finish(state: SessionState, response: ResponseEnvelope) -> dict[str, Any] | None:
     """Конец хода: записать поле ожидания (текст — ответ, каким его увидел пациент) или снять его.
 
     Снимается, когда вопроса в ходе не было (ответ принят, тема сменилась), ответ — перевод на оператора или флаг
@@ -365,6 +383,37 @@ def finish_turn(state: SessionState, response: ResponseEnvelope) -> dict[str, An
     return expects
 
 
+# Оффер оператора вопросом «да/нет» — так кончается каждый оффер бота (`mark_operator_offer_pending`).
+OPERATOR_OFFER_QUESTION = "Перевести на оператора?"
+
+
+# Вопросы хода, которых пациент не видит: текст вторичного оффера не показывается (с `fec9770`), оффер — сам проверяемый вопрос.
+_UNSEEN_OR_OFFER = (Question.SECONDARY_OFFER, Question.OPERATOR_OFFER)
+
+
+def one_question_violation(text: str, field: dict[str, Any] | None, handoff: bool = False) -> str:
+    """И-1 (Д2 звено 2, консилиум 29.10): в сообщении бота не больше одного висящего вопроса, и поле ожидания — ровно он.
+
+    Оффер оператора вопросом — единственный вопрос сообщения: до него нет «?» (ссылки не в счёт), и ход не задал другого вопроса (`asked()` —
+    просьба «укажите данные…» тоже вопрос, хотя без «?»); `_expects` — оффер. Перевод (`handoff`) вопросов не оставляет.
+
+    :return: пусто — инвариант цел; иначе вид нарушения: `two_questions` (вопрос бота и оффер в одном сообщении),
+        `offer_not_expected` (оффер есть, а поле ждёт другого ответа)
+    """
+
+    if handoff:
+        return ""
+    shown = str(text or "")
+    at = shown.lower().rfind(OPERATOR_OFFER_QUESTION.lower())
+    if at < 0:
+        return ""
+    if "?" in _without_links(shown[:at]) or any(item.question not in _UNSEEN_OR_OFFER for item in _ASKED.get()):
+        return "two_questions"
+    if (field or {}).get("type") != Question.OPERATOR_OFFER.value:
+        return "offer_not_expected"
+    return ""
+
+
 def without(entities: dict[str, Any]) -> dict[str, Any]:
     """Сущности сессии для инструментов — без поля ожидания (тот же объект, если поля нет).
 
@@ -387,8 +436,8 @@ def reask_limit_mode() -> str:
 def over_limit() -> Asked | None:
     """Переспрос этого хода, который под `reask_limit = on` прозвучал бы третий раз подряд (D2.4), или None."""
 
-    if reask_limit_mode() != "on":
-        return None
+    if reask_limit_mode() != "on" and str(getattr(_cfg, "MR_EXPECTS_BY_UNDERSTANDING", "off") or "").strip().lower() != "on":
+        return None  # под `expects_by_understanding = on` предел действует всегда: тот же вопрос подряд — не больше двух раз (И-3)
     return next((item for item in _ASKED.get() if item.reask and item.asks > MAX_ASKS), None)
 
 

@@ -678,6 +678,45 @@ def picked_all(question_type: str | Question) -> tuple[str, ...]:
     return found.picks
 
 
+def by_understanding_on() -> bool:
+    """«Продолжает ли реплика висящий вопрос» решает одно решение хода — эта функция: `[MESSENGER_ROUTER]
+    expects_by_understanding = on` (шаг 3 деплоя 22, STEP-2026-10-30-EXPECTS-BY-UNDERSTANDING). off — запасники решают по форме
+    реплики, как было."""
+
+    from .runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_EXPECTS_BY_UNDERSTANDING", "off") or "").strip().lower() == "on"
+
+
+# Вопросы, чей ответ заполняет недостающий слот `_pending` (тема висящего вопроса): вопрос-слот, услуга, действие и филиал записи.
+PENDING_QUESTIONS = (Question.SLOT_VALUE, Question.BOOKING_SERVICE, Question.APPOINTMENT_ACTION, Question.APPOINTMENT_BRANCH)
+
+
+def continues(*questions: Question) -> bool | None:
+    """Продолжает ли реплика висящий вопрос — одно решение хода для запасников (предпроверка записи, планировщик) под
+    `expects_by_understanding = on`: False — другая тема, True — нет (ответ, пункт, «да» / «нет», пауза, свой
+    вопрос в рамке, «ничего из этого» модели); None — решения нет: выключатель off, вопрос другого типа, сбой LLM (запасной путь
+    правил), хвост реплики идёт обычным путём. Тогда запасник решает по своим правилам, как было.
+
+    :param questions: типы вопроса, о которых спрашивает читатель; пусто — любой
+    """
+
+    if not by_understanding_on():
+        return None
+    found = current()
+    if found is None or not found.decided or found.rest:
+        return None
+    if questions and found.type not in {q.value for q in questions}:
+        return None
+    return found.outcome is not Outcome.NEW_TOPIC
+
+
+def acted(site: str) -> None:
+    """След хода: запасник `site` поступил по одному решению, а не по своим правилам (`tu_expects_acted`)."""
+
+    turn_telemetry.append("tu_expects_acted", site, once=True)  # планировщик читает тему дважды за ход (разбор подготовки, план)
+
+
 def slot_value(text: str) -> str:
     """Реплика как значение слота: одна строка, без концевой пунктуации, разумной длины; длиннее — не значение слота."""
 

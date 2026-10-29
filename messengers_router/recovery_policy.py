@@ -51,6 +51,15 @@ RecoveryKind = Literal["none", "clarify", "handoff"]
 # один и тот же оффер независимо от того, какой механизм сработал.
 OPERATOR_OFFER_AFTER_UNCLEAR = 2
 UNCLEAR_OPERATOR_OFFER_TEXT = "Похоже, мне не удаётся помочь с этим в чате. Перевести на оператора?"
+# Д2 звено 2, вариант (А) (решение владельца 29.10, `expects_by_understanding = on`): в сообщении бота не больше одного висящего
+# вопроса (И-1). Оффер поверх вопроса бота — необязывающая строка без «?»: «да» на неё — не согласие на перевод, висит вопрос бота.
+OPERATOR_HINT_TEXT = "Если удобнее, напишите «оператор» — соединю."
+
+
+def operator_offer_with_reason(what: str) -> str:
+    """Второй шаг без продвижения: вопроса бота больше нет — один вопрос-оффер, назвав, чего не хватило (принцип 5, И-3)."""
+
+    return f"Не получается разобрать {what} в чате. Перевести на оператора?"
 
 
 @dataclass
@@ -159,12 +168,15 @@ def evaluate_recovery(
     summary: str = "",
     max_unclear: int = 3,
     pending_answered: bool = False,
+    one_question: bool = False,
 ) -> RecoveryAction:
     """
     Мягкая политика:
     - явный запрос оператора -> handoff сразу; не когда реплика — ответ на вопрос бота, решённый одной функцией
       (`pending_answered`: «не надо оператора» на оффер — отказ, класс 5)
     - low confidence (OTHER/TEST_ASSIST) -> clarify 1/2, handoff на 3-м
+    - `one_question` (`expects_by_understanding = on`, Д2 звено 2, вариант (А)): на втором непонятом — уточнение и необязывающая
+      строка «напишите «оператор»», на третьем — один вопрос-оффер с причиной; уточнение и оффер вопросом вместе не задаются (И-1)
     """
     # «не надо оператора, я сам» на вопрос бота — ответ (решён одной функцией ответа на висящий вопрос), не просьба
     # о переводе (класс 5).
@@ -208,7 +220,31 @@ def evaluate_recovery(
     # на третьем ходу стоял принудительный `handoff=True`; владелец 14.08 решил
     # не переводить принудительно. Текст уточнения сохраняем: пациент видит и
     # переспрос, и предложение — и сам выбирает.
-    if n >= max(1, min(int(max_unclear), OPERATOR_OFFER_AFTER_UNCLEAR)):
+    offer_at = max(1, min(int(max_unclear), OPERATOR_OFFER_AFTER_UNCLEAR))
+    if one_question and n > offer_at:
+        state_entities["_nlu_unclear_count"] = 0
+        return RecoveryAction(
+            kind="clarify",
+            text=operator_offer_with_reason("ваш вопрос"),
+            handoff=False,
+            reason="low_confidence_operator_offer",
+            unclear_count=n,
+            offer_operator=True,
+        )
+    if one_question and n == offer_at:
+        clarify_text = (
+            _structured_clarify_text(decision, flow_label, summary, user_text)
+            if is_structured_clarify
+            else _build_recovery_text(user_text, summary, flow_label)
+        )
+        return RecoveryAction(
+            kind="clarify",
+            text=f"{clarify_text}\n\n{OPERATOR_HINT_TEXT}",
+            handoff=False,
+            reason="low_confidence_operator_hint",
+            unclear_count=n,
+        )
+    if n >= offer_at:
         state_entities["_nlu_unclear_count"] = 0
         clarify_text = (
             _structured_clarify_text(decision, flow_label, summary, user_text)

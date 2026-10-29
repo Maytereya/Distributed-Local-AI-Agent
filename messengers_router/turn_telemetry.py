@@ -134,11 +134,11 @@ def bump(key: str, by: int = 1) -> None:
         turn.fields[key] = int(turn.fields.get(key) or 0) + by
 
 
-def append(key: str, value: Any) -> None:
-    """Дописать значение в список хода (`tu_relabel_src` — сработавшие строки таблицы политик темы)."""
+def append(key: str, value: Any, *, once: bool = False) -> None:
+    """Дописать значение в список хода (`tu_relabel_src` — сработавшие строки таблицы политик темы); `once` — если его там нет."""
 
     turn = _TURN.get()
-    if turn is not None:
+    if turn is not None and not (once and value in turn.fields.get(key, ())):
         turn.fields.setdefault(key, []).append(value)
 
 

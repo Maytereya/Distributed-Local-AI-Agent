@@ -558,7 +558,9 @@ def _maybe_offer_operator_on_repeat(
         or len(norm) < _REPEAT_GUARD_MIN_LEN
         or "оператор" in norm
         or state.last_entities.get("_operator_offer_pending")
-        or state.last_entities.get("appointment_flow_active")
+        # Под `expects_by_understanding = on` и в записи: её счётчики попыток ведут только отмену и перенос, а вопрос цели записи
+        # без них звучал подряд сколько угодно раз (И-3).
+        or (state.last_entities.get("appointment_flow_active") and not pending_answer.by_understanding_on())
     ):
         state.last_entities["_last_answer_norm"] = norm
         state.last_entities["_answer_repeat_count"] = 0
@@ -576,12 +578,73 @@ def _maybe_offer_operator_on_repeat(
     threshold = (
         _REPEAT_GUARD_AFTER_REPEATS_QUESTION if _REPEAT_ASKS_RE.search(text) else _REPEAT_GUARD_AFTER_REPEATS_ANSWER
     )
+    if repeat_count >= threshold and threshold == _REPEAT_GUARD_AFTER_REPEATS_QUESTION and pending_answer.by_understanding_on():
+        return _offer_operator_without_second_question(response, state, memory, repeat_count > threshold)
     if repeat_count >= threshold:
         state.last_entities["_answer_repeat_count"] = 0
         reset_appointment_runtime_state(state)
         mark_operator_offer_pending(state, memory)
         response.text = f"{text}\n\n{_REPEAT_GUARD_OFFER}"
     return response
+
+
+# Чего не хватило — для вопроса-оффера с причиной (Д2 звено 2, вариант (А)): недостающий слот висящего вопроса → слова.
+_REPEAT_REASON_BY_SLOT: tuple[tuple[frozenset[str], str], ...] = (
+    (frozenset({"doctor_id", "doctor_name", "specialty"}), "врача или услугу для записи"),
+    (frozenset({"test_goal"}), "цель подбора анализов"),
+    (frozenset({"service_name", "test_name"}), "название анализа или услуги"),
+    (frozenset({"surname", "year", "filial", "number"}), "данные для поиска результата"),
+    (frozenset({"city", "branch_name", "branch_id"}), "удобный филиал"),
+    (frozenset({"date_from", "time_from", "appointment_wish"}), "удобное время"),
+    (frozenset({"patient_name"}), "ФИО"),
+)
+
+
+def _repeat_reason(state: SessionState, memory: MemoryStore) -> str:
+    """Чего бот ждал и не получил: выбор из показанного списка (`_expects` вида `pick`) или недостающий слот висящего вопроса."""
+
+    if any(item.kind == expects.PICK for item in expects.asked()):
+        return "ваш выбор из списка"
+    pending = memory.get_pending(state)
+    missing = pending.get("missing") if isinstance(pending, dict) else None
+    names = {name for item in (missing if isinstance(missing, list) else ()) for name in str(item).removeprefix("_any_of:").split(",")}
+    return next((words for slots, words in _REPEAT_REASON_BY_SLOT if names & slots), "ответ на вопрос")
+
+
+def _offer_operator_without_second_question(
+    response: ResponseEnvelope, state: SessionState, memory: MemoryStore, second: bool
+) -> ResponseEnvelope:
+    """Анти-залип на повторе вопроса бота под `expects_by_understanding = on` (Д2 звено 2, вариант (А), решение владельца 29.10).
+
+    Оффер вопросом поверх вопроса бота давал два вопроса в одном сообщении, а поле ожидания — оффер: ответ на вопрос бота
+    («ферритин» на «Какой анализ интересует?») судья читал согласием на перевод (BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT, звено 2).
+    Первый повтор — вопрос бота остаётся единственным висящим (`_pending` и `_expects` не трогаются), оффер — необязывающей
+    строкой без «?» (И-1). Второй шаг без продвижения — вопроса бота больше нет: один вопрос-оффер с причиной, висит только он
+    (`_expects = operator_offer`, И-2: перевод — только по нему или по явной просьбе; И-3: тот же вопрос подряд — не больше двух
+    раз). Явное «оператор» на любом шаге переводит, как было (`explicit_operator_requested`).
+
+    :param second: второй шаг без продвижения (иначе — первый повтор)
+    """
+
+    from .recovery_policy import OPERATOR_HINT_TEXT, operator_offer_with_reason
+
+    if not second:
+        turn_telemetry.note(repeat_offer="hint")
+        response.text = f"{(response.text or '').strip()}\n\n{OPERATOR_HINT_TEXT}"
+        return response
+    from .response_builder import PREPARE_VARIANT_PENDING_KEY
+
+    reason = _repeat_reason(state, memory)
+    state.last_entities["_answer_repeat_count"] = 0
+    reset_appointment_runtime_state(state)
+    _clear_catalog_confirm_pending(state, memory)
+    state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+    expects.replace_questions()
+    mark_operator_offer_pending(state, memory)
+    turn_telemetry.note(repeat_offer="question")
+    return ResponseEnvelope(
+        text=operator_offer_with_reason(reason), attachments=[], handoff=False, state_update=response.state_update
+    )
 
 
 def _maybe_offer_operator_on_reask_limit(
@@ -615,6 +678,7 @@ def _maybe_offer_operator_on_reask_limit(
     _clear_catalog_confirm_pending(state, memory)
     state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
     state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+    expects.replace_questions()
     mark_operator_offer_pending(state, memory)
     turn_telemetry.override(answer_source="reask_limit")
     return ResponseEnvelope(text=expects.reask_limit_text(limited), handoff=False, state_update=response.state_update)
@@ -639,6 +703,7 @@ def _offer_operator_on_deadline(response: ResponseEnvelope, state: SessionState,
     reset_appointment_runtime_state(state)
     _clear_catalog_confirm_pending(state, memory)
     state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+    expects.replace_questions()
     mark_operator_offer_pending(state, memory)
     turn_telemetry.override(answer_source="llm_deadline_offer")
     return ResponseEnvelope(text=DEADLINE_OFFER_TEXT, handoff=False, state_update=response.state_update)
@@ -3172,6 +3237,12 @@ async def _apply_post_nlu_guardrails(
         and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
         and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
     )
+    if prepare_followup and pending_answer.continues(*pending_answer.PENDING_QUESTIONS) is False:
+        # На висящий вопрос подготовки одна функция ответа решила «другая тема» (`expects_by_understanding = on`): короткую реплику
+        # в подготовку не возвращать («а запишите меня» на «К какой процедуре нужна подготовка?»). Без висящего вопроса (после
+        # памятки) — как было: это Д3, BUG-2026-10-28-PREPARE-FOLLOWUP-LETTERS, решение владельца.
+        pending_answer.acted("flow_prepare_followup_override")
+        prepare_followup = False
     by_turn = await turn_understanding.llm_facet(user_text) if prepare_followup and is_short_reply(user_text) else None
     if by_turn == "bare":
         turn_understanding.note_acted("prepare_followup_turn_facet")
