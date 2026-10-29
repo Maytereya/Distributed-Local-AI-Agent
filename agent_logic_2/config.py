@@ -779,8 +779,8 @@ settings = Settings(
         # [MESSENGER_ROUTER] button_frame_check
         button_frame_check=_get_enum("MESSENGER_ROUTER", "button_frame_check", default="question", allowed={"question", "judge"}),
         # Свой вопрос пациента в теме нажатой кнопки (исход судьи «domain», вариант Б) — отдельный исход `in_frame` ответа на висящий
-        # вопрос, а не «ответ на вопрос-слот»: тема кнопки держится, запись не отменяется, анти-залип не считает ход повтором; в
-        # слот-услугу (`service_name`) — позиция из разбора хода, а не реплика целиком; разбор пуст или упал — слот не пишется
+        # вопрос, а не «ответ на вопрос-слот»: тема кнопки держится, запись не отменяется; в слот-услугу (`service_name`) —
+        # позиции из разбора хода, а не реплика целиком; разбор пуст или упал — слот не пишется
         # (Н-1 карты «Понимания», STEP-2026-10-30-PENDING-IN-FRAME). off — как было. [MESSENGER_ROUTER] pending_in_frame
         pending_in_frame=_get_enum("MESSENGER_ROUTER", "pending_in_frame", default="off", allowed={"off", "on"}),
         # Путь цены сдался («Не нашёл актуальную стоимость … Уточните название», цен нет): сначала данные клиники

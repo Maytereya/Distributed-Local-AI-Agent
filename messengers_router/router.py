@@ -568,9 +568,7 @@ def _maybe_offer_operator_on_repeat(
     repeat_count = int(state.last_entities.get("_answer_repeat_count") or 0)
     if norm != prev:
         repeat_count = 0
-    elif not same_question and not pending_answer.in_frame():
-        # Свой вопрос в теме кнопки (`in_frame`) — продвижение, а не повтор: вопрос кнопки снова на нём не несёт оффера, иначе
-        # название следующей репликой судья прочёл бы согласием на перевод (BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT, звено 2).
+    elif not same_question:
         repeat_count += 1
     state.last_entities["_last_answer_norm"] = norm
     state.last_entities["_answer_repeat_count"] = repeat_count

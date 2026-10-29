@@ -684,13 +684,6 @@ def slot_value(text: str) -> str:
     return value if 0 < len(value) <= _SLOT_VALUE_MAX else ""
 
 
-def in_frame() -> bool:
-    """Реплика этого хода — свой вопрос в теме кнопки (`in_frame`): продвижение, а не повтор для анти-залипа."""
-
-    found = slot_answer()
-    return found is not None and found.outcome is Outcome.IN_FRAME
-
-
 def slot_answer() -> Answer | None:
     """Решение одной функции об ответе на вопрос-слот этого хода (`pending_buttons`); нет или сбой LLM — None."""
 

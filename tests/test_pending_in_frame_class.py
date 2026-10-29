@@ -7,8 +7,8 @@ STEP-2026-10-30-PENDING-IN-FRAME, выключатель `pending_in_frame`).
 (подготовка читает разбор хода), вред — на следующем: «а сколько стоит?» искал цену вопроса пациента (класс L-13).
 
 Инвариант класса: под `pending_in_frame = on` реплика целиком значением слота-услуги не становится — ни у «domain», ни у «ответа»
-судьи; значение — позиция из разбора хода, разбор пуст или упал — слот не пишется; тема кнопки держится, ход `in_frame` — не повтор
-для анти-залипа. Цель подбора (`test_goal`) — свободные слова, как у правил. off — байт в байт как было. Через обработчик
+судьи; значение — позиции из разбора хода, разбор пуст или упал — слот не пишется; тема кнопки держится; тот же переспрос на ходу
+`in_frame` — повтор для анти-залипа, как у ответа. Цель подбора (`test_goal`) — свободные слова, как у правил. off — байт в байт как было. Через обработчик
 эндпоинта, на два-три хода; LLM — подделки настоящего типа (судья, классификатор, оракул разметки хода `tests.spans_oracle`).
 """
 
@@ -188,19 +188,14 @@ _NO_SERVICE = ("а натощак нужно приходить?", "а нато�
 _REPEAT_OFFER = "Похоже, мне не удаётся помочь с этим в чате"
 
 
-def test_in_frame_reask_is_not_a_repeat(mini_prod_world, monkeypatch):  # noqa: F811
-    """Свой вопрос в теме кнопки — продвижение (решение консилиума 30.10): вопрос кнопки снова на нём не несёт оффера анти-залипа —
-    иначе название следующей репликой судья прочёл бы согласием на перевод (BUG-2026-10-28-BUTTON-PRESS-AS-REPEAT, звено 2)."""
+@pytest.mark.parametrize("outcome", ["domain", "answer"])
+def test_same_reask_is_a_repeat_as_before(outcome, mini_prod_world, monkeypatch):  # noqa: F811
+    """Свой вопрос в теме кнопки, на который бот снова задал тот же вопрос, — повтор, как у ответа: оффер оператора анти-залипа
+    остаётся (стенд 30.10: без него результаты «из архива», «вся история» теряли честный перевод — 678 → 676 / 886; пункт
+    консилиума «`in_frame` — продвижение» снят из шага 1а, STEP-2026-10-30-PENDING-IN-FRAME)."""
 
-    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), *_NO_SERVICE], in_frame="on", judge={"натощак": "domain"}, phrases=())
-    assert [t["telemetry"].get("tu_pending_outcome") for t in turns[1:]] == ["in_frame", "in_frame"]
-    assert turns[1]["text"] == turns[2]["text"] and _REPEAT_OFFER not in turns[2]["text"], turns[2]["text"]
-
-
-def test_answer_reask_is_still_a_repeat(mini_prod_world, monkeypatch):  # noqa: F811
-    """Встречный: «ответ» судьи, на который бот снова задал тот же вопрос, — повтор, как без выключателя."""
-
-    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), *_NO_SERVICE], in_frame="on", judge={"натощак": "answer"}, phrases=())
+    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), *_NO_SERVICE], in_frame="on", judge={"натощак": outcome}, phrases=())
+    assert turns[1]["telemetry"].get("tu_pending_outcome") == ("in_frame" if outcome == "domain" else "answer"), turns[1]["telemetry"]
     assert turns[1]["text"] in turns[2]["text"] and _REPEAT_OFFER in turns[2]["text"], turns[2]["text"]
 
 
