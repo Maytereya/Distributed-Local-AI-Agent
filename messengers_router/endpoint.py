@@ -87,7 +87,7 @@ async def _on_startup() -> None:
     """
 
     try:
-        get_services()
+        get_services().warm_branches_in_background()  # справочник филиалов — до первого пациента, старт не ждёт
     except Exception:
         log.error("startup_services_failed", exc_info=True)
     schedule_warm_up()

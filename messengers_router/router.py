@@ -4106,6 +4106,10 @@ async def patient_routing_stream(
         services.ensure_background_refresh_started()
     except Exception:
         logger.warning("background_refresh_start_failed", exc_info=True)
+    try:
+        services.warm_branches_in_background()  # справочник филиалов — до синхронных читателей хода, ход не ждёт (DATA-7)
+    except Exception:
+        logger.warning("branches_warm_start_failed", exc_info=True)
 
     from . import button_menu
 

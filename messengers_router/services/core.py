@@ -133,6 +133,7 @@ class Services:
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
     _regions_last_failed: bool = field(default=False, init=False)
     _branches_warm_failed_at: float = field(default=0.0, init=False)
+    _branches_warm_task: Optional["asyncio.Task[None]"] = field(default=None, init=False)
     _service_catalog_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _service_catalog_rows_loaded_at: float = field(default=0.0, init=False)
     _service_catalog_last_error: str = field(default="", init=False)
@@ -403,6 +404,24 @@ class Services:
             return
         if not await self._ensure_regions_loaded():
             self._branches_warm_failed_at = time.time()
+
+    def warm_branches_in_background(self) -> None:
+        """Прогрев справочника филиалов фоновой задачей — ход его не ждёт (DEBT-2026-10-29-WARM-BRANCHES-NEVER-CALLED).
+
+        Прогрев DATA-7 (`warm_branches`) звала только прежняя точка входа `route_patient_message`: на проде он не работал ни
+        разу, и после перезапуска, пока никто не спросил адреса или врачей, запись не узнавала филиал из реплики. Зовут
+        старт сервиса и начало хода. Кэш есть, недавний сбой (60 с) или прогрев уже идёт — ничего; вне цикла событий —
+        ничего (скрипты читают `get_branches` по-прежнему синхронно)."""
+
+        if self._regions_cache or time.time() - self._branches_warm_failed_at < 60:
+            return
+        if self._branches_warm_task is not None and not self._branches_warm_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._branches_warm_task = loop.create_task(self.warm_branches())  # ссылка держит задачу от GC
 
     async def _samara_region_tokens(self) -> set[str]:
         regions = await self._ensure_regions_loaded()
