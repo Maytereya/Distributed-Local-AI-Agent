@@ -394,7 +394,7 @@ _UNSEEN_OR_OFFER = (Question.SECONDARY_OFFER, Question.OPERATOR_OFFER)
 def one_question_violation(text: str, field: dict[str, Any] | None, handoff: bool = False) -> str:
     """И-1 (Д2 звено 2, консилиум 29.10): в сообщении бота не больше одного висящего вопроса, и поле ожидания — ровно он.
 
-    Оффер оператора вопросом — единственный вопрос сообщения: до него нет «?», и ход не задал другого вопроса (`asked()` —
+    Оффер оператора вопросом — единственный вопрос сообщения: до него нет «?» (ссылки не в счёт), и ход не задал другого вопроса (`asked()` —
     просьба «укажите данные…» тоже вопрос, хотя без «?»); `_expects` — оффер. Перевод (`handoff`) вопросов не оставляет.
 
     :return: пусто — инвариант цел; иначе вид нарушения: `two_questions` (вопрос бота и оффер в одном сообщении),
@@ -407,7 +407,7 @@ def one_question_violation(text: str, field: dict[str, Any] | None, handoff: boo
     at = shown.lower().rfind(OPERATOR_OFFER_QUESTION.lower())
     if at < 0:
         return ""
-    if "?" in shown[:at] or any(item.question not in _UNSEEN_OR_OFFER for item in _ASKED.get()):
+    if "?" in _without_links(shown[:at]) or any(item.question not in _UNSEEN_OR_OFFER for item in _ASKED.get()):
         return "two_questions"
     if (field or {}).get("type") != Question.OPERATOR_OFFER.value:
         return "offer_not_expected"

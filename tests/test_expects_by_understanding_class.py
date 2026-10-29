@@ -201,6 +201,7 @@ def test_handler_reask_is_limited_under_on(monkeypatch):
         ("Нет данных — подскажет оператор. " + OFFER, {"type": "operator_offer"}, (expects.Question.OPERATOR_OFFER,), ""),
         ("Какой анализ интересует?\n\n" + OPERATOR_HINT_TEXT, {"type": "slot_value"}, (expects.Question.SLOT_VALUE,), ""),
         ("Соединяю с оператором.", None, (), ""),
+        ("Результат по ссылке: https://naykalab.ru/getanaliz.php?fam=X\n\n" + OFFER, {"type": "operator_offer"}, (expects.Question.OPERATOR_OFFER,), ""),
     ],
 )
 def test_one_question_check(text, field, asked, violation):
