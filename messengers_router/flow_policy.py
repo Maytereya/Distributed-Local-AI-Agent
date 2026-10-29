@@ -516,6 +516,11 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
     pending_label = pending.get("label")
     if not isinstance(pending_label, str):
         return decision.label
+    if pending_answer.continues(*pending_answer.PENDING_QUESTIONS) is False:
+        # «Другая тема» на висящий вопрос темы `_pending` решила одна функция ответа (`expects_by_understanding = on`): тема хода —
+        # решение NLU, переклеек по форме реплики («похоже на название услуги», город, короткий ответ подготовки) нет.
+        pending_answer.acted("plan_pending_override")
+        return decision.label
     # Для добора города не разрешаем случайному ADDRESS-решению
     # (обычно на короткий ответ "Самара") ломать исходный flow. PRICE здесь нет: тему хода переклеивает строка
     # `flow_price_city_reply_override` роутера (решение, план и состояние диалога — одной темы); планировщик метку плана

@@ -713,7 +713,7 @@ def continues(*questions: Question) -> bool | None:
 def acted(site: str) -> None:
     """След хода: запасник `site` поступил по одному решению, а не по своим правилам (`tu_expects_acted`)."""
 
-    turn_telemetry.append("tu_expects_acted", site)
+    turn_telemetry.append("tu_expects_acted", site, once=True)  # планировщик читает тему дважды за ход (разбор подготовки, план)
 
 
 def slot_value(text: str) -> str:

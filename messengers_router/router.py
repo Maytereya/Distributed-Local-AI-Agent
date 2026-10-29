@@ -3235,6 +3235,12 @@ async def _apply_post_nlu_guardrails(
         and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
         and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
     )
+    if prepare_followup and pending_answer.continues(*pending_answer.PENDING_QUESTIONS) is False:
+        # На висящий вопрос подготовки одна функция ответа решила «другая тема» (`expects_by_understanding = on`): короткую реплику
+        # в подготовку не возвращать («а запишите меня» на «К какой процедуре нужна подготовка?»). Без висящего вопроса (после
+        # памятки) — как было: это Д3, BUG-2026-10-28-PREPARE-FOLLOWUP-LETTERS, решение владельца.
+        pending_answer.acted("flow_prepare_followup_override")
+        prepare_followup = False
     by_turn = await turn_understanding.llm_facet(user_text) if prepare_followup and is_short_reply(user_text) else None
     if by_turn == "bare":
         turn_understanding.note_acted("prepare_followup_turn_facet")

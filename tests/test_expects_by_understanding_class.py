@@ -248,3 +248,33 @@ def test_rules_decide_the_switch_when_the_llm_is_down(reply, d21_world, monkeypa
         on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session=f"on-down-{reply}-{dialog[0].text}")
         assert [(t["text"], t["handoff"]) for t in on] == [(t["text"], t["handoff"]) for t in off]
         assert not on[1]["telemetry"].get("tu_expects_acted"), on[1]["telemetry"]
+
+
+# --------------------------------------------------------------------------- тема висящего вопроса в планировщике и подготовке (коммит 3)
+
+
+@pytest.mark.parametrize(
+    ("dialog", "site"),
+    [
+        ([uc.press("menu.price.test"), uc.say("а запишите меня к терапевту", pending="new_topic", topic="APPOINTMENT")], "plan_pending_override"),
+        ([uc.press("menu.appointment.prepare"), uc.say("а запишите меня", pending="new_topic", topic="APPOINTMENT")], "flow_prepare_followup_override"),
+    ],
+    ids=["price_button_looks_like_a_name", "prepare_button_short_reply"],
+)
+def test_new_topic_judged_by_llm_is_not_glued_back_by_the_form_of_the_reply(dialog, site, d21_world, monkeypatch):  # noqa: F811
+    """«Другая тема» модели на вопрос-слот: тема хода — решение NLU (запись), без переклейки в тему вопроса по форме реплики
+    («похоже на название услуги» — цена, «короткий ответ» — подготовка). Off — переклейка, как было."""
+
+    off = uc.run(d21_world, monkeypatch, dialog, session=f"off-{site}")
+    on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session=f"on-{site}")
+    assert off[1]["plan"][0] != "APPOINTMENT" and on[1]["plan"][0] == "APPOINTMENT", (off[1]["plan"], on[1]["plan"])
+    assert site in on[1]["telemetry"].get("tu_expects_acted", []), on[1]["telemetry"]
+
+
+def test_answer_judged_by_llm_keeps_the_topic_of_the_question(d21_world, monkeypatch):  # noqa: F811
+    """Встречный: ответ на вопрос-слот («гастроскопия» на вопрос подготовки) — тема вопроса, как было (on = off)."""
+
+    dialog = [uc.press("menu.appointment.prepare"), uc.say("гастроскопия", pending="answer", services=("гастроскопия",), topic="PRICE")]
+    off = uc.run(d21_world, monkeypatch, dialog, session="off-gastro")
+    on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session="on-gastro")
+    assert [(t["text"], t["plan"]) for t in on] == [(t["text"], t["plan"]) for t in off] and on[1]["plan"][0] == "PREPARE"
