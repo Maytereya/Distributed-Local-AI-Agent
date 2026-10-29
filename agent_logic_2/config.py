@@ -783,8 +783,12 @@ settings = Settings(
         # Кто под `button_answer_topic = frame` проверяет «другую тему» судьи ответа на вопрос кнопки: `question` — отдельный
         # короткий вопрос рамки (`choose_button_frame`, вариант А), `judge` — сам судья с исходом «в теме кнопки» (`domain`,
         # промпт `choose_pending_free_reply_button_frame`, вариант Б). Выбор — по замеру (решение владельца 29.10).
+        # `judge_leaf` — как `judge`, и лист без своего вопроса (`button_leaf_frame`) проверяет тот же судья по метке нажатия, а не
+        # вопрос рамки (Р2 консилиума 30.10: одно определение «в теме кнопки», замер — STEP-2026-10-30-R2-LEAF-JUDGE).
         # [MESSENGER_ROUTER] button_frame_check
-        button_frame_check=_get_enum("MESSENGER_ROUTER", "button_frame_check", default="question", allowed={"question", "judge"}),
+        button_frame_check=_get_enum(
+            "MESSENGER_ROUTER", "button_frame_check", default="question", allowed={"question", "judge", "judge_leaf"}
+        ),
         # Свой вопрос пациента в теме нажатой кнопки (исход судьи «domain», вариант Б) — отдельный исход `in_frame` ответа на висящий
         # вопрос, а не «ответ на вопрос-слот»: тема кнопки держится, запись не отменяется; в слот-услугу (`service_name`) —
         # позиции из разбора хода, а не реплика целиком; разбор пуст или упал — слот не пишется

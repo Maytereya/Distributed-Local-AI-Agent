@@ -490,16 +490,49 @@ def finish_leaf(state: Any) -> None:
         state.last_entities.pop(LEAF_KEY, None)
 
 
+def leaf_judge_on() -> bool:
+    """`button_frame_check = judge_leaf` (под `frame`): лист без своего вопроса проверяет тот же судья, что ответ на вопрос
+    кнопки (вариант Б), — по метке нажатия, а не отдельный вопрос рамки (`FRAME_TASK`). Р2 консилиума 30.10 — по замеру."""
+
+    return pending_answer.frame_judge_on() and str(getattr(_cfg, "MR_BUTTON_FRAME_CHECK", "") or "").strip().lower() == "judge_leaf"
+
+
+def leaf_judge_context(action: button_menu.ButtonAction) -> str:
+    """Данные судьи о листе без своего вопроса — как `judge_context`, но вопроса бота нет: бот ответил на нажатие сразу."""
+
+    return f"кнопка «{action.title}»{_where(action)} — вопросы про {action.about}; бот ответил на нажатие, своего вопроса не задавал"
+
+
+async def _leaf_judged_in_frame(text: str, action: button_menu.ButtonAction) -> bool:
+    """Судья ответа на вопрос кнопки (`pending_answer.FRAME_BUTTON_TASK`, тот же промпт) по метке нажатия листа: «answer» и
+    «domain» — в теме листа; «new_topic», прочее и сбой — нет (общий путь, как у вопроса рамки). Лимит решений хода не тратит."""
+
+    from . import llm_runtime
+
+    spent = llm_runtime.turn_decisions_spent()
+    try:
+        choice = await choose(pending_answer.FRAME_BUTTON_TASK, text, [], asked=leaf_judge_context(action))
+    except Exception:  # новый слой: его сбой не ломает ход — общий путь
+        logger.warning("button_leaf_judge_failed", exc_info=True)
+        choice = None
+    outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
+    turn_telemetry.note(button_frame=f"judge:{outcome or 'none'}")
+    if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(tu_button_frame_refund=1)
+    return outcome in ("answer", "domain")
+
+
 async def reframe_leaf(text: str) -> bool:
-    """Реплика сразу после листа без своего вопроса: в его теме? (`frame`, вопрос рамки). «В теме» — тема хода — листа, его
-    флаги и сущности — решению (`leaf_frame`), несрочные правила её не перебивают; «другое» и сбой — общий путь, как было."""
+    """Реплика сразу после листа без своего вопроса: в его теме? (`frame`, вопрос рамки; под `judge_leaf` — судья ответа по
+    метке нажатия). «В теме» — тема хода — листа, его флаги и сущности — решению (`leaf_frame`), несрочные правила её не
+    перебивают; «другое» и сбой — общий путь, как было."""
 
     mark = _LEAF.get()
     button_id = str(mark.get("id") or "") if mark is not None and int(mark.get("age") or 0) == 1 else ""
     action = button_menu.action_for(button_id) if button_id else None
     if not frame_firm() or action is None or not action.label:
         return False
-    if not await _in_frame(text, action):
+    if not await (_leaf_judged_in_frame(text, action) if leaf_judge_on() else _in_frame(text, action)):
         return False
     _REFRAMED.set(action.label)
     _REFRAMED_LEAF.set(button_id)

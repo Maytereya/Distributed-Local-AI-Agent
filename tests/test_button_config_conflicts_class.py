@@ -19,7 +19,7 @@ from messengers_router.runtime_config import config as cfg
 _KEYS = ("MR_BUTTON_ANSWER_TOPIC", "MR_BUTTON_FRAME_CHECK", "MR_BUTTON_REPLY_JUDGE")
 _VALUES = {
     "MR_BUTTON_ANSWER_TOPIC": ("off", "on", "frame"),
-    "MR_BUTTON_FRAME_CHECK": ("off", "judge"),
+    "MR_BUTTON_FRAME_CHECK": ("off", "judge", "judge_leaf"),
     "MR_BUTTON_REPLY_JUDGE": ("off", "on"),
 }
 _ALL = list(itertools.product(*(_VALUES[k] for k in _KEYS)))
@@ -34,7 +34,7 @@ def _set(monkeypatch, combo):
 def test_conflict_exactly_when_frame_judge_has_no_button_context(monkeypatch, combo):
     _set(monkeypatch, combo)
     topic, check, judge = combo
-    broken = topic == "frame" and check == "judge" and judge != "on"
+    broken = topic == "frame" and check in ("judge", "judge_leaf") and judge != "on"
 
     assert bool(button_flow.config_conflicts()) == broken
 
