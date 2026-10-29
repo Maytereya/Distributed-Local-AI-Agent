@@ -487,6 +487,7 @@ def build_prepare_response(
         return None
     if payload.get("operator_offer"):
         mark_operator_offer_pending(state, memory)
+    shown_context.sync_prepare(state, payload)
     if isinstance(payload.get("prepare_variants"), dict):
         # Вопрос «с наркозом или без?» — ответ разберёт `_handle_prepare_variant_pending`.
         state.last_entities[PREPARE_VARIANT_PENDING_KEY] = {"titles": dict(payload["prepare_variants"])}

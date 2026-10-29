@@ -946,6 +946,7 @@ async def _test_prepare_by_parse(self: "Services", raw_query: str, entities: dic
             "prepare": _single_memo_block(memo, lines(memo)),
             "note": f"prepare: {memo.source}",
             "prepare_source_title": memo.title,
+            "prepare_shown": [memo.title],  # показанная карточка справочника — контекст после ответа (`shown_context.sync_prepare`)
             "entities_used": entities,
             "prepare_wrap_status": "not_wrapped",
             "prepare_wrap_reason": "mis_memo_as_is",
@@ -976,6 +977,7 @@ async def _test_prepare_by_parse(self: "Services", raw_query: str, entities: dic
             "prepare": _several_memos_block([(memo, lines(memo)) for memo in chosen]),
             "note": "prepare: several memos",
             "prepare_source_title": " | ".join(memo.title for memo in chosen),
+            "prepare_shown": [memo.title for memo in chosen if memo.source == SOURCE_MIS],
             "entities_used": entities,
             "prepare_wrap_status": "several_memos",
             "prepare_wrap_reason": "several_memos",

@@ -2834,8 +2834,9 @@ async def _pending_slot_value(label: str, slot: str, user_text: str) -> str:
     off (`pending_in_frame`) — реплика целиком, как было. on — слот-услуга (`pending_answer.SERVICE_SLOTS`) получает позицию из
     разбора хода (`turn_understanding.service_phrase`; список — фразы через запятую): реплика целиком в названии услуги на
     следующем ходе — вопрос пациента вместо услуги («По запросу «Откуда берут биоматериал…»», класс L-13; Н-1 карты
-    «Понимания»). Разбор пуст или сбой — слот не пишется: ход без услуги её уточнит, а не покажет чужую. Разбор подготовки — тот же, что прочтёт инструмент (`observe_prepare_turn`: раз за ход).
-    Цель подбора — свободные слова пациента, как было.
+    «Понимания»). Разбор пуст или сбой — слот не пишется: ход без услуги её уточнит, а не покажет чужую. Разбор подготовки —
+    тот же, что прочтёт инструмент (`observe_prepare_turn`: раз за ход). Фраза — вход инструмента этого хода, не контекст:
+    после ответа услуга контекста — показанное (`shown_context.parsed_input`). Цель подбора — свободные слова пациента, как было.
     """
 
     if not pending_answer.in_frame_on() or slot not in pending_answer.SERVICE_SLOTS:
@@ -3969,6 +3970,8 @@ async def _complete_route_after_doctor_guard(
             value = await _pending_slot_value(str(pend_label), slot, user_text)
             if value:
                 memory.merge_entities(state, {slot: value}, label=str(pend_label))
+                if slot in pending_answer.SERVICE_SLOTS and pending_answer.in_frame_on():
+                    shown_context.parsed_input(state)  # фраза разбора — вход инструмента хода; контекст после — показанное
 
     fill_date_from_schedule_windows(state, decision.label)
     _test_assist_guess_as_name(decision, state, memory, test_assist_guess, user_text)
@@ -4500,6 +4503,7 @@ async def patient_routing_stream(
     response = offered
     # Смешанное сообщение внутри кнопки (`button_topic_hint`): ответ по теме кнопки — и подсказка кнопки на остальное.
     response = button_flow.with_mixed_hint(response)
+    shown_context.finish_turn(state)  # фраза разбора в слоте, которой ответ не показал, — не контекст следующего хода
     address_flow.finish_turn(state)  # метка адресной кнопки — следующей реплике (`address_branch_flags`)
     button_flow.finish_leaf(state)  # метка листа без своего вопроса — следующей реплике (`frame`)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
