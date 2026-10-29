@@ -121,21 +121,19 @@ def _sid(*parts: str) -> str:
 
 def test_precondition_the_strong_phrase_leaves_the_qualifier_outside(mini_prod_world):  # noqa: F811
     """Предусловие класса на мини-прайсе: фраза без условия — сильная по данным МИС (её строки и есть ответ без
-    гарда), в перечне кода есть и фраза с условием (правило 3 промпта разбора предлагает её LLM), а гард П2 по
-    всей реплике отказывает — путём правил цены нет. Разговорные слова гард по буквам тоже считает
-    уточнением — поэтому судит LLM."""
+    гарда), а гард П2 по всей реплике отказывает — путём правил цены нет. Разговорные слова гард по буквам тоже считает
+    уточнением — поэтому судит LLM. (Проверка перечня генератора окон — «фраза с условием среди кандидатов» — снята 30.10
+    с генератором, К1: фразы размечает LLM.)"""
 
     from agent_logic_2.nayka_api import api_price
 
     from messengers_router.services import _prices_helpers as H
-    from messengers_router.services import _turn_phrases as P
+    from messengers_router.services import _phrase_words as P
 
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         rows = [row for row in api_price.load_price_by_region(H.SAMARA_PRICE_REGION_ID) if isinstance(row, dict)]
         for phrase in _PHRASES:
             assert P.phrase_rows(phrase, rows), phrase
-        options = [option.raw for option in P.phrase_candidates(_STRONG_P2[0], facet=None, catalog=rows).options]
-        assert "ферритин по омс" in options and "ферритин" in options, options
         for reply in (*_STRONG_P2, *_CONVERSATIONAL):
             assert H.query_has_unsatisfiable_qualifier(reply, rows), reply
         for reply in _OUTSIDE_THE_CLASS:

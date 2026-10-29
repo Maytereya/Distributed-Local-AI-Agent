@@ -303,37 +303,7 @@ def test_test_assist_list_is_the_parse(catalog, mini_prod_world, monkeypatch):  
 
 
 # --------------------------------------------------------------------------- политика сбоя под on
-
-
-def test_failed_parse_keeps_only_the_separator_cut(catalog, mini_prod_world):  # noqa: F811
-    """LLM не ответила: у разбора нет фраз, а для читателей — разрез по разделителям (б) со силой по данным. Без
-    разделителей (решение владельца 16.10, Q2 отменено) — разрез данными МИС (сильные окна), если в промежутках нет слова
-    вне прайса; иначе — реплика целиком одной фразой; одно название прайса на всю реплику — тоже целиком."""
-
-    from messengers_router.services import _turn_phrases as TP
-
-    async def parse(reply: str) -> turn_parse.PhraseParse:
-        return await TP.parse_turn_phrases(reply, facet="price", catalog=catalog)
-
-    with ev_world.FrozenWorld(mini_prod_world, "day"):
-        listed = asyncio.run(parse("сколько стоит ферритин, ттг и витамин д"))
-        run_on = asyncio.run(parse("сколько стоит ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"))
-        caps = asyncio.run(parse("сколько стоит ФЕРРИТИН ГЛЮКОЗА ХОЛЕСТЕРОЛ"))
-        one_name = asyncio.run(parse("сколько стоит билирубин и фракции"))
-    assert (listed.status, listed.items) == ("unavailable", ())
-    assert [(p.text, p.strength.value, bool(p.rows)) for p in listed.split] == [
-        ("ферритин", "strong", True),
-        ("ттг", "weak", False),
-        ("витамин д", "weak", False),
-    ]
-    # «ОАК ОАМ» без синонимов МИС в мини-проде — слова вне прайса в промежутке: без LLM не отличить от условия П2.
-    assert run_on.status == "unavailable" and [p.text for p in run_on.split] == ["ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"]
-    assert caps.status == "unavailable" and [(p.text, bool(p.rows)) for p in caps.split] == [
-        ("ФЕРРИТИН", True),
-        ("ГЛЮКОЗА", True),
-        ("ХОЛЕСТЕРОЛ", True),
-    ]
-    assert one_name.status == "unavailable" and [p.text for p in one_name.split] == ["билирубин и фракции"]
+# Разрез по разделителям при сбое LLM ставил генератор окон — тест снят с ним 30.10 (К1); сбой разметки — `unavailable` без разреза.
 
 
 def test_failed_parse_is_read_as_its_separator_cut(monkeypatch):

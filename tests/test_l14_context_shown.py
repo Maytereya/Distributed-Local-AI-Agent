@@ -203,13 +203,10 @@ def _with_memo(monkeypatch) -> None:
 
 
 def _prod_parse(monkeypatch) -> None:
-    """Разбор хода подготовки — разметка LLM, как на проде: `prepare_by_parse` и `turn_spans_llm` включены вместе с деплоя 17
-    (24.10). С 27.10 это и умолчание кода (STEP-2026-10-15-DEFAULTS-B); выключатель задан явно, чтобы тест не зависел от
-    умолчания: старым генератором окон (он режет без LLM) прод разбор не строит."""
+    """Разбор хода подготовки — разметка LLM, как на проде (деплой 17, 24.10): с 30.10 это единственный путь — выключатель
+    `turn_spans_llm` и генератор окон сняты (К1). Помощник оставлен для вызывающих: задавать нечего."""
 
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_TURN_SPANS_LLM", "on", raising=False)
+    del monkeypatch
 
 
 @pytest.mark.parametrize("config", SHOWN)

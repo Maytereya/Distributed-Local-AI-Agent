@@ -62,7 +62,7 @@ from . import turn_names, turn_parse, turn_telemetry
 from .choice import NO_WORDS, Option, Status, Task, choose
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
-from .services import _phrase_words, _turn_phrases, _turn_spans
+from .services import _phrase_words, _turn_spans
 from .services._biomaterial import _SPEECH_WRAPPER
 from .services._strong_match import strong_rows
 from .services._prices_helpers import (
@@ -910,22 +910,19 @@ async def _parse_phrases(
     agree: bool = True,
 ) -> turn_parse.PhraseParse:
     """Разбор и его след в телеметрии хода (`tu_parse_*` — без текста пациента). При нетерпеливых правилах
-    (O3b) понимание правил считается параллельно: `prepared` — генератор
-    готов, правилам можно стартовать; `rules` — их результат для согласия разрезов. `agree=False` — без
+    (O3b) понимание правил считается параллельно: `prepared` — разбор
+    начат, правилам можно стартовать (генератора окон нет — ставится сразу); `rules` — их результат для согласия разрезов. `agree=False` — без
     согласия разрезов (`parse_agree_telemetry = off`: правила не считаются ради телеметрии)."""
 
     started = time.monotonic()
     agreed: str | None = None
     try:
         catalog = await asyncio.to_thread(_catalog_rows, None)
-        if _turn_spans.enabled():
-            # Без списков слов: LLM размечает номера слов реплики (DESIGN-2026-10-23-NO-STOPWORDS, этап 1); генератора окон нет —
-            # правилам понимания ждать нечего.
-            if prepared is not None:
-                prepared.set()
-            parse = await _turn_spans.parse_turn_spans(text, facet=facet, catalog=catalog)
-        else:
-            parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, prepared=prepared)
+        # Без списков слов: LLM размечает номера слов реплики (DESIGN-2026-10-23-NO-STOPWORDS, этап 1); генератора окон нет (снят
+        # 30.10, К1) — правилам понимания ждать нечего.
+        if prepared is not None:
+            prepared.set()
+        parse = await _turn_spans.parse_turn_spans(text, facet=facet, catalog=catalog)
         if not agree:
             return _noted(parse, None)
         if rules is not None:
@@ -938,7 +935,7 @@ async def _parse_phrases(
         parse = turn_parse.PhraseParse(reply=text, status=turn_parse.ParseStatus.ERROR.value, source="none", ms=int((time.monotonic() - started) * 1000))
     finally:
         if prepared is not None:
-            prepared.set()  # сбой до генератора — правилам не ждать
+            prepared.set()  # сбой до разбора — правилам не ждать
     return _noted(parse, agreed)
 
 

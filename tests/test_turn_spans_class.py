@@ -131,7 +131,9 @@ def test_module_reads_no_stopword_list() -> None:
     assert not names & _STOPWORD_NAMES
 
 
-def test_switch_routes_understanding_to_spans(monkeypatch) -> None:
+def test_understanding_routes_to_spans(monkeypatch) -> None:
+    """Разбор хода — только разметка (генератор окон и выключатель `turn_spans_llm` сняты 30.10, К1)."""
+
     called: list[str] = []
 
     async def spans(text, **_kw):
@@ -139,7 +141,6 @@ def test_switch_routes_understanding_to_spans(monkeypatch) -> None:
         return S._result(text, S.ParseStatus.NONE_FIT, "llm", 3)
 
     monkeypatch.setattr(turn_understanding._turn_spans, "parse_turn_spans", spans)
-    monkeypatch.setattr(turn_understanding._turn_spans, "enabled", lambda: True)
     monkeypatch.setattr(turn_understanding, "_catalog_rows", lambda _r: _CATALOG)
     parse = asyncio.run(turn_understanding._parse_phrases("сколько стоят анализы", facet=None, tu=None, agree=False))
     assert called == ["сколько стоят анализы"] and parse.status == "none_fit"

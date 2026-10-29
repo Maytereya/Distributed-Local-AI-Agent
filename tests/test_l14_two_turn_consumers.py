@@ -30,8 +30,7 @@
    анти-повтор (читает текст ответа, не услугу), телеметрия (числа и статусы, без фраз).
 
 Мир и наборы выключателей — как в `test_price_one_or_many_class.py`: мини-прод, день, сеть закрыта, синонимы МИС
-пусты; LLM гейта недоступна, где нужна живая — `_Scripted`. Наборы: `default` (умолчания кода до переворота
-«умолчания = прод», заданы явно), `deploy`
+пусты; LLM гейта недоступна, где нужна живая — `_Scripted`. Наборы: `deploy`
 (набор деплоя 14.10: понимание хода, корзина, срок, симптом — on), `deploy_parse` и `next` — прежние имена наборов, с
 17.10 равные `deploy` (разбор хода, цена через модуль, политика L-13 и «контекст = показанное» — единственные пути).
 
@@ -39,8 +38,8 @@
 услуги размечает LLM, а без разметки цена — только реплике, которая сама целиком название или код («сколько стоит ферритин»
 без LLM — «Уточните…», решения владельца 22.10 (а) и 27.10). Чтобы ответ X показал услугу и следующему ходу было о чём быть,
 диалоги идут с оракулом разметки (`_play(spans=…)`, `tests/spans_oracle.py`): фразы-услуги на весь диалог, прочие места
-LLM — подделка теста или «недоступна»; строки слабой фразы — выбор LLM (`_Scripted`, `_PickRows`). Набор `default`
-разметку не спрашивает — его ходы прежние.
+LLM — подделка теста или «недоступна»; строки слабой фразы — выбор LLM (`_Scripted`, `_PickRows`). Набор `default` (прежние
+умолчания, генератор окон без LLM) снят 30.10 вместе с генератором (К1).
 
 Классификатор LLM в гейте недоступен: короткие вопросы, которые правила не опознают («а сколько?», «а срок?»,
 «1»), уходят в «не понял» — безопасный ответ, он тоже закреплён. Ходы с живым классификатором, который
@@ -70,11 +69,10 @@ from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
 from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
-from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
+from tests.test_price_one_or_many_class import _DEPLOY
 from tests.test_price_turns_golden import FIXTURE, mini_prod_world  # noqa: F401 — фикстура модуля
 
 _SETS: dict[str, dict[str, str]] = {
-    "default": _DEFAULT,
     "deploy": _DEPLOY,
     "deploy_parse": dict(_DEPLOY),  # разбор хода — единственный режим (T7 шаг 3б): набор равен деплою
     "next": dict(_DEPLOY),  # цена через модуль — единственный путь с 17.10 (`choose_price` снят): набор равен деплою
@@ -202,9 +200,8 @@ def _use_llm(monkeypatch, llm: Any, spans: tuple[str, ...] | None) -> None:
     """LLM диалога после того, как набор выключателей применён: `spans` — оракул разметки поверх `llm` (только на пути
     `turn_spans_llm = on`; см. `_play`), иначе `llm` как есть; None и None — LLM гейта (недоступна)."""
 
-    from messengers_router.runtime_config import config as cfg
 
-    if spans is not None and str(getattr(cfg, "MR_TURN_SPANS_LLM", "off")).lower() == "on":
+    if spans is not None:
         llm = SpansOracle(spans, inner=llm)
         keep_llm_breaker_closed(monkeypatch)
     if llm is not None:
@@ -229,7 +226,6 @@ def _play(
     :param spans: разметка реплик `turn_spans` (путь прода с 24.10, `tests/spans_oracle.py`) — фразы-услуги на весь диалог
         (фразы, которой в реплике нет, разметка не отмечает); прочие места LLM — `llm` (None — недоступна). Предохранитель
         LLM в диалоге не размыкается: подделка отвечает не на все места, а на проде LLM либо отвечает, либо лежит целиком.
-        Набор с `turn_spans_llm = off` (`default`) разметку не спрашивает — оракула и предохранителя не касаемся, как было.
         None — как раньше (без оракула).
     """
 
@@ -584,9 +580,9 @@ def test_list_mentions_chosen_is_catalog_name_by_rules_and_phrase_by_parse(confi
     [turn] = _play([_LIST_REPLY], "mentions-list", mini_prod_world, monkeypatch, config, spans=("ферритин", "ттг", "витамин д"))
     assert turn.understanding is not None and turn.understanding["facet"] == "price"
     # Разбор реплики — единственный режим (T7 шаг 3б): во всех наборах — фразы разбора, не названия каталога. Путь прода
-    # (`turn_spans_llm = on`) — фразы разметки LLM (`parse_picked`); набор `default` — прежний генератор окон без выбора LLM.
+    # — фразы разметки LLM (`parse_picked`).
     assert turn.understanding["services"] == ["ферритин", "ттг", "витамин д"]
-    assert turn.understanding["services_rule"] == ("parse_unavailable" if config == "default" else "parse_picked")
+    assert turn.understanding["services_rule"] == "parse_picked"
 
 
 @pytest.mark.parametrize("config", CONFIGS)
@@ -731,15 +727,9 @@ def test_strong_single_service_is_the_context(config, mini_prod_world, monkeypat
 def test_readiness_answer_leaves_no_service_pending_or_label_in_state(config, mini_prod_world, monkeypatch):  # noqa: F811
     """Срок из МИС кодом (ответ о «Ферритин»): ход уходит ранним возвратом (`_maybe_readiness_reply`) мимо
     слияния сущностей — ни ожидания, ни метки хода; срок назвал одну услугу — она в контексте (правило владельца 14.10).
-
-    Набор `default`: понимание хода в тени — вопрос о сроке не обрабатывается, подбор анализов без данных (LLM гейта
-    недоступна) — честный оффер оператора с висящим подтверждением (`test_assist_from_data = on`, прод с 24.10; до — перевод)."""
+"""
 
     turn = _state_after("сколько готовится ферритин", config, mini_prod_world, monkeypatch, "state-readiness", spans=("ферритин",))
-    if config == "default":
-        assert "точно ответит оператор" in turn.text and not turn.handoff, turn.text
-        assert (turn.state["service_name"], turn.state["pending"]) == (None, ("OTHER", ("operator_offer_confirm",))), turn.state
-        return
     assert turn.text == "Срок готовности «Ферритин» — 1–2 дня." and not turn.handoff
     assert (turn.state["service_name"], turn.state["pending"], turn.state["last_label"]) == ("Ферритин", None, None)
 

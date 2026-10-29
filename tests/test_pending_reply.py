@@ -210,7 +210,7 @@ def test_bot_question_and_reply_are_data_in_the_user_role():
     assert choice.answer_schema(task, [])["properties"]["picks"] == {"type": "array", "maxItems": 0}
 
 
-@pytest.mark.parametrize("key", ["choose_price_basket", "choose_price_service", "choose_readiness_service", "choose_symptom_specialists", "choose_turn_phrases"])
+@pytest.mark.parametrize("key", ["choose_price_basket", "choose_price_service", "choose_readiness_service", "choose_symptom_specialists"])
 def test_prompts_without_the_bot_question_render_as_before(key):
     """Вопрос бота — новая подстановка: промпты других задач — тот же запрос байт в байт (записанные ответы стенда
     и кэш выбора в силе)."""

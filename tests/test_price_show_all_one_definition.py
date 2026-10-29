@@ -30,7 +30,7 @@ from messengers_router import classifier, llm_runtime
 from messengers_router.services import _prices_helpers
 from tests.spans_oracle import keep_llm_breaker_closed
 from tests.test_open_bugs_2026_10_14 import _ProdLLM, _family_llm, _same_service
-from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
+from tests.test_price_one_or_many_class import _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 # --------------------------------------------------------------------------- старые определения (c55c02c), не править
@@ -206,7 +206,7 @@ def test_classifier_has_no_copy_of_the_rule(monkeypatch):
 # подсказкой диалог не доходил. LLM диалога — пути прода (`test_open_bugs_2026_10_14._ProdLLM`: разметка называет услугу, выбор
 # строки признаёт её строки, как живая модель); во всех наборах.
 
-_SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
+_SETS = {"deploy": _DEPLOY}  # набор `default` (генератор окон) снят 30.10, К1
 _FAMILY_QUESTION = "сколько стоит общий анализ крови"
 _NUMBERED = re.compile(r"^\d+\. (?P<name>.+?) — \d[\d\s]* руб", re.M)
 _HINT = re.compile(r"найдено еще (?P<rest>\d+) вариантов\. Чтобы показать их, напишите: \"(?P<word>[^\"]+)\"")

@@ -49,12 +49,9 @@ UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
 PROD_D17: dict[str, Any] = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
     "MR_TURN_UNDERSTANDING_ONE": "on",
-    "MR_TURN_SPANS_LLM": "on",
     "MR_CHOOSE_CACHE_TTL_S": 0,
     "MR_PARSE_FAIL_VARIANTS": 3,
     "MR_TOPIC_OVERRIDE_LLM": "off",
-    "MR_PARSE_FRAGMENT_WINDOWS": "off",
-    "MR_PARSE_COMPLETE_WINDOWS": "off",
     "MR_PENDING_BUTTONS": "on",
     "MR_TOPIC_BY_LLM": "rule_test_assist,rule_doctor_info_specialty,rule_schedule,rule_analysis_lookup_ambiguous,"
     "rule_website_help,rule_address_work_hours,rule_test_result,rule_prepare",

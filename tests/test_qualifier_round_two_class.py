@@ -119,13 +119,12 @@ def test_precondition_the_class_a_phrase_is_weak_and_judged(mini_prod_world, mon
     from agent_logic_2.nayka_api import api_price
 
     from messengers_router.services import _prices_helpers as H
-    from messengers_router.services import _turn_phrases as P
+    from messengers_router.services import _phrase_words as P
 
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         rows = [row for row in api_price.load_price_by_region(H.SAMARA_PRICE_REGION_ID) if isinstance(row, dict)]
         for reply, phrase in _CLASS_A.items():
-            options = [option.raw for option in P.phrase_candidates(reply, facet=None, catalog=rows).options]
-            assert phrase in options and not P.phrase_rows(phrase, rows), (reply, options)
+            assert phrase.lower() in reply.lower() and not P.phrase_rows(phrase, rows), (reply, phrase)  # фраза — срез реплики (её размечает LLM)
             assert H.query_has_unsatisfiable_qualifier(reply, rows), reply
     reply, phrase = next(iter(_CLASS_A.items()))
     _record, [row] = _run([reply], mini_prod_world, monkeypatch, llm=_Judge((phrase,)), session=_sid("pre"))

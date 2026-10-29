@@ -163,9 +163,6 @@ tests/test_turn_parse_merged.py
 tests/test_turn_parse_readers.py
 tests/test_turn_parse_slot.py
 tests/test_turn_parse_t3.py
-tests/test_turn_phrases.py
-tests/test_turn_phrases_complete_class.py
-tests/test_turn_phrases_variants.py
 tests/test_turn_telemetry.py
 tests/test_turn_telemetry_summary.py
 tests/test_turn_understanding.py

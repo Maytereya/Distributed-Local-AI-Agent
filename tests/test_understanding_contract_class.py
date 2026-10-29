@@ -98,8 +98,11 @@ def test_d21_cfg_keys_are_known_to_the_code():
 
 @pytest.mark.skipif(not _NASON.exists(), reason="прогон стенда деплоя 21 — вне репо (облако его не видит)")
 def test_d21_cfg_equals_the_bench_run_of_deploy_21():
+    from messengers_router.runtime_config import config as bot_cfg
+
     cfg = json.loads(_NASON.read_text(encoding="utf-8"))["cfg"]
-    known = {key: row["value"] for key, row in cfg.items() if row.get("known")}
+    # Ключ, который бот больше не читает (путь off снят: генератор окон, `pending_buttons`), в контракте не нужен.
+    known = {key: row["value"] for key, row in cfg.items() if row.get("known") and hasattr(bot_cfg, key)}
     assert known == uc.D21_CFG
 
 

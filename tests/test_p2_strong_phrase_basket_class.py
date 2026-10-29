@@ -20,7 +20,7 @@
 - два хода: короткий вопрос после такого ответа не получает цену позиции, которой пациент не видел.
 
 Путь прода с 27.10 в гейте (`turn_spans_llm = on`, деплой 17; STEP-2026-10-15-DEFAULTS-B): фразы размечает LLM номерами слов, окон
-нет. Подделка отвечает на разметку теми же фразами. Разметка, оторвавшая «по омс» от «ферритин» (ошибка модели против правила 3
+нет; генератор окон и ключи `parse_*_windows` сняты 30.10 (К1), с ними — тест предусловия «окна предлагают фразу без условия». Подделка отвечает на разметку теми же фразами. Разметка, оторвавшая «по омс» от «ферритин» (ошибка модели против правила 3
 промпта `turn_spans`), — известный дефект BUG-2026-10-26-LIST-CONDITION-CUT-BY-SPANS: `beside` заполнял только генератор окон,
 разметка — нет, суда условия нет, пациент видит «Ферритин — 530 руб.» (xfail strict ниже; чинит дизайн С3). Разметка по правилу 3
 («ферритин по омс» целиком) — слабая позиция с судом П2, цены нет. Откат `off` (ответ 15.10) удалён 27.10 — путь не прода.
@@ -44,7 +44,6 @@ from tests.test_turn_parse_t3 import _FOLLOW_UPS, _PHRASES_MARK, _ROWS_MARKS, _a
 
 _PROD_1016 = {
 }
-_WINDOWS = {"MR_PARSE_FRAGMENT_WINDOWS": "on", "MR_PARSE_COMPLETE_WINDOWS": "on"}
 
 _P2_BASKET = (
     "сколько стоит ферритин по омс, глюкоза",
@@ -88,11 +87,11 @@ class _RuleFive:
         raise ConnectionError("тест: LLM недоступна для этого места")
 
 
-def _run(turns, world, monkeypatch, *, guard: str, llm, windows: bool = True, session: str):
+def _run(turns, world, monkeypatch, *, guard: str, llm, session: str):
     from messengers_router.runtime_config import config as cfg
 
     _deploy(monkeypatch)
-    for key, value in {**_PROD_1016, **(_WINDOWS if windows else {})}.items():
+    for key, value in _PROD_1016.items():
         monkeypatch.setattr(cfg, key, value, raising=False)
     monkeypatch.setattr(cfg, "MR_STRONG_PHRASE_GUARD", guard, raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
@@ -107,32 +106,6 @@ def _run(turns, world, monkeypatch, *, guard: str, llm, windows: bool = True, se
 
 def _sid(*parts: str) -> str:
     return "p2spb-" + "-".join(re.sub(r"\W+", "_", part)[-16:] for part in parts)
-
-
-def test_precondition_windows_offer_the_phrase_without_the_condition(mini_prod_world):  # noqa: F811
-    """Предусловие: под окнами перечень предлагает «ферритин» внутри «ферритин по омс», без окон — нет; выбранная
-    фраза списка несёт слова фрагмента вне себя (`beside`)."""
-
-    from agent_logic_2.nayka_api import api_price
-
-    from messengers_router.runtime_config import config as cfg
-    from messengers_router.services import _prices_helpers as H
-    from messengers_router.services import _turn_phrases as P
-    from messengers_router.turn_parse import ParseStatus
-
-    with ev_world.FrozenWorld(mini_prod_world, "day"), pytest.MonkeyPatch.context() as mp:
-        rows = [row for row in api_price.load_price_by_region(H.SAMARA_PRICE_REGION_ID) if isinstance(row, dict)]
-        for reply in _P2_BASKET:
-            for key, value in _WINDOWS.items():
-                mp.setattr(cfg, key, "off", raising=False)
-            assert "ферритин" not in [o.raw for o in P.phrase_candidates(reply, facet=None, catalog=rows).options], reply
-            for key, value in _WINDOWS.items():
-                mp.setattr(cfg, key, value, raising=False)
-            cands = P.phrase_candidates(reply, facet=None, catalog=rows)
-            picked = [o for o in cands.options if o.raw in ("ферритин", "глюкоза")]
-            parse = P.result(cands, ParseStatus.PICKED, "llm", [P.parsed(o, P.phrase_rows(o.raw, rows)) for o in picked])
-            beside = {item.text: item.beside for item in parse.items}
-            assert beside == {"ферритин": "омс", "глюкоза": ""}, beside  # «по» — обвязка (`_FILLER`)
 
 
 @pytest.mark.xfail(strict=True, reason=_BUG_1)
@@ -184,8 +157,8 @@ def test_without_windows_nothing_changes(reply, mini_prod_world, monkeypatch):  
     """Без окон фраза с условием — слабая позиция («ферритин по омс») с гардом П2: выключатель ответа не меняет. Под разметкой
     (путь прода) — то же при разметке по правилу 3 промпта `turn_spans`: условие не оторвано от названия."""
 
-    [off], _rows = _run([reply], mini_prod_world, monkeypatch, guard="off", llm=_RuleFive(_WHOLE), windows=False, session=_sid("woff", reply))
-    [on], [row] = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(_WHOLE), windows=False, session=_sid("won", reply))
+    [off], _rows = _run([reply], mini_prod_world, monkeypatch, guard="off", llm=_RuleFive(_WHOLE), session=_sid("woff", reply))
+    [on], [row] = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(_WHOLE), session=_sid("won", reply))
     assert on["text"] == off["text"] and _FERRITIN not in on["text"] and _GLUCOSE in on["text"], on["text"]
     # Слабую позицию с сильным названием внутри судит LLM корзины (суд слабой фразы — всегда с 22.10, выключатель
     # `basket_weak_phrase_judge` снят), поэтому строка хода может нести вердикт суда; ответ — тот же, цены по ОМС нет.

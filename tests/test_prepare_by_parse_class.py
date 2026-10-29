@@ -133,7 +133,6 @@ def world(monkeypatch):
         return state["same_always"] or {first.title, second.title} <= state["want"]
 
     monkeypatch.setattr(cfg, "MR_PREPARE_BY_PARSE", "on", raising=False)
-    monkeypatch.setattr(cfg, "MR_TURN_SPANS_LLM", "on", raising=False)
     monkeypatch.setattr(_turn_spans.llm_runtime, "generate_structured", spans_llm)
     monkeypatch.setattr(select_mod, "generate_text", select_llm)
     monkeypatch.setattr(select_mod, "_same_preparation", same)

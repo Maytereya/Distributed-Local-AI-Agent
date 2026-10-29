@@ -205,7 +205,6 @@ class MessengerRouterConfig:
     topic_shadow_llm: str
     p1_facet_none_offer: str
     facet_by_llm: str
-    turn_spans_llm: str
     prepare_by_parse: str
     price_by_parse: str
     strong_family_letter: str
@@ -252,8 +251,6 @@ class MessengerRouterConfig:
     pending_buttons: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
-    parse_fragment_windows: str
-    parse_complete_windows: str
     strong_phrase_guard: str
     parse_agree_telemetry: str
     names_doctor_catalog: str
@@ -557,17 +554,8 @@ settings = Settings(
         # Гард П2 («уточнения нет в прайсе») у слабой фразы разбора судит выбор строки (класс A, решение владельца 15.10) —
         # единственный путь с 17.10: ключ [MESSENGER_ROUTER] parse_price_guard (rules — гард по словарю каталога) снят и
         # больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-PARSE-PRICE-GUARD).
-        # Сильные окна внутри слабого фрагмента по разделителям — дополнительные кандидаты выбора LLM разбора
-        # (15.10, смоук прода: «сколько стоят ферритин, …» → фрагмент «стоят ферритин», ферритин терялся): off — как
-        # было; on — окно 1–3 слова, сильное по данным МИС («ферритин»), предлагается LLM; разрезом не служит.
-        # [MESSENGER_ROUTER] parse_fragment_windows
-        parse_fragment_windows=_get_enum("MESSENGER_ROUTER", "parse_fragment_windows", default="off", allowed={"off", "on"}),
-        # Окно-кандидат разбора, оборванное перед словом реплики, с которым оно даёт сильное совпадение по данным МИС
-        # (15.10, g0724: окно сегментации «взятие крови из» без «вены» — LLM разбора не видела названия целиком): off —
-        # как было; on — окно, дополненное до сильного следующими словами (не дальше 2 и не через знак препинания),
-        # предлагается LLM вариантом; разрезом не служит.
-        # [MESSENGER_ROUTER] parse_complete_windows
-        parse_complete_windows=_get_enum("MESSENGER_ROUTER", "parse_complete_windows", default="off", allowed={"off", "on"}),
+        # Ключи [MESSENGER_ROUTER] parse_fragment_windows и parse_complete_windows (кандидаты генератора окон) сняты 30.10 вместе
+        # с генератором (К1 карты мёртвого кода) и больше не читаются (в config.ini безвредны).
         # Гард П2 у названия услуги из сущности NLU / контекста судит LLM (BUG-2026-10-15-P2-ENTITY-BYPASS) — единственный
         # путь с 17.10: ключ [MESSENGER_ROUTER] p2_llm_judge (off — цена по сущности без суда) снят и больше не читается
         # (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-P2-LLM-JUDGE).
@@ -646,11 +634,8 @@ settings = Settings(
         # одно; его читают срок (`_maybe_readiness_reply`), планировщик, П1, обзор названия и переклейки после цены и подготовки
         # вместо своих детекторов. Сбой LLM — как было (детекторы). off — как было. [MESSENGER_ROUTER] facet_by_llm
         facet_by_llm=_get_enum("MESSENGER_ROUTER", "facet_by_llm", default="off", allowed={"off", "on"}),
-        # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
-        # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
-        # [MESSENGER_ROUTER] turn_spans_llm
-        # По умолчанию on — как на проде с 24.10 (деплой 17; STEP-2026-10-15-DEFAULTS-B).
-        turn_spans_llm=_get_enum("MESSENGER_ROUTER", "turn_spans_llm", default="on", allowed={"off", "on"}),
+        # Разбор реплики — разметка слов LLM (`services/_turn_spans`, DESIGN-2026-10-23-NO-STOPWORDS) — единственный путь: ключ
+        # [MESSENGER_ROUTER] turn_spans_llm (off — прежний генератор окон) снят 30.10 с генератором (К1) и больше не читается.
         # Подготовка читает фразы разбора хода (DESIGN-2026-10-23-NO-STOPWORDS, этап 2; STEP-2026-10-24-PREPARE-BY-PARSE): предмет
         # памятки — услуги, которые разбор нашёл в реплике, а не реплика без слов пяти списков подготовки; ни одной услуги — без
         # поиска по словам; сбой разбора — «уточните». Разбор строится и на ходах подготовки. off — как было.
@@ -670,8 +655,8 @@ settings = Settings(
         strong_family_letter=_get_enum("MESSENGER_ROUTER", "strong_family_letter", default="off", allowed={"off", "on"}),
         # Уточнения позиции (DESIGN-2026-10-28-POSITION-QUALIFIERS, этап 2): разметка хода `turn_spans` отмечает у каждой услуги её
         # уточнения (оплата, условие, материал, метод, сопутствующая услуга) тем же вызовом LLM; условие оплаты (ОМС, ДМС, полис) у
-        # позиции или на весь вопрос — без розничной цены; прочие уточнения вне фразы — суду условия корзины. Нужен
-        # `turn_spans_llm = on`. off — как было. [MESSENGER_ROUTER] position_qualifiers
+        # позиции или на весь вопрос — без розничной цены; прочие уточнения вне фразы — суду условия корзины.
+        # off — как было. [MESSENGER_ROUTER] position_qualifiers
         position_qualifiers=_get_enum("MESSENGER_ROUTER", "position_qualifiers", default="off", allowed={"off", "on"}),
         # Уточнения позиции, этап 3 (DESIGN-2026-10-28-POSITION-QUALIFIERS): пул выбора строки по материалу позиции — строки, которые
         # по данным МИС (`biomatNames`) материал не принимают, не кандидаты; строки с ним — в пул («посев кала» не выбирает общий
@@ -1008,7 +993,6 @@ MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_FACET_BY_LLM = settings.messenger_router.facet_by_llm
-MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_STRONG_FAMILY_LETTER = settings.messenger_router.strong_family_letter
@@ -1054,8 +1038,6 @@ MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
 MR_BASKET_CALC = settings.messenger_router.basket_calc
 MR_PENDING_BUTTONS = settings.messenger_router.pending_buttons
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
-MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
-MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 MR_NAMES_DOCTOR_CATALOG = settings.messenger_router.names_doctor_catalog

@@ -48,10 +48,10 @@ from messengers_router import expects, llm_runtime, shown_context
 from messengers_router.services._common import _normalise_catalog_text
 from tests.spans_oracle import is_spans, keep_llm_breaker_closed, spans_response
 from tests.test_l14_two_turn_consumers import _SETS as _L14_SETS
-from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
+from tests.test_price_one_or_many_class import _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
-_SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
+_SETS = {"deploy": _DEPLOY}  # набор `default` (генератор окон) снят 30.10, К1
 # Баг 2 — ещё и под набором кандидата `next` (цена через модуль выбора), как в `test_l14_two_turn_consumers.py`.
 _ALL_SETS = {**_SETS, "next": _L14_SETS["next"]}
 

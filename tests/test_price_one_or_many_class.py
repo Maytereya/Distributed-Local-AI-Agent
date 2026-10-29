@@ -57,20 +57,12 @@ from tests.test_price_turns_golden import FIXTURE, run_dialog
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
 }
-# Набор `default` — умолчания кода ДО переворота «умолчания = прод» (STEP-2026-10-15-DEFAULTS-A), заданные явно:
-# переворот умолчаний в `agent_logic_2/config.py` не меняет смысла отметок этого набора.
-_DEFAULT = {
-    "MR_TURN_UNDERSTANDING_PRICE": "shadow",
-    "MR_PARSE_FAIL_VARIANTS": 5,
-    # Семья (iv) переворота 27.10 (STEP-2026-10-27-DEFAULTS-PROD): прежние умолчания; набор уходит со снятием `turn_spans_llm`.
-    "MR_TURN_SPANS_LLM": "off",
-    "MR_PRICE_BY_PARSE": "off",
-    "MR_TURN_UNDERSTANDING_ONE": "off",
-}
+# Набор `default` (умолчания кода до переворота 27.10: `turn_spans_llm = off`, `price_by_parse = off`, понимание в тени) снят 30.10
+# вместе с генератором окон (К1): его разбор строил только генератор. Путь прода — набор `deploy`.
 # Набор выключателей → значения поверх конфига гейта. Разбор реплики (`turn_parse = on`) — единственный режим
 # (T7 шаг 3б, 16.10): `deploy` — прод; `deploy_parse` — прежнее имя того же набора для файлов, которые его зовут.
-_SETS = {"default": _DEFAULT, "deploy": _DEPLOY, "deploy_parse": _DEPLOY}
-CONFIGS = ("default", "deploy")
+_SETS = {"deploy": _DEPLOY, "deploy_parse": _DEPLOY}
+CONFIGS = ("deploy",)
 LLMS = ("down", "oracle")
 
 _SELECT_MARKS = {
@@ -145,7 +137,6 @@ CASES: dict[str, Case] = {
         "readiness",
         {"ферритин": ("Ферритин",)},
         deadline="Срок готовности «Ферритин» — 1–2 дня.",
-        xfail={("default", m): "понимание хода в тени: вопрос о сроке получает цену (READINESS-AS-PRICE)" for m in LLMS},
     ),
     # --- списки
     "list_true_three": Case(
@@ -174,7 +165,6 @@ CASES: dict[str, Case] = {
         {"оак": _OAK, "оам": ("Общий анализ мочи",), "ферритин": ("Ферритин",), "глюкоза": ("Глюкоза",)},
         strong=frozenset({"ферритин", "глюкоза"}),
         # (deploy, down) — не xfail с 27.10: путь прода без LLM отвечает «Уточните…» (`test_one_service_or_several`).
-        xfail={("default", m): "понимание хода в тени: список сведён к одной услуге (ОАК), ферритин и глюкоза без цены" for m in LLMS},
     ),
 }
 

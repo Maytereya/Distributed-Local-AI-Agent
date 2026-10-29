@@ -23,7 +23,7 @@ from messengers_router.services._common import _normalise_catalog_text
 from tests.spans_oracle import is_spans
 from tests.test_price_one_or_many_class import _DEPLOY, CASES, _OracleLLM
 from tests.test_price_turns_golden import DIALOGS, mini_prod_world, run_dialog  # noqa: F401 — фикстура модуля
-from tests.test_turn_phrases import TRUE_CUT
+from tests.test_price_one_or_many_class import TRUE_CUT
 
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
 _PARSE_FIELDS = ("tu_parse_status", "tu_parse_src", "tu_parse_n", "tu_parse_cands", "tu_parse_ms")

@@ -18,7 +18,6 @@ import time
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime, turn_understanding
-from messengers_router.services import _turn_phrases as TP
 from tests.test_price_one_or_many_class import CASES, TRUE_CUT, _configure, _OracleLLM, _violations
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура модуля
 
@@ -60,12 +59,7 @@ def _instrument(monkeypatch, probe: _Probe, *, fail_rules: bool = False) -> None
 
     # Параллель правил и разбора (O3b) — режим телеметрии согласия; умолчание с 16.10 — ленивые правила (T7 шаг 4).
     monkeypatch.setattr(cfg, "MR_PARSE_AGREE_TELEMETRY", "on", raising=False)
-    real_prepare, real_rules = TP._prepare, turn_understanding.understand_price_turn
-
-    def prepare(*args, **kwargs):
-        out = real_prepare(*args, **kwargs)
-        probe.note("prepared")
-        return out
+    real_rules = turn_understanding.understand_price_turn
 
     def rules(text):
         probe.note("rules_start")
@@ -74,7 +68,6 @@ def _instrument(monkeypatch, probe: _Probe, *, fail_rules: bool = False) -> None
             raise RuntimeError("тест: правила упали")
         return real_rules(text)
 
-    monkeypatch.setattr(TP, "_prepare", prepare)
     monkeypatch.setattr(turn_understanding, "understand_price_turn", rules)
 
 
@@ -94,8 +87,6 @@ def test_rules_run_while_the_model_picks_phrases(mini_prod_world, monkeypatch): 
         row = world.take_telemetry()
         assert list(world.net.attempts) == []
     assert oracle.saw_rules is True  # правила стартовали до ответа LLM
-    # «и после генератора окон» (`_turn_phrases._prepare`) — свойство пути `turn_spans_llm = off`: разметка прода окон не строит
-    assert "prepared" not in probe.events
     violations = _violations(case, first["text"], "oracle", oracle.picked)
     assert not violations, "\n".join([*violations, "--- ответ:", first["text"]])
     assert sorted(_priced(second["text"]) - _priced(first["text"])) == []  # контекст = показанное

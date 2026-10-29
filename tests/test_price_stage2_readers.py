@@ -141,7 +141,7 @@ def _readers() -> dict[str, Callable[[str, list[dict[str, Any]]], Any]]:
     from messengers_router.services import _doctors_helpers as D
     from messengers_router.services import _prices_helpers as H
     from messengers_router.services import _price_select_llm as PS
-    from messengers_router.services import _turn_phrases as TP
+    from messengers_router.services import _phrase_words as TP
     from messengers_router.services import prepare as PR
     from messengers_router.services import prices as P
     from messengers_router.services._readiness_select import readiness_from_catalog
@@ -312,8 +312,6 @@ _SOURCES = frozenset(
     }
 )
 
-_OLD_PARSE = "вне пути прода: генератор окон разбора (`turn_spans_llm = on` с деплоя 17), уходит со снятием выключателя этапа 1"
-
 # Прямой читатель → чем закреплён: `reader:<имя>` (этот файл), `turns:<класс>` (ходы через эндпоинт), `off:<почему>`.
 DECLARED: dict[str, str] = {
     "messengers_router.policies._price_row_matches_service": "reader:operator_summary_price",
@@ -349,13 +347,6 @@ DECLARED: dict[str, str] = {
     "messengers_router.services._phrase_words.phrase_rows": "reader:phrase_rows",
     "messengers_router.services._phrase_words.strong_window": "reader:strong_window",
     "messengers_router.services._phrase_words.bare": "вне пути прода: согласие разрезов — телеметрия `parse_agree_telemetry = off`",
-    "messengers_router.services._turn_phrases._phrase": _OLD_PARSE,
-    "messengers_router.services._turn_phrases._whole": _OLD_PARSE,
-    "messengers_router.services._turn_phrases._strong_window_pieces": _OLD_PARSE,
-    "messengers_router.services._turn_phrases._strong_window_pieces.flush": _OLD_PARSE,
-    "messengers_router.services._turn_phrases._variant": _OLD_PARSE,
-    "messengers_router.services._turn_phrases._with_beside": _OLD_PARSE,
-    "messengers_router.services._turn_phrases._only_wrapper_outside": _OLD_PARSE,
     "messengers_router.services.prepare._names_own_subject": "reader:prepare_own_subject",
     "messengers_router.services.prices._shown_phrase": "reader:shown_phrase",  # Ш2: «не нашёл» / похожие — фраза разбора
     "messengers_router.services.prices._service_phrase": "turns:price_one",  # Ш2: запасной поиск и кандидат розницы

@@ -42,7 +42,7 @@ from messengers_router.appointment_flow_guard import is_appointment_soft_pause_r
 from messengers_router.mess_types import AppointmentPhase, DialogState, SessionState
 from messengers_router.recovery_policy import contextual_reply_kind
 from messengers_router.services import _prices_helpers, news
-from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
+from tests.test_price_one_or_many_class import _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 # ============================================================================ 1. выбор акции
@@ -251,7 +251,7 @@ def test_promo_audit_cases_are_pinned_as_is():
 
 # --------------------------------------------------------------------------- через эндпоинт, два хода
 
-_SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
+_SETS = {"deploy": _DEPLOY}  # набор `default` (генератор окон) снят 30.10, К1
 _PROMOS = [
     {"id": 11 + i, "title": title, "subtitle": "", "text": f"Описание акции {i + 1}.", "endDate": None, "startDate": None, "regions": [1]}
     for i, title in enumerate(_TITLES)

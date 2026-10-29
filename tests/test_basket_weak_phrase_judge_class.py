@@ -31,7 +31,7 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
-from messengers_router.services._turn_phrases import strong_inside
+from messengers_router.services._phrase_words import strong_inside
 from tests.spans_oracle import is_spans, keep_llm_breaker_closed, spans_response
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_slot import _deploy
