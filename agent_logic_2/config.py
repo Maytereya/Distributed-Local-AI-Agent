@@ -231,6 +231,7 @@ class MessengerRouterConfig:
     promo_by_llm: str
     button_leaf_frame: str
     button_frame_check: str
+    pending_in_frame: str
     price_not_found_by_data: str
     insurance_topic: str
     price_select_named: str
@@ -777,6 +778,11 @@ settings = Settings(
         # промпт `choose_pending_free_reply_button_frame`, вариант Б). Выбор — по замеру (решение владельца 29.10).
         # [MESSENGER_ROUTER] button_frame_check
         button_frame_check=_get_enum("MESSENGER_ROUTER", "button_frame_check", default="question", allowed={"question", "judge"}),
+        # Свой вопрос пациента в теме нажатой кнопки (исход судьи «domain», вариант Б) — отдельный исход `in_frame` ответа на висящий
+        # вопрос, а не «ответ на вопрос-слот»: тема кнопки держится, запись не отменяется, анти-залип не считает ход повтором; в
+        # слот-услугу (`service_name`) — позиция из разбора хода, а не реплика целиком; разбор пуст или упал — слот не пишется
+        # (Н-1 карты «Понимания», STEP-2026-10-30-PENDING-IN-FRAME). off — как было. [MESSENGER_ROUTER] pending_in_frame
+        pending_in_frame=_get_enum("MESSENGER_ROUTER", "pending_in_frame", default="off", allowed={"off", "on"}),
         # Путь цены сдался («Не нашёл актуальную стоимость … Уточните название», цен нет): сначала данные клиники
         # (`service_answer`, место `price_not_found`, без «похожего») — строки прайса и памяток, нет данных — честный оффер
         # (STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA). off — как было. [MESSENGER_ROUTER] price_not_found_by_data
@@ -999,6 +1005,7 @@ MR_BUTTON_TOPIC_FIRM = settings.messenger_router.button_topic_firm
 MR_PROMO_BY_LLM = settings.messenger_router.promo_by_llm
 MR_BUTTON_LEAF_FRAME = settings.messenger_router.button_leaf_frame
 MR_BUTTON_FRAME_CHECK = settings.messenger_router.button_frame_check
+MR_PENDING_IN_FRAME = settings.messenger_router.pending_in_frame
 MR_PRICE_NOT_FOUND_BY_DATA = settings.messenger_router.price_not_found_by_data
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named

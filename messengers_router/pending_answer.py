@@ -79,6 +79,9 @@ class Outcome(StrEnum):
     PICK = "pick"  # пункт показанного списка — `Answer.pick`
     NONE = "none"  # ничего из этого — обычный путь
     ANSWER = "answer"  # свободный ответ на вопрос-слот назвал то, о чём спросил бот (`pending_buttons`)
+    # Свой вопрос пациента в теме нажатой кнопки (исход судьи «domain», `pending_in_frame = on`): тему держит, как ответ, но не
+    # называет то, о чём спросил бот, — реплика не значение слота (Н-1, STEP-2026-10-30-PENDING-IN-FRAME)
+    IN_FRAME = "in_frame"
 
 
 class Source(StrEnum):
@@ -137,6 +140,10 @@ _BUTTON_TYPES = frozenset({Question.SLOT_VALUE.value})
 # LLM признала её ответом, а правила значение не разобрали (название процедуры, цель подбора). Реквизиты результата
 # анализов разбирают правила формата — у `TEST_RESULT` такого слота нет, ответ только держит тему вопроса.
 SLOT_TOPICS: dict[str, str | None] = {"PREPARE": "service_name", "TEST_ASSIST": "test_goal", "TEST_RESULT": None}
+# Слоты, чьё значение — позиция-услуга (её читает путь цены и подготовки следующего хода как название): под `pending_in_frame = on`
+# — фраза разбора хода, а не реплика целиком. Цель подбора (`test_goal`) — свободные слова пациента, как у правил дозаполнения
+# (`policies.quick_fill_entities_from_text`: реплика целиком); названием услуги её не читает никто.
+SERVICE_SLOTS = frozenset({"service_name"})
 _SLOT_VALUE_MAX = 80
 
 # Свободный ответ на вопрос-слот: вариантов нет, исход «ответ» — свой (у вопроса «да/нет» «да» — согласие, здесь — нет).
@@ -161,6 +168,16 @@ def frame_judge_on() -> bool:
         return str(getattr(cfg, key, "") or "").strip().lower()
 
     return _value("MR_BUTTON_ANSWER_TOPIC") == "frame" and _value("MR_BUTTON_FRAME_CHECK") == "judge"
+
+
+def in_frame_on() -> bool:
+    """«domain» судьи — свой исход `in_frame`, а слот-услуга — из разбора хода: `[MESSENGER_ROUTER] pending_in_frame = on`."""
+
+    from .runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_PENDING_IN_FRAME", "off") or "").strip().lower() == "on"
+
+
 # Выбор, где можно взять несколько пунктов («обе»): те же исходы, что у `pending_reply.PENDING_TASK`, пунктов — до N.
 MANY_TASK = Task(name="pending_reply_many", outcomes=("yes", "no", "pause", "new_topic"), timeout_s=8, queue_timeout_ms=3000)
 
@@ -201,9 +218,17 @@ class Answer:
 
     @property
     def closes(self) -> bool:
-        """Ответ на вопрос дан: да / выбор / пауза; прочее (нет, другая тема, ничего, хвост) — дальше обычный путь."""
+        """Ход решён: да / выбор / пауза / ответ, а свой вопрос в теме кнопки — как ответ (решение судьи — шаг понимания хода);
+        прочее (нет, другая тема, ничего, хвост) — дальше обычный путь."""
 
-        return self.outcome in (Outcome.YES, Outcome.PICK, Outcome.PAUSE, Outcome.ANSWER) and not self.rest
+        return self.outcome in (Outcome.YES, Outcome.PICK, Outcome.PAUSE, Outcome.ANSWER, Outcome.IN_FRAME) and not self.rest
+
+    @property
+    def in_topic(self) -> bool:
+        """Реплика в теме висящего вопроса: ответ на вопрос-слот или свой вопрос в теме нажатой кнопки (`in_frame`) — одно
+        определение для темы кнопки, лимита решений хода, записи и слота."""
+
+        return self.outcome in (Outcome.ANSWER, Outcome.IN_FRAME)
 
 
 _CURRENT: contextvars.ContextVar[Answer | None] = contextvars.ContextVar("mr_pending_answer", default=None)
@@ -542,7 +567,8 @@ async def _free_answer(question_type: str, question: str, reply: str, *, filled:
     if choice is None or choice.status not in (Status.OUTCOME, Status.NONE_FIT):
         return _remember(Answer(question_type, Outcome.NONE, source=Source.FALLBACK, text=reply))
     if choice.status is Status.OUTCOME and choice.outcome == _DOMAIN:
-        outcome = Outcome.ANSWER  # вариант Б: свой вопрос в теме кнопки — ответ в рамке кнопки
+        # Вариант Б: свой вопрос в теме кнопки — в рамке кнопки; под `pending_in_frame` — свой исход, не ответ на слот (Н-1).
+        outcome = Outcome.IN_FRAME if in_frame_on() else Outcome.ANSWER
     else:
         outcome = Outcome(choice.outcome) if choice.status is Status.OUTCOME else Outcome.NONE
     return _refunded(_remember(Answer(question_type, outcome, source=Source.LLM, text=reply)))
@@ -656,6 +682,13 @@ def slot_value(text: str) -> str:
 
     value = " ".join(str(text or "").split()).strip(" .,!?;:")
     return value if 0 < len(value) <= _SLOT_VALUE_MAX else ""
+
+
+def in_frame() -> bool:
+    """Реплика этого хода — свой вопрос в теме кнопки (`in_frame`): продвижение, а не повтор для анти-залипа."""
+
+    found = slot_answer()
+    return found is not None and found.outcome is Outcome.IN_FRAME
 
 
 def slot_answer() -> Answer | None:
