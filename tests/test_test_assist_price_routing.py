@@ -32,6 +32,7 @@ from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import Evidence, RouteDecision, SessionState
 from messengers_router.nlu_pipeline import NLUResult
 from messengers_router.services import Services
+from tests.endpoint_turn import route_via_endpoint
 
 
 def run(coro):
@@ -72,7 +73,7 @@ def _install_stubs(monkeypatch, *, label: str, flags: set[str], entities: dict |
 
 def _route(text: str, session_id: str):
     state = SessionState(session_id=session_id)
-    return run(router_mod.route_patient_message(text, state, Services(), MemoryStore()))
+    return route_via_endpoint(text, state, Services(), MemoryStore())
 
 
 # --- Класс: названный анализ из каталога → PRICE, не воронка --------------
@@ -208,11 +209,9 @@ def test_walkin_where_question_wins_over_price_relabel(monkeypatch):
         session_id="p1-walkin-where",
         last_entities={"test_goal": "Какие анализы сдать на сахарный диабет"},
     )
-    decision, plan, _ev = run(
-        router_mod.route_patient_message(
+    decision, plan, _ev = route_via_endpoint(
             "Диабетический профиль 1 где можно сдать?", state, Services(), MemoryStore()
         )
-    )
 
     assert decision.label == "ADDRESS", sorted(decision.flags)
     assert plan.label == "ADDRESS"

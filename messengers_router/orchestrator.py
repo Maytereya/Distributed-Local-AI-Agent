@@ -1,7 +1,7 @@
 """Новый оркестратор пайплайна роутера.
 
-Пока это только каркас из 5 именованных стадий, который будет постепенно
-замещать монолитный `route_patient_message()` из `router.py`.
+Именованные стадии хода; единственный путь хода с 15.04 (`router.patient_routing_stream` →
+`run_pipeline`). Прежняя точка входа `router.route_patient_message()` снята 29.10 (К3).
 """
 
 from __future__ import annotations
@@ -409,7 +409,7 @@ async def pending_dispatch(
 ) -> OrchestratorContext:
     """Dispatch multi-turn pending handlers before running NLU.
 
-    Matches the legacy ``route_patient_message`` order: operator_offer first,
+    Keeps the order of the removed ``route_patient_message`` (К3): operator_offer first,
     then catalog_confirm, appointment_action, compound_price, secondary_queue.
     If any handler fires the rest of the pipeline is short-circuited and the
     canned triple is used directly.

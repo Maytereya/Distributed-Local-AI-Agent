@@ -48,24 +48,27 @@ from messengers_router.entity_grounder import ground_decision_entities
 from messengers_router import classifier as classifier_mod
 from messengers_router import doctor_name_port as doctor_name_port_mod
 from messengers_router.city import match_city
+from messengers_router.response_builder import (
+    build_address_response,
+    build_appointment_schedule_preview_response,
+    build_appointment_step_response,
+    build_doctor_info_response,
+    build_doctor_schedule_response,
+    build_first_structured_response,
+    build_price_response,
+    build_test_result_response,
+)
 from messengers_router.router import (
     _DEFAULT_CITY,
     _apply_appointment_continuity_overrides,
-    _build_first_structured_response,
-    _build_address_response,
-    _build_appointment_schedule_preview_response,
-    _build_appointment_step_response,
     build_plan,
-    _build_doctor_info_response,
-    _build_doctor_schedule_response,
-    _build_price_response,
-    _build_test_result_response,
     _should_keep_appointment_flow_override,
     _verify_doctor_entity,
     execute_plan,
 )
 from messengers_router import router as router_mod
 from messengers_router import flow_policy as flow_policy_mod
+from tests.endpoint_turn import endpoint_turn, route_via_endpoint
 
 
 def _run_stream_once(user_text: str, state: SessionState, services: Services, memory: MemoryStore):
@@ -246,12 +249,8 @@ def test_patient_routing_stream_uses_orchestrator_by_default(monkeypatch):
         ctx.response = ResponseEnvelope(text="Уточните, пожалуйста, услугу.")
         return ctx
 
-    async def fail_route_patient_message(*args, **kwargs):
-        _ = args, kwargs
-        raise AssertionError("legacy route_patient_message should not be used when orchestrator is the default path")
 
     monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
-    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
 
     state = SessionState(session_id="orchestrator-stream")
     services = Services()
@@ -275,12 +274,8 @@ def test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_c
         ctx.response = ResponseEnvelope(text="Ответ из orchestrator", handoff=False)
         return ctx
 
-    async def fail_route_patient_message(*args, **kwargs):
-        _ = args, kwargs
-        raise AssertionError("patient_routing_stream should use decision/plan/evidence from orchestrator")
 
     monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
-    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
 
     state = SessionState(session_id="orchestrator-outputs")
     services = Services()
@@ -574,14 +569,12 @@ def test_route_message_starts_catalog_confirm_for_fuzzy_doctor(monkeypatch):
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, evidence = route_via_endpoint(
             "Запишите к Евграфовой",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "OTHER"
     assert plan.label == "OTHER"
@@ -642,14 +635,12 @@ def test_route_message_keeps_checkup_category_broad(monkeypatch):
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "чекап",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "TEST_ASSIST"
     assert plan.label == "TEST_ASSIST"
@@ -705,14 +696,12 @@ def test_route_message_accepts_catalog_confirm_yes_and_continues_flow(monkeypatc
     memory = MemoryStore()
     memory.set_pending(state, label="OTHER", missing_slots=["catalog_confirm"])
 
-    decision, plan, evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, evidence = route_via_endpoint(
             "да",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "DOCTOR_SCHEDULE"
     assert plan.label == "DOCTOR_SCHEDULE"
@@ -933,14 +922,12 @@ def test_route_message_short_circuits_on_catalog_health_degraded(monkeypatch):
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, evidence = route_via_endpoint(
             "Сколько стоит прием уролога?",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "OTHER"
     assert plan.label == "OTHER"
@@ -1057,14 +1044,12 @@ def test_route_message_prepare_followup_to_blooddraw_keeps_address(monkeypatch):
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "Где можно сдать кровь?",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "ADDRESS"
     assert "flow_prepare_followup_override" not in decision.flags
@@ -1107,14 +1092,12 @@ def test_route_message_prepare_short_followup_overrides_doctor_info(monkeypatch)
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "А к вульвоскопии?",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "PREPARE"
     assert "flow_prepare_followup_override" in decision.flags
@@ -1157,14 +1140,12 @@ def test_route_message_prepare_short_followup_overrides_appointment(monkeypatch)
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "Вульвоскопия",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "PREPARE"
     assert "flow_prepare_followup_override" in decision.flags
@@ -1243,14 +1224,12 @@ def test_route_message_keeps_nlu_debug_out_of_state(monkeypatch):
     services = Services()
     memory = MemoryStore()
 
-    _decision, _plan, evidence = asyncio.run(
-        router_mod.route_patient_message(
+    _decision, _plan, evidence = route_via_endpoint(
             "привет",
             state,
             services,
             memory,
         )
-    )
 
     assert "_nlu_candidates" not in state.last_entities
     assert "_nlu_merged_from" not in state.last_entities
@@ -1294,14 +1273,12 @@ def test_route_message_promotes_profile_followup_to_nonbookable_address(monkeypa
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "Диабетический профиль 1 где можно сдать?",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "ADDRESS"
     assert "policy_nonbookable_walkin" in decision.flags
@@ -1321,14 +1298,12 @@ def test_route_message_secondary_offer_accepts_thanks_as_soft_yes():
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "спасибо",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "ADDRESS"
     assert decision.entities.get("secondary_intent_from_queue") is True
@@ -1340,7 +1315,7 @@ def test_build_price_response_for_price_flow():
     state = SessionState(session_id="price", last_entities={"service_name": "УЗИ брюшной полости"})
     evidence = Evidence(items={"price": {"prices": [{"serviceName": "УЗИ брюшной полости", "cost": 1500.0}]}})
 
-    env = _build_price_response("PRICE", evidence, state)
+    env = build_price_response("PRICE", evidence, state)
 
     assert env is not None
     assert "1 500 руб." in env.text
@@ -1416,7 +1391,7 @@ def test_build_first_structured_response_keeps_builder_priority():
     memory = MemoryStore()
     decision = RouteDecision(label="PRICE", confidence=0.9, entities={}, flags=set(), needs_handoff=False)
 
-    env = _build_first_structured_response(
+    env = build_first_structured_response(
         flow_label="PRICE",
         evidence=evidence,
         state=state,
@@ -1437,7 +1412,7 @@ def test_build_first_structured_response_returns_prepare_payload_for_prepare_flo
     memory = MemoryStore()
     decision = RouteDecision(label="PREPARE", confidence=0.9, entities={}, flags=set(), needs_handoff=False)
 
-    env = _build_first_structured_response(
+    env = build_first_structured_response(
         flow_label="PREPARE",
         evidence=evidence,
         state=state,
@@ -1712,7 +1687,7 @@ def test_build_doctor_info_response_for_doctor_info_flow():
         }
     )
 
-    env = _build_doctor_info_response("DOCTOR_INFO", evidence, state)
+    env = build_doctor_info_response("DOCTOR_INFO", evidence, state)
 
     assert env is not None
     assert "Иванов Иван Иванович" in env.text
@@ -1746,7 +1721,7 @@ def test_build_doctor_info_response_appends_price_block():
         }
     )
 
-    env = _build_doctor_info_response("DOCTOR_INFO", evidence, state)
+    env = build_doctor_info_response("DOCTOR_INFO", evidence, state)
 
     assert env is not None
     assert "Примеры стоимости услуг этого врача" in env.text
@@ -1770,7 +1745,7 @@ def test_build_doctor_info_response_clears_stale_doctor_for_multi_specialty_list
         }
     )
 
-    env = _build_doctor_info_response("DOCTOR_INFO", evidence, state)
+    env = build_doctor_info_response("DOCTOR_INFO", evidence, state)
 
     assert env is not None
     assert state.last_entities.get("doctor_name") is None
@@ -1793,7 +1768,7 @@ def test_build_test_result_response_ready_delivers_pdf_link_and_attachment():
             }
         }
     )
-    env = _build_test_result_response("TEST_RESULT", evidence)
+    env = build_test_result_response("TEST_RESULT", evidence)
     assert env is not None
     assert pdf in env.text
     assert "getanaliz" not in env.text.lower()
@@ -1816,7 +1791,7 @@ def test_build_doctor_schedule_response_hydrates_context_without_forcing_flow_ac
             }
         }
     )
-    env = _build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state, MemoryStore())
+    env = build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state, MemoryStore())
     assert env is not None
     assert state.last_entities.get("appointment_flow_active") is None
     assert state.last_entities.get("doctor_name") == "Трубин Алексей Юрьевич"
@@ -1843,7 +1818,7 @@ def test_build_doctor_schedule_response_offers_operator_when_no_slots_for_two_we
         }
     )
 
-    env = _build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state, memory)
+    env = build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state, memory)
 
     assert env is not None
     assert "Врач найден, но свободных слотов нет в ближайшие 2 недели." in env.text
@@ -1904,7 +1879,7 @@ def test_route_message_datetime_after_no_slots_does_not_reactivate_appointment_p
         }
     )
 
-    first = _build_doctor_schedule_response("DOCTOR_SCHEDULE", no_slots_evidence, state, memory)
+    first = build_doctor_schedule_response("DOCTOR_SCHEDULE", no_slots_evidence, state, memory)
     assert first is not None
     assert state.last_entities.get("appointment_flow_active") is None
     pending = memory.get_pending(state)
@@ -1926,7 +1901,7 @@ def test_build_address_response_sets_pending_when_empty():
     decision = RouteDecision(label="ADDRESS", flags=set())
     evidence = Evidence(items={"address": {"branches": [], "addresses": []}})
 
-    env = _build_address_response("ADDRESS", evidence, state, memory, decision, "адрес")
+    env = build_address_response("ADDRESS", evidence, state, memory, decision, "адрес")
 
     assert env is not None
     assert "Не нашёл филиалы" in env.text
@@ -1951,7 +1926,7 @@ def test_build_appointment_schedule_preview_response():
             }
         }
     )
-    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, MemoryStore())
+    env = build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, MemoryStore())
     assert env is not None
     assert "Трубин Алексей Юрьевич" in env.text
 
@@ -1974,7 +1949,7 @@ def test_build_appointment_schedule_preview_response_offers_operator_when_no_slo
         }
     )
 
-    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, memory)
+    env = build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, memory)
 
     assert env is not None
     assert "Врач найден, но свободных слотов нет в ближайшие 2 недели." in env.text
@@ -2010,7 +1985,7 @@ def test_build_appointment_schedule_preview_response_offers_operator_when_doctor
         }
     )
 
-    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, memory)
+    env = build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, memory)
 
     assert env is not None
     assert "только по филиалам в Самаре" in env.text
@@ -2049,7 +2024,7 @@ def test_build_appointment_step_response_offers_operator_when_doctor_not_in_sama
         }
     )
 
-    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+    env = build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
 
     assert env is not None
     assert "только по филиалам в Самаре" in env.text
@@ -2110,7 +2085,7 @@ def test_build_appointment_schedule_preview_response_skips_for_reschedule_action
         }
     )
 
-    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, MemoryStore())
+    env = build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, MemoryStore())
 
     assert env is None
 
@@ -2616,7 +2591,7 @@ def test_build_appointment_step_response_wish_step_sets_pending():
     memory = MemoryStore()
     services = Services()
 
-    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+    env = build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
 
     assert env is not None
     assert env.handoff is False
@@ -2654,7 +2629,7 @@ def test_build_appointment_step_response_doctor_selection_mode_renders_doctors()
     memory = MemoryStore()
     services = Services()
 
-    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+    env = build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
 
     assert env is not None
     assert "Иванов Иван Иванович" in env.text
@@ -2678,7 +2653,7 @@ def test_build_appointment_step_response_reschedule_hands_off_with_summary():
     memory = MemoryStore()
     services = Services()
 
-    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+    env = build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
 
     # Вариант A (08.10): перенос — сводка оператору, без карточки «Подтверждаете?» и без ФИО.
     assert env is not None
@@ -2704,7 +2679,7 @@ def test_build_appointment_step_response_cancel_renders_russian_date_hint():
     memory = MemoryStore()
     services = Services()
 
-    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+    env = build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
 
     assert env is not None
     assert env.handoff is True
@@ -2845,9 +2820,7 @@ def test_route_message_waiting_action_reschedule_continues_flow(monkeypatch):
     memory = MemoryStore()
     memory.set_pending(state, label="APPOINTMENT", missing_slots=["appointment_action"])
 
-    decision, plan, evidence = asyncio.run(
-        router_mod.route_patient_message("перенести", state, services, memory)
-    )
+    decision, plan, evidence = route_via_endpoint("перенести", state, services, memory)
 
     assert decision.label == "APPOINTMENT"
     assert decision.entities.get("appointment_action") == "reschedule"
@@ -3252,9 +3225,7 @@ def test_route_message_secondary_offer_doctor_reply_activates_schedule(monkeypat
     services.resolve_doctor_name = fake_resolve_doctor_name
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message("Хальметова, да", state, services, memory)
-    )
+    decision, plan, _evidence = route_via_endpoint("Хальметова, да", state, services, memory)
 
     assert decision.label == "DOCTOR_SCHEDULE"
     assert decision.entities.get("doctor_name") == "Хальметова Алина Алексеевна"
@@ -3298,14 +3269,12 @@ def test_route_message_verified_doctor_reply_after_doctor_info_promotes_schedule
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "Хальметова, да",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "DOCTOR_SCHEDULE"
     assert "flow_doctor_info_to_schedule" in decision.flags
@@ -3354,14 +3323,12 @@ def test_route_message_resolves_short_doctor_reply_after_doctor_info(monkeypatch
     services = _FakeServices()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "Хальметова, да",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "DOCTOR_SCHEDULE"
     assert decision.entities.get("doctor_name") == "Хальметова Алина Алексеевна"
@@ -3413,14 +3380,8 @@ def test_route_message_datetime_after_doctor_schedule_promotes_appointment(monke
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
-            "2026-03-19 в 12:00!",
-            state,
-            services,
-            memory,
-        )
-    )
+    turn = endpoint_turn("2026-03-19 в 12:00!", state, services, memory)
+    decision, plan, _evidence = turn.route()
 
     assert decision.label == "APPOINTMENT"
     assert (
@@ -3429,9 +3390,10 @@ def test_route_message_datetime_after_doctor_schedule_promotes_appointment(monke
         or "flow_datetime_appointment_prelock" in decision.flags
         or "appointment_slot_prelock" in decision.flags
     )
-    assert state.last_entities.get("doctor_name") == "Хальметова Алина Алексеевна"
-    assert state.last_entities.get("date_from") == "2026-03-19"
-    assert state.last_entities.get("time_from") == "12:00"
+    # Ход через эндпоинт кончается переводом (данные подделки без цены / заявка оператору) — контекст снят
+    # `clear_on_handoff`; выбор хода виден в ответе пациенту.
+    assert turn.handoff and "Хальметова Алина Алексеевна" in turn.text, turn.text
+    assert "2026-03-19 в 12:00" in turn.text, turn.text
     assert plan.label == "APPOINTMENT"
 
 
@@ -3475,14 +3437,12 @@ def test_route_message_datetime_after_doctor_schedule_promotes_from_test_assist(
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "Да, мне удобно на 10 апреля, на 16:00",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "APPOINTMENT"
     assert (
@@ -3643,14 +3603,12 @@ def test_route_message_city_only_reply_keeps_price_label(monkeypatch):
     memory = MemoryStore()
     memory.set_pending(state, label="PRICE", missing_slots=["_any_of:city,branch_name,branch_id"])
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message(
+    decision, plan, _evidence = route_via_endpoint(
             "Самара",
             state,
             services,
             memory,
         )
-    )
 
     assert decision.label == "PRICE"
     assert "flow_price_city_reply_override" in decision.flags
@@ -3663,7 +3621,7 @@ def test_route_message_operator_offer_yes_handoffs():
     memory = MemoryStore()
     memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
 
-    decision, plan, evidence = asyncio.run(router_mod.route_patient_message("да", state, services, memory))
+    decision, plan, evidence = route_via_endpoint("да", state, services, memory)
 
     assert decision.label == "OTHER"
     assert "operator_offer_confirmed" in decision.flags
@@ -3682,7 +3640,7 @@ def test_route_message_operator_offer_no_keeps_dialog_without_handoff():
     memory = MemoryStore()
     memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
 
-    decision, plan, evidence = asyncio.run(router_mod.route_patient_message("нет", state, services, memory))
+    decision, plan, evidence = route_via_endpoint("нет", state, services, memory)
 
     assert decision.label == "OTHER"
     assert "operator_offer_declined" in decision.flags
@@ -3715,7 +3673,7 @@ def test_build_first_structured_response_compound_price_sets_pending():
     memory = MemoryStore()
     decision = RouteDecision(label="PRICE", confidence=0.9, entities={}, flags=set(), needs_handoff=False)
 
-    env = _build_first_structured_response(
+    env = build_first_structured_response(
         flow_label="PRICE",
         evidence=evidence,
         state=state,
@@ -3753,15 +3711,16 @@ def test_route_message_compound_price_pending_yes_selects_default_service(monkey
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message("можно", state, services, memory)
-    )
+    turn = endpoint_turn("можно", state, services, memory)
+    decision, plan, _evidence = turn.route()
 
     assert decision.label == "PRICE"
     assert decision.entities.get("service_name") == "УЗДГ сосудов шеи"
     assert plan.label == "PRICE"
     assert plan.steps and plan.steps[0].tool == "service_bundle_info"
-    assert state.last_entities.get("service_name") == "УЗДГ сосудов шеи"
+    # Ход через эндпоинт кончается переводом (данные подделки без цены / заявка оператору) — контекст снят
+    # `clear_on_handoff`; выбор хода виден в ответе пациенту.
+    assert "«УЗДГ сосудов шеи»" in turn.text and "ЛПНП" not in turn.text, turn.text
     assert state.last_entities.get("_compound_price_pending") is None
     assert state.last_entities.get("_secondary_queue") is None
 
@@ -3785,14 +3744,15 @@ def test_route_message_compound_price_pending_specific_service_reply_selects_tha
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message("ЛПНП", state, services, memory)
-    )
+    turn = endpoint_turn("ЛПНП", state, services, memory)
+    decision, plan, _evidence = turn.route()
 
     assert decision.label == "PRICE"
     assert decision.entities.get("service_name") == "ЛПНП"
     assert plan.label == "PRICE"
-    assert state.last_entities.get("service_name") == "ЛПНП"
+    # Ход через эндпоинт кончается переводом (данные подделки без цены / заявка оператору) — контекст снят
+    # `clear_on_handoff`; выбор хода виден в ответе пациенту.
+    assert "«ЛПНП»" in turn.text and "УЗДГ" not in turn.text, turn.text
     assert state.last_entities.get("_compound_price_pending") is None
 
 
@@ -3838,9 +3798,7 @@ def test_route_message_compound_price_pending_other_question_clears_and_routes_n
     services = Services()
     memory = MemoryStore()
 
-    decision, plan, _evidence = asyncio.run(
-        router_mod.route_patient_message("Какие сейчас акции?", state, services, memory)
-    )
+    decision, plan, _evidence = route_via_endpoint("Какие сейчас акции?", state, services, memory)
 
     assert decision.label == "NEWS"
     assert plan.label == "NEWS"
@@ -3955,7 +3913,7 @@ def test_appointment_unbookable_target_marker_yields_honest_refusal():
         session_id="unbookable",
         last_entities={"_appointment_unbookable_target": True, "appointment_action": "book"},
     )
-    res = _build_appointment_step_response("APPOINTMENT", Evidence(), state, Services(), MemoryStore())
+    res = build_appointment_step_response("APPOINTMENT", Evidence(), state, Services(), MemoryStore())
     assert res is not None
     assert "оператор" in res.text.lower()
     assert "по адресам" not in res.text.lower()
@@ -4162,7 +4120,7 @@ def test_compound_uzi_appointment_offers_operator_not_single_service():
         plan = build_plan(decision, state, text, memory=MemoryStore())
         assert plan.steps == [], text
         assert state.last_entities.get("_appointment_compound_uzi") is True, text
-        res = _build_appointment_step_response("APPOINTMENT", Evidence(), state, Services(), MemoryStore())
+        res = build_appointment_step_response("APPOINTMENT", Evidence(), state, Services(), MemoryStore())
         assert res is not None, text
         assert "оператор" in res.text.lower(), (text, res.text)
         assert "по адресам" not in res.text.lower(), (text, res.text)

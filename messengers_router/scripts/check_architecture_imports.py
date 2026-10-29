@@ -120,8 +120,8 @@ ALLOWED_DIRECT_AGENT_LOGIC_IMPORTS = {module for module, layer in LAYER_BY_MODUL
     "prompt_registry",
 }
 
-# Известный цикл strangler-fig миграции: orchestrator постепенно замещает
-# route_patient_message (router зовёт orchestrator.run_pipeline, стадии
+# Известный цикл strangler-fig миграции: orchestrator заместил
+# route_patient_message (снята 29.10, К3; router зовёт orchestrator.run_pipeline, стадии
 # оркестратора зовут router._* хелперы). Осознанный ВРЕМЕННЫЙ долг —
 # см. docs/architecture_review_2026-06-26.md §5 («задокументированная миграция»).
 # Любые ДРУГИЕ циклы по-прежнему валят чек.
