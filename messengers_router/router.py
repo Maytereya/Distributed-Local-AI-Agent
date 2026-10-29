@@ -1957,8 +1957,10 @@ def _relabel_test_assist_catalog_hit_as_price(
     if (
         understanding is not None
         and understanding.is_list
-        # «просто назвал» — тип вопроса от LLM (`facet_by_llm = on`); правила его не дают — у них это None
-        and understanding.facet in (None, "price", "bare")
+        # Тип вопроса без своего читателя (`facet_by_llm = on`): «просто назвал» и «есть ли у вас» — у правил это None. Список
+        # названных услуг отвечает на «есть ли» ценами строк; ответ подбора на длинном списке теряет позиции (стенд 30.10:
+        # g0320, g0382). Срок, подготовка, место и запись — к своим читателям.
+        and understanding.facet in (None, "price", "bare", "availability")
         and not detect_test_assist_goal_phrasing(user_text)
     ):
         turn_understanding.note_acted("list_is_price")

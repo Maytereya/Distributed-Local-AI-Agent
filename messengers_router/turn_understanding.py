@@ -548,7 +548,11 @@ def price_turn_facet(text: str) -> tuple[str | None, str]:
     return None, ""
 
 
-FACET_TASK = Task(name="turn_facet", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+# Число решений хода не тратит (`verdict`: секунды хода, дедлайн и предохранитель — как у решения): тип вопроса — понимание
+# хода, как вопрос рамки кнопки (STEP-2026-10-29-BUTTON-FRAME) и ответ на висящий вопрос (Q5 18.10). На ходе цены он иначе
+# отнимал место у проверки строки С3 (стенд 30.10, лимит 4: отказов `budget` 9 → 41); возврат решения после вызова, как у
+# рамки, оставлял бы гонку — вопрос идёт параллельно разбору реплики.
+FACET_TASK = Task(name="turn_facet", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500, verdict=True)
 # Варианты — `choose_test_assist_facet_full` (П1, BUG-2026-10-22-P1-FACET-NONE-AS-PRICE) плюс «нужна ли запись», отделённая от
 # «где и когда»; `id` — имена `facet` понимания хода (правила дают их подмножество: readiness, prepare, booking, where, price).
 FACET_OPTIONS = (

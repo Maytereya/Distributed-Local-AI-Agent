@@ -282,13 +282,18 @@ def test_ecg_without_booking_on_test_assist_topic_gets_addresses(ecg_world, monk
     assert out["telemetry"].get("tu_label_final") == "ADDRESS", out["telemetry"]
 
 
-def test_list_named_without_a_question_stays_a_price(mini_prod_world, monkeypatch):  # noqa: F811
-    # Список без вопроса: LLM «просто назвал» — для П1 это цена списка, как None у правил (иначе — воронка подбора).
-    out, _ = _dialog(mini_prod_world, monkeypatch, [("ферритин, глюкоза, холестерин", "TEST_ASSIST", "bare")], switch="on")
+@pytest.mark.parametrize(
+    "reply,facet",
+    [("ферритин, глюкоза, холестерин", "bare"), ("есть ли у вас ферритин, глюкоза, холестерин?", "availability")],
+)
+def test_list_named_without_a_question_stays_a_price(reply, facet, mini_prod_world, monkeypatch):  # noqa: F811
+    # Список без вопроса о сроке, подготовке или месте: «просто назвал» и «есть ли у вас» — цена списка, как None у правил
+    # (иначе — ответ подбора, который на длинном списке теряет позиции: g0320, g0382 стенда 30.10).
+    out, _ = _dialog(mini_prod_world, monkeypatch, [(reply, "TEST_ASSIST", facet)], switch="on")
     tel = out[0]["telemetry"]
-    assert tel.get("tu_facet") == "bare", tel
-    if (tel.get("tu_list") or 0) >= 2:
-        assert tel.get("tu_label_final") == "PRICE", tel
+    assert tel.get("tu_facet") == facet, tel
+    assert (tel.get("tu_list") or 0) >= 2, tel
+    assert tel.get("tu_label_final") == "PRICE", tel
 
 
 # --- сбой и ход без слов -------------------------------------------------------------------------------------------------
@@ -364,14 +369,14 @@ def test_overview_reads_the_turn_type(reply, facet, asked, mini_prod_world, monk
     assert (_OVERVIEW_MARK in fake.calls) is asked, fake.calls
 
 
-def test_turn_decision_limit_is_a_failure_with_rules_type(monkeypatch):
-    # Лимит решений хода исчерпан — тип вопроса правил, источник `fail`, причина `budget` в телеметрии; читатели — как было.
+def _facet_under_budget(monkeypatch, *, calls: int, seconds: float, spent: int) -> tuple[Any, str | None, dict[str, Any], int]:
     from messengers_router import turn_telemetry
     from messengers_router import turn_understanding as tu
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_FACET_BY_LLM", "on", raising=False)
-    monkeypatch.setattr(cfg, "MR_LLM_DECISION_TURN_CALLS", 1, raising=False)
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_TURN_CALLS", calls, raising=False)
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_TURN_SECONDS", seconds, raising=False)
     monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
     monkeypatch.setattr(turn_telemetry, "enabled", lambda: True)
     fake = _LLM({_FACET_MARK: _facet("price")})
@@ -379,17 +384,32 @@ def test_turn_decision_limit_is_a_failure_with_rules_type(monkeypatch):
     monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
     choice._CACHE.clear()
 
-    async def run() -> tuple[Any, str | None, dict[str, Any]]:
+    async def run() -> tuple[Any, str | None, dict[str, Any], int]:
         token = llm_runtime.begin_turn_budget()
         turn_telemetry.begin("test", session_id="t-budget")
         try:
             tu.begin_turn()
-            await choice.choose(tu.FACET_TASK, "прежнее решение хода", tu.FACET_OPTIONS)  # единственное решение хода потрачено
+            llm_runtime._TURN_BUDGET.get().calls = spent  # решения хода, уже принятые до вопроса о типе
             text = "когда будет готов анализ на глюкозу"
-            return await tu.turn_facet(text), await tu.llm_facet(text), dict(turn_telemetry._TURN.get().fields)
+            decided, by_turn = await tu.turn_facet(text), await tu.llm_facet(text)
+            return decided, by_turn, dict(turn_telemetry._TURN.get().fields), llm_runtime.turn_decisions_spent()
         finally:
             llm_runtime.end_turn_budget(token)
 
-    decided, by_turn, fields = asyncio.run(run())
+    return asyncio.run(run())
+
+
+def test_turn_type_does_not_spend_the_turn_decision_count(monkeypatch):
+    # Тип вопроса — понимание хода, как вопрос рамки кнопки и ответ на висящий вопрос: число решений хода не тратит и не
+    # упирается в него — иначе на ходе цены (классификатор, разметка, выбор строки) он отнимал место у проверки строки С3
+    # (стенд 30.10, лимит 4: отказов `budget` 9 → 41, почти все — `service_answer_exact`).
+    decided, by_turn, fields, spent = _facet_under_budget(monkeypatch, calls=1, seconds=25, spent=1)
+    assert (decided.value, decided.src, by_turn) == ("price", "llm", "price"), fields
+    assert spent == 1
+
+
+def test_turn_seconds_limit_is_a_failure_with_rules_type(monkeypatch):
+    # Секунды хода — общие с решениями: исчерпаны — тип вопроса правил, источник `fail`, причина `budget`; читатели — как было.
+    decided, by_turn, fields, _ = _facet_under_budget(monkeypatch, calls=4, seconds=0.5, spent=0)
     assert (decided.value, decided.src) == ("readiness", "fail") and by_turn is None
     assert fields.get("tu_facet_fail") == "budget" and fields.get("tu_facet_src") == "fail", fields
