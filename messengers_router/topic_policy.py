@@ -90,6 +90,24 @@ _ROWS: tuple[Relabel, ...] = (
         in_frame=KEEPS,
     ),
     Relabel(
+        "turn_facet_prepare", "question_facet", "PREPARE", "_route_by_turn_facet",
+        "ход цены, тип вопроса по LLM — подготовка (`facet_by_llm = on`): памятка, а не шаблон цены",
+        "STEP-2026-10-30-FACET-READERS",
+        in_frame=KEEPS,
+    ),
+    Relabel(
+        "turn_facet_where", "question_facet", "ADDRESS", "_route_by_turn_facet",
+        "ход цены, тип вопроса по LLM — «где / когда» или «нужна ли запись» (`facet_by_llm = on`): адреса, как вариант П1 `where_when`",
+        "STEP-2026-10-30-FACET-READERS",
+        in_frame=KEEPS,
+    ),
+    Relabel(
+        "turn_facet_none_offer", "question_facet", "OTHER", "_route_by_turn_facet",
+        "ход цены, тип вопроса по LLM — «ни одно» (`facet_by_llm = on`): данные клиники или честный оффер, как у П1",
+        "STEP-2026-10-30-FACET-READERS",
+        in_frame=KEEPS,
+    ),
+    Relabel(
         "flow_price_city_reply_override", "guardrail_post", "PRICE", "_apply_post_nlu_guardrails",
         "ответ городом на висящий вопрос цены — продолжение цены",
         in_frame=KEEPS,

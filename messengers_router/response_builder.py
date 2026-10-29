@@ -151,15 +151,26 @@ def build_readiness_response(evidence: Evidence) -> ResponseEnvelope | None:
     items = evidence.get(ek.READINESS_RESPONSE)
     if not isinstance(items, list) or not items:
         return None
-    lines = [(str(it.get("name") or "").strip(), str(it.get("deadline") or "").strip()) for it in items if isinstance(it, dict)]
-    lines = [(name, deadline) for name, deadline in lines if name and deadline]
+    lines = [
+        (str(it.get("name") or "").strip(), str(it.get("deadline") or "").strip(), str(it.get("variant") or "").strip())
+        for it in items
+        if isinstance(it, dict)
+    ]
+    lines = [(name, deadline, variant) for name, deadline, variant in lines if name and deadline]
     if not lines:
         return None
     if len(lines) == 1:
-        name, deadline = lines[0]
+        name, deadline, _ = lines[0]
         text = f"Срок готовности «{name}» — {deadline}."
+    elif len({name for name, _, _ in lines}) == 1 and all(variant for _, _, variant in lines):
+        # Строки одной услуги с разными сроками — каждая со своей ценой, как цена списком (STEP-2026-10-30-FACET-READERS).
+        text = f"Срок готовности «{lines[0][0]}» зависит от варианта:\n" + "\n".join(
+            f"— {variant} — {deadline}" for _, deadline, variant in lines
+        )
     else:
-        text = "Сроки готовности:\n" + "\n".join(f"— «{name}» — {deadline}" for name, deadline in lines)
+        text = "Сроки готовности:\n" + "\n".join(
+            f"— «{name}»{f' ({variant})' if variant else ''} — {deadline}" for name, deadline, variant in lines
+        )
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 

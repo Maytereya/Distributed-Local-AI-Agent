@@ -59,9 +59,33 @@ def _one_deadline(rows: list[dict[str, Any]]) -> str | None:
     return formatted.pop() if len(formatted) == 1 and None not in formatted else None
 
 
-def _deadline(name: str, catalog: list[dict[str, Any]]) -> str | None:
+def _deadline_items(name: str, rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Сроки строк одной услуги для ответа: один срок — одна строка ответа. Под `facet_by_llm = on` разные сроки у строк одного
+    названия — каждая строка со своей ценой и сроком, как цена списком («Посев мочи с идентификацией культур»: 1 100 руб. —
+    6 дней, 1 050 руб. — 3–5 дней; STEP-2026-10-30-FACET-READERS). У строки нет срока или цены — пусто (честный перевод)."""
+
+    deadline = _one_deadline(rows)
+    if deadline:
+        return [{"name": name, "deadline": deadline}]
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    if not turn_understanding.facet_by_llm() or len(rows) < 2:
+        return []
+    items: list[dict[str, str]] = []
+    for row in rows:
+        deadline, cost = format_deadline(str(row.get("deadline") or "").strip()), row.get("cost")
+        if not deadline or not isinstance(cost, (int, float)) or cost <= 0:
+            return []
+        variant = f"{int(cost):,}".replace(",", " ") + " руб."
+        item = {"name": name, "deadline": deadline, "variant": variant}
+        if item not in items:
+            items.append(item)
+    return items
+
+
+def _deadline(name: str, catalog: list[dict[str, Any]]) -> list[dict[str, str]]:
     key = _normalise_input(name)
-    return _one_deadline([row for row in catalog if _normalise_input(str(row.get("serviceName") or "")) == key])
+    return _deadline_items(name, [row for row in catalog if _normalise_input(str(row.get("serviceName") or "")) == key])
 
 
 def _single_phrase(parse: turn_parse.PhraseParse) -> turn_parse.ParsedPhrase | None:
@@ -81,8 +105,7 @@ def _deadline_of_parsed(parse: turn_parse.PhraseParse) -> list[dict[str, str]] |
     names = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in phrase.rows))
     if len({_normalise_catalog_text(name) for name in names}) != 1:
         return None
-    deadline = _one_deadline(list(phrase.rows))
-    return [{"name": names[0], "deadline": deadline}] if deadline else None
+    return _deadline_items(names[0], list(phrase.rows)) or None
 
 
 def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None = None) -> list[dict[str, str]] | None:
@@ -114,8 +137,7 @@ def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None =
     # Одна услуга по данным: синоним на несколько услуг — не одна, её выбирает LLM.
     if len({_normalise_catalog_text(name) for name in names}) != 1:
         return None
-    name, deadline = names[0], _one_deadline(strong)
-    return [{"name": name, "deadline": deadline}] if deadline else None
+    return _deadline_items(names[0], strong) or None
 
 
 def _core_is_list(core: str, catalog: list[dict[str, Any]]) -> bool:
@@ -179,5 +201,5 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         _record_synonym_suggestion(weak_phrase, [], picked, source="readiness")
     if choice.status is not Status.PICKED:
         return None
-    found = [{"name": name, "deadline": deadline} for name in choice.ids if (deadline := _deadline(name, catalog))]
+    found = [item for name in choice.ids for item in _deadline(name, catalog)]
     return found or None

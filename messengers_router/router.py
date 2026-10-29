@@ -1984,6 +1984,35 @@ async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> 
     return facet
 
 
+async def _route_by_turn_facet(decision: RouteDecision, *, user_text: str) -> RouteDecision:
+    """У каждого типа вопроса на ходе цены — свой читатель (`facet_by_llm = on`, STEP-2026-10-30-FACET-READERS).
+
+    Цена, «просто назвал», «есть ли» — путь цены: строки прайса и есть ответ. Срок — `_maybe_readiness_reply`. Подготовка —
+    памятка; «где» и «нужна ли запись» — адреса (как вариант П1 `where_when`); «ни одно» — данные клиники или честный оффер (как
+    у П1 под `p1_facet_none_offer`). Без читателя ход шёл в шаблон цены: «Кровь на ХГЧ могу ли сдать через 15 минут?» → «Не нашёл
+    актуальную стоимость» (g0458), «Откуда берут биоматериал для ВПЧ?» → то же (g0369). Ответ на вопрос кнопки цены — не здесь:
+    тему задала кнопка («ЭКГ самара» после «Цена анализа» — цена, не адреса). Сбой LLM и off — как было.
+    """
+
+    if decision.label != "PRICE" or not turn_understanding.facet_by_llm():
+        return decision
+    flags = set(decision.flags or ())
+    if "button_answer_topic" in flags:
+        return decision
+    facet = await turn_understanding.llm_facet(user_text)
+    if facet == "prepare":
+        routed = _relabel(decision, "turn_facet_prepare", label="PREPARE", flags=flags | {"turn_facet_reader"})
+    elif facet in ("where", "booking"):
+        routed = _relabel(decision, "turn_facet_where", label="ADDRESS", flags=flags | {"turn_facet_reader"})
+    elif facet == "none":
+        routed = _relabel(decision, "turn_facet_none_offer", label="OTHER", flags=flags | {"turn_facet_reader", "topic_other_offer"})
+    else:
+        return decision
+    if routed.label != decision.label:
+        turn_understanding.note_acted(f"facet_reader_{facet}")
+    return routed
+
+
 def _p1_facet_none_offer() -> bool:
     """`p1_facet_none_offer = on` (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): полный набор свойств вопроса и «ни одно» → оффер."""
 
@@ -3717,6 +3746,7 @@ async def _complete_route_after_doctor_guard(
     decision = _relabel_test_assist_catalog_hit_as_price(
         decision, user_text=user_text, facet=await _test_assist_facet_by_llm(decision, user_text)
     )
+    decision = await _route_by_turn_facet(decision, user_text=user_text)
     decision = await _confirm_appointment_change_verb(decision, user_text=user_text, state=state)
     decision = await _confirm_existing_appointment_question(decision, user_text=user_text, state=state)
 
