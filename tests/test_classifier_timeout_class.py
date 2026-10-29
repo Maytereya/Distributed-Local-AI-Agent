@@ -31,11 +31,11 @@ _PROD_TOPIC_BY_LLM = (
     "rule_test_assist,rule_doctor_info_specialty,rule_schedule,rule_analysis_lookup_ambiguous,"
     "rule_website_help,rule_address_work_hours,rule_test_result,rule_prepare"
 )
-# Реплика → (ветка правила; сколько раз зовётся классификатор). У `rule_schedule` два вызова: уточнение темы (refine) в
-# ветке правила и разбор темы — ветка в `topic_by_llm`; потолок — на каждый вызов.
+# Реплика → (ветка правила; сколько раз зовётся классификатор). У `rule_schedule` (ветка в `topic_by_llm`) — один вызов, разбор
+# темы: уточнение темы (refine) в ветке правила, чью тему решает LLM, не зовётся (Н-3, STEP-2026-10-30-REFINE-BY-LLM-BRANCH).
 _REPLIES = {
     "no_rule": ("подскажите по одному вопросу", "", 1),
-    "topic_by_llm": ("расписание кардиолога", "rule_schedule", 2),
+    "topic_by_llm": ("расписание кардиолога", "rule_schedule", 1),
     "rule_first": ("сколько стоит ферритин", "rule_price", 0),
 }
 # Оба промпта классификатора: разбор темы и уточнение (refine) — один вызов `ollama_classify_payload`, один потолок.

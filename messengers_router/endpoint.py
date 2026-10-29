@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from . import llm_runtime, turn_parse, turn_telemetry
+from . import button_flow, llm_runtime, turn_parse, turn_telemetry
 from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
@@ -90,6 +90,7 @@ async def _on_startup() -> None:
         get_services().warm_branches_in_background()  # справочник филиалов — до первого пациента, старт не ждёт
     except Exception:
         log.error("startup_services_failed", exc_info=True)
+    button_flow.warn_config_conflicts()  # ловушка конфигурации — громко в лог при старте (Н-7)
     schedule_warm_up()
 
 

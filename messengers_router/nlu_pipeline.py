@@ -43,14 +43,18 @@ async def _rule_decision(
     text: str,
     last_entities: dict[str, Any],
     runtime_options: RuntimeOptions | None = None,
+    button_topic: str = "",
 ) -> RouteDecision | None:
+    def refine_wanted(base: RouteDecision) -> bool:
+        # Уточнение LLM — только у ветки, тему которой решает правило: у ветки из `topic_by_llm` тему решит классификатор,
+        # итог уточнения выбросили бы (Н-3, STEP-2026-10-30-REFINE-BY-LLM-BRANCH). Решение — то же, что `_topic_by_llm` хода.
+        return not _topic_by_llm(base, {"rule": _rule_branch(base, text)}, runtime_options, button_topic, note=False)
+
     return await classifier.deterministic_rule_decision(
         text,
         last_entities,
         runtime_options=runtime_options,
-        # Держим те же настройки, что и в classifier.analyze(),
-        # чтобы убрать дубли rule-pass без поведенческого расхождения.
-        allow_refine=True,
+        allow_refine=refine_wanted,
         attach_secondary=True,
     )
 
@@ -194,9 +198,11 @@ def _topic_by_llm(
     topic_source: dict[str, str],
     runtime_options: RuntimeOptions | None,
     button_topic: str = "",
+    note: bool = True,
 ) -> bool:
     """Тему этого хода решает LLM, а правило — кандидат: ветка правила в `topic_by_llm`, правило не про безопасность
-    (принцип 4: срочное LLM не снимает), LLM разрешена режимом хода, ход — не нажатие кнопки с известной темой."""
+    (принцип 4: срочное LLM не снимает), LLM разрешена режимом хода, ход — не нажатие кнопки с известной темой.
+    `note=False` — тот же вопрос внутри прохода правил (звать ли уточнение), без записи в телеметрию хода."""
 
     if rule is None or rule.label in _SAFETY_LABELS:
         return False
@@ -209,7 +215,8 @@ def _topic_by_llm(
         # Тему выбрал пациент нажатием (`button_menu`, режим `pass`), подпись — запрос этой темы: переспрашивать её у LLM —
         # только ждать классификатор (прод 23.10: 11–12 с на «Где и до скольки принимают»). Решает правило, как без списка
         # (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM; выключатель `button_pass_rules` снят 31.10).
-        turn_telemetry.note(nlu_topic_by_llm="button")
+        if note:
+            turn_telemetry.note(nlu_topic_by_llm="button")
         return False
     return True
 
@@ -259,7 +266,7 @@ async def _analyze_legacy_with_candidates(
     llm_context = dict(state.last_entities)
     llm_context.update(seeded)
 
-    prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
+    prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options, button_topic=button_topic)
     topic_source = _note_topic_source(prefetched_rule, text)
     by_llm = _topic_by_llm(prefetched_rule, topic_source, runtime_options, button_topic)
     firm = answer_topic_firm and prefetched_rule is not None and prefetched_rule.label not in _SAFETY_LABELS and not prefetched_rule.needs_handoff

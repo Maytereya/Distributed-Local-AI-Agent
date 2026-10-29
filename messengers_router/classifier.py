@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 from .llm_mode_policy import RuntimeOptions
@@ -950,16 +951,25 @@ def _attach_secondary_intents(
     )
 
 
+def _refine_wanted(allow_refine: bool | Callable[[RouteDecision], bool], base: RouteDecision) -> bool:
+    return allow_refine(base) if callable(allow_refine) else bool(allow_refine)
+
+
 async def deterministic_rule_decision(
     text: str,
     last_entities: dict[str, Any],
     *,
     flags: set[str] | None = None,
     runtime_options: RuntimeOptions | None = None,
-    allow_refine: bool = True,
+    allow_refine: bool | Callable[[RouteDecision], bool] = True,
     attach_secondary: bool = True,
 ) -> RouteDecision | None:
-    """Детерминированный pass интентов без LLM-fallback классификации."""
+    """Детерминированный pass интентов без LLM-fallback классификации.
+
+    `allow_refine` — звать ли уточнение LLM (`classifier_refine_patient`) у серых веток; предикат над решением ветки до
+    уточнения — решает вызывающий: ветка, чью тему решает LLM-классификатор (`topic_by_llm`), уточнение не зовёт — его итог
+    выбросили бы (Н-3, STEP-2026-10-30-REFINE-BY-LLM-BRANCH).
+    """
     local_flags: set[str] = set(flags or set())
     local_flags |= detect_pii(text)
 
@@ -1170,7 +1180,7 @@ async def deterministic_rule_decision(
         )
         decision = (
             await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
-            if allow_refine
+            if _refine_wanted(allow_refine, base)
             else base
         )
     elif _is_procedure_doctor_info_query(text, _extract_service_keyword(text)):
@@ -1315,7 +1325,7 @@ async def deterministic_rule_decision(
                 )
                 decision = (
                     await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
-                    if allow_refine
+                    if _refine_wanted(allow_refine, base)
                     else base
                 )
             elif detect_news_intent(text):

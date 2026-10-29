@@ -47,7 +47,7 @@ def _runtime(body: dict[str, Any]) -> dict[str, Any]:
 
 def test_debug_turn_carries_the_runtime_fingerprint():
     runtime = _runtime(_turn("сколько стоит оак", "fp-debug"))
-    assert set(runtime) == {"build", "code", "world", "prompts", "topic_registry", "tz"}, runtime
+    assert set(runtime) == {"build", "code", "world", "prompts", "topic_registry", "tz", "config_conflicts"}, runtime
     assert re.fullmatch(r"[0-9a-f]{12}", runtime["code"]), runtime["code"]
     assert {"model", "price", "service_info", "doctors", "synonyms"} <= set(runtime["world"]), runtime["world"]
     assert sorted(runtime["prompts"]) == _BUNDLE_KEYS
