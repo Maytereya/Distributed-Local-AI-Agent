@@ -170,15 +170,11 @@ def test_tool_loop_uses_post_nlu_helper_without_legacy_route_call(monkeypatch):
         assert kwargs["decision"] is decision
         return decision, plan, evidence
 
-    async def fail_route_patient_message(*args, **kwargs):
-        _ = args, kwargs
-        raise AssertionError("tool_loop should use post-nlu helper, not full route_patient_message")
 
     monkeypatch.setattr(router_mod, "_handle_catalog_confirm_pending", _no_pending)
     monkeypatch.setattr(router_mod, "_handle_appointment_action_pending", _no_pending)
     monkeypatch.setattr(router_mod, "_handle_compound_price_pending", _no_pending)
     monkeypatch.setattr(router_mod, "_complete_route_after_doctor_guard", fake_complete_route)
-    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
 
     ctx = OrchestratorContext(
         text="цена",

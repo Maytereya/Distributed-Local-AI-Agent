@@ -30,6 +30,7 @@ from messengers_router.nlu_pipeline import NLUResult
 from messengers_router.policies import detect_existing_appointment_candidate
 from messengers_router.services import Services
 from messengers_router.services import _existing_appointment_validator as V
+from tests.endpoint_turn import route_via_endpoint
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -160,9 +161,7 @@ def test_llm_silence_or_no_keeps_previous_behaviour(monkeypatch, verdict):
     asked = _llm_says(monkeypatch, verdict)
     state = SessionState(session_id="existing-appt-fallback")
 
-    decision, _plan, evidence = asyncio.run(
-        router_mod.route_patient_message("Мои записи", state, Services(), MemoryStore())
-    )
+    decision, _plan, evidence = route_via_endpoint("Мои записи", state, Services(), MemoryStore())
 
     assert asked == ["Мои записи"]
     assert not {f for f in decision.flags if f.startswith("existing_appointment")}

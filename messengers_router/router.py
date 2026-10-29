@@ -64,15 +64,7 @@ from .llm_mode_policy import RuntimeOptions, fail_offer
 from .planner import build_plan as planner_build_plan, price_of as planner_price_of
 from .executor import execute_plan as executor_execute_plan
 from .response_builder import (
-    build_address_response as response_build_address_response,
-    build_appointment_schedule_preview_response as response_build_appointment_schedule_preview_response,
-    build_appointment_step_response as response_build_appointment_step_response,
-    build_doctor_info_response as response_build_doctor_info_response,
-    build_doctor_schedule_response as response_build_doctor_schedule_response,
     build_first_structured_response as response_build_first_structured_response,
-    build_price_response as response_build_price_response,
-    build_service_bundle_response as response_build_service_bundle_response,
-    build_test_result_response as response_build_test_result_response,
     mark_operator_offer_pending,
 )
 from .russian_nlu import normalize_ru
@@ -3186,8 +3178,8 @@ async def _handle_secondary_queue_pending(
 ) -> tuple[RouteDecision, Plan, Evidence] | None:
     """Resolve a previously-offered secondary intent awaiting user ack.
 
-    Mirrors the legacy block that sat inline at the top of
-    ``route_patient_message``: if the previous turn offered a queued follow-up
+    Mirrors the legacy block that sat inline at the top of the old entry
+    point (removed 29.10, К3): if the previous turn offered a queued follow-up
     (``_secondary_offer_pending``) and the current reply is a short "да"/"нет"
     (or a short doctor last-name for doctor-flavoured follow-ups), promote the
     first queued label into a full routing triple. On a "no"/ambiguous reply
@@ -3336,9 +3328,9 @@ async def _resolve_nlu_decision_before_doctor_guard(
     """Строит NLU-решение до doctor verification.
 
     Хелпер сохраняет legacy-порядок: очистка stale debug-ключей, appointment
-    prelock, основной NLU и topic-registry override. Нужен и для
-    `route_patient_message`, и для orchestrator-stage `nlu_route`, чтобы не
-    дублировать эту часть пайплайна.
+    prelock, основной NLU и topic-registry override. Зовёт его
+    orchestrator-stage `nlu_route` (прежняя точка входа `route_patient_message`
+    снята 29.10, К3).
 
     :param user_text: текущий текст пользователя
     :param state: состояние сессии
@@ -3516,7 +3508,7 @@ async def _complete_route_after_doctor_guard(
     """Завершает legacy post-NLU middleware после doctor verification.
 
     Хелпер принимает уже готовое `decision` после `_verify_doctor_entity` и
-    выполняет оставшуюся часть старого `route_patient_message`: catalog
+    выполняет оставшуюся часть пути после NLU (стадия `tool_loop`): catalog
     injection, guardrails, entity grounding, планирование, executor и графовый
     переход.
 
@@ -3861,93 +3853,6 @@ async def _complete_route_after_doctor_guard(
     return decision, plan, evidence
 
 
-async def route_patient_message(
-    user_text: str,
-    state: SessionState,
-    services: Services,
-    memory: MemoryStore,
-    runtime_options: RuntimeOptions | None = None,
-) -> tuple[RouteDecision, Plan, Evidence]:
-    turn_understanding.begin_turn()
-    shown_context.begin_turn(state)
-    # Справочник филиалов — в кэш до синхронных читателей хода (`get_branches`), запрос к МИС — в потоке (DATA-7).
-    try:
-        await services.warm_branches()
-    except Exception:
-        logger.warning("прогрев справочника филиалов не удался", exc_info=True)
-    operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
-    if operator_offer_result is not None:
-        return operator_offer_result
-
-    catalog_pending_result = await _handle_catalog_confirm_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if catalog_pending_result is not None:
-        return catalog_pending_result
-
-    appointment_action_result = await _handle_appointment_action_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if appointment_action_result is not None:
-        return appointment_action_result
-
-    prepare_variant_result = await _handle_prepare_variant_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if prepare_variant_result is not None:
-        return prepare_variant_result
-
-    compound_price_result = await _handle_compound_price_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if compound_price_result is not None:
-        return compound_price_result
-
-    secondary_queue_result = await _handle_secondary_queue_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if secondary_queue_result is not None:
-        return secondary_queue_result
-
-    decision, nlu_debug = await _resolve_nlu_decision_before_doctor_guard(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    decision = await _verify_doctor_entity(decision, services, user_text)
-    return await _complete_route_after_doctor_guard(
-        decision=decision,
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-        nlu_debug=nlu_debug,
-    )
-
-
 def _debug_meta(
     decision: RouteDecision,
     plan: Plan,
@@ -3999,82 +3904,6 @@ def _debug_meta(
         # Отпечаток рантайма (DATA-13): сборка, модель, хэши промптов и реестра тем, TZ, срезы — без хостов и секретов.
         "runtime": runtime_fingerprint(),
     }
-
-
-def _build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
-    return response_build_price_response(flow_label, evidence, state)
-
-
-def _build_service_bundle_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
-    return response_build_service_bundle_response(flow_label, evidence, state)
-
-
-def _build_doctor_info_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
-    return response_build_doctor_info_response(flow_label, evidence, state)
-
-
-def _build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseEnvelope | None:
-    return response_build_test_result_response(flow_label, evidence)
-
-
-def _build_doctor_schedule_response(
-    flow_label: str,
-    evidence: Evidence,
-    state: SessionState,
-    memory: MemoryStore,
-) -> ResponseEnvelope | None:
-    return response_build_doctor_schedule_response(flow_label, evidence, state, memory)
-
-
-def _build_address_response(
-    flow_label: str,
-    evidence: Evidence,
-    state: SessionState,
-    memory: MemoryStore,
-    decision: RouteDecision,
-    user_text: str,
-) -> ResponseEnvelope | None:
-    return response_build_address_response(flow_label, evidence, state, memory, decision, user_text)
-
-
-def _build_appointment_schedule_preview_response(
-    flow_label: str,
-    evidence: Evidence,
-    state: SessionState,
-    memory: MemoryStore,
-) -> ResponseEnvelope | None:
-    return response_build_appointment_schedule_preview_response(flow_label, evidence, state, memory)
-
-
-def _build_appointment_step_response(
-    flow_label: str,
-    evidence: Evidence,
-    state: SessionState,
-    services: Services,
-    memory: MemoryStore,
-) -> ResponseEnvelope | None:
-    return response_build_appointment_step_response(flow_label, evidence, state, services, memory)
-
-
-def _build_first_structured_response(
-    *,
-    flow_label: str,
-    evidence: Evidence,
-    state: SessionState,
-    services: Services,
-    memory: MemoryStore,
-    decision: RouteDecision,
-    user_text: str,
-) -> ResponseEnvelope | None:
-    return response_build_first_structured_response(
-        flow_label=flow_label,
-        evidence=evidence,
-        state=state,
-        services=services,
-        memory=memory,
-        decision=decision,
-        user_text=user_text,
-    )
 
 
 def _own_place_city(city: str | None, user_text: str) -> str | None:

@@ -29,6 +29,7 @@ from messengers_router.recovery_policy import (
     evaluate_recovery,
 )
 from messengers_router.services import Services
+from tests.endpoint_turn import route_via_endpoint
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[1] / "messengers_router" / "prompts"
 _RUNTIME_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "app_data" / "prompts"
@@ -124,9 +125,7 @@ def test_existing_appointment_check_routes_to_operator_offer(monkeypatch):
     state = SessionState(session_id="p6-check")
     memory = MemoryStore()
 
-    decision, plan, evidence = run(
-        router_mod.route_patient_message("Проверьте пожалуйста мою запись", state, Services(), memory)
-    )
+    decision, plan, evidence = route_via_endpoint("Проверьте пожалуйста мою запись", state, Services(), memory)
 
     assert decision.label == "OTHER"
     assert plan.label == "OTHER"
@@ -147,7 +146,7 @@ def test_existing_appointment_cancel_hands_off_at_once(monkeypatch, text):
     state = SessionState(session_id="p6-cancel")
     memory = MemoryStore()
 
-    decision, _plan, evidence = run(router_mod.route_patient_message(text, state, Services(), memory))
+    decision, _plan, evidence = route_via_endpoint(text, state, Services(), memory)
 
     assert "existing_appointment_cancel" in decision.flags
     payload = evidence.get("operator_offer_response")
@@ -169,7 +168,7 @@ def _llm_says(monkeypatch, verdict: bool | None) -> list[str]:
 
 def _route(text: str, session_id: str):
     state = SessionState(session_id=session_id)
-    return run(router_mod.route_patient_message(text, state, Services(), MemoryStore()))
+    return route_via_endpoint(text, state, Services(), MemoryStore())
 
 
 @pytest.mark.parametrize("text", ["нужно ли отменять лекарства перед анализом", "надо ли отменить витамины перед сдачей крови"])
@@ -270,9 +269,7 @@ def test_existing_appointment_does_not_offer_new_booking(monkeypatch):
     _install_stubs(monkeypatch)
     state = SessionState(session_id="p6-no-new-booking")
 
-    _decision, plan, evidence = run(
-        router_mod.route_patient_message("я записан на завтра?", state, Services(), MemoryStore())
-    )
+    _decision, plan, evidence = route_via_endpoint("я записан на завтра?", state, Services(), MemoryStore())
 
     assert plan.steps == []
     text = str((evidence.get("operator_offer_response") or {}).get("text") or "")
@@ -287,9 +284,7 @@ def test_cancel_inside_active_flow_is_not_hijacked(monkeypatch):
     state = SessionState(session_id="p6-active-flow")
     state.last_entities["appointment_flow_active"] = True
 
-    decision, _plan, _evidence = run(
-        router_mod.route_patient_message("отменить", state, Services(), MemoryStore())
-    )
+    decision, _plan, _evidence = route_via_endpoint("отменить", state, Services(), MemoryStore())
 
     assert "existing_appointment_operator_offer" not in decision.flags
 
