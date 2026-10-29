@@ -333,11 +333,10 @@ async def _resolve_secondary_queue_doctor_reply(
 
 def _relabel(decision: RouteDecision, policy: str, **overrides: Any) -> RouteDecision:
     """Переклейка метки после NLU — только строкой таблицы политик `topic_policy.TABLE` (ход (б), этап 3, решение
-    владельца 20.10 (б) 7): копия решения, как `_copy_decision`, и запись строки в телеметрию хода (`tu_relabel_src`)."""
+    владельца 20.10 (б) 7): копия решения, как `_copy_decision`, и запись строки в телеметрию хода (`tu_relabel_src`).
+    Рамку кнопки проверяет здесь же таблица (`topic_policy.apply`, поле строки `in_frame`, `frame_policy`)."""
 
-    relabeled = _copy_decision(decision, **overrides)
-    topic_policy.note(policy, decision.label, relabeled.label)
-    return relabeled
+    return topic_policy.apply(policy, decision, _copy_decision(decision, **overrides))
 
 
 def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
@@ -2982,9 +2981,16 @@ async def _apply_post_nlu_guardrails(
         merged_ctx.update(decision.entities or {})
         followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
         by_llm: bool | None = None
-        if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+        # Рамка кнопки держит тему — не спрашивать LLM о переклейке, которую таблица всё равно не применит (`frame_policy`).
+        kept = (
+            topic_policy.frame_policy_on()
+            and followup_address_hint
+            and detect_nonbookable_walkin_intent(user_text, merged_ctx)
+            and topic_policy.frame_kept("flow_price_followup_address", decision.label, "ADDRESS")
+        )
+        if not kept and followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             decision, by_llm = await _walkin_by_llm(decision, user_text, site="flow_price_followup_address")
-        if by_llm is not False and followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+        if not kept and by_llm is not False and followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
             if not entities.get("service_name"):
                 entities["service_name"] = service_context
@@ -3061,9 +3067,14 @@ async def _apply_post_nlu_guardrails(
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         by_llm = None
-        if detect_nonbookable_walkin_intent(user_text, merged_ctx):
+        kept = (
+            topic_policy.frame_policy_on()
+            and detect_nonbookable_walkin_intent(user_text, merged_ctx)
+            and topic_policy.frame_kept("policy_nonbookable_walkin", decision.label, "ADDRESS")
+        )
+        if not kept and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             decision, by_llm = await _walkin_by_llm(decision, user_text, site="policy_nonbookable_walkin")
-        if by_llm is not False and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+        if not kept and by_llm is not False and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
             svc = walkin.decided(decision.flags) if by_llm else nonbookable_service_hint(user_text, merged_ctx)
             # Для walk-in (анализы/ЭКГ без записи) важен КЛАСС услуги, а не строка
@@ -3124,10 +3135,10 @@ async def _apply_post_nlu_guardrails(
                 "DOCTOR_SCHEDULE",
                 services,
             )
-        if doctor_followup_entities or (
-            _is_short_verified_doctor_followup(decision, user_text)
-            and not detect_schedule_intent(user_text)
-        ):
+        if (
+            doctor_followup_entities
+            or (_is_short_verified_doctor_followup(decision, user_text) and not detect_schedule_intent(user_text))
+        ) and not topic_policy.frame_kept("flow_doctor_info_to_schedule", decision.label, "DOCTOR_SCHEDULE"):
             entities = dict(decision.entities)
             entities.update(doctor_followup_entities)
             state.last_entities["_secondary_offer_pending"] = False
@@ -3147,6 +3158,7 @@ async def _apply_post_nlu_guardrails(
         and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
         and _is_appointment_datetime_followup(user_text)
         and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "TEST_ASSIST", "ADDRESS", "PRICE"}
+        and not topic_policy.frame_kept("flow_schedule_to_appointment", decision.label, "APPOINTMENT")
     ):
         if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM) and not looks_like_patient_fio(user_text):
             state.last_entities.pop("patient_name", None)
@@ -3427,6 +3439,8 @@ async def _resolve_nlu_decision_before_doctor_guard(
                 **firm,
             )
             decision = nlu_result.decision
+            if topic_policy.frame_policy_on():
+                button_flow.note_frame(answer_topic, decision.label, decision.flags, pending_before_nlu)
             turn_telemetry.note(tu_label_nlu=decision.label)
             turn_understanding.observe_intent(decision.label, decision.confidence, (nlu_result.trace or {}).get("topic_source"))
             nlu_debug["candidates"] = [

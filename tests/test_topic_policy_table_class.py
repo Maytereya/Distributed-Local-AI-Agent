@@ -32,7 +32,9 @@ _REPLIES = (
 )
 
 
-def _calls(name: str) -> list[tuple[Path, str, ast.Call]]:
+def _calls(name: str, *, of: str = "") -> list[tuple[Path, str, ast.Call]]:
+    """Вызовы `name(...)` (или `of.name(...)`) в ядре — с функцией, в которой они стоят."""
+
     found: list[tuple[Path, str, ast.Call]] = []
     for path in sorted(_CORE.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -41,10 +43,18 @@ def _calls(name: str) -> list[tuple[Path, str, ast.Call]]:
             node, fn = stack.pop()
             for child in ast.iter_child_nodes(node):
                 inner = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
-                if isinstance(child, ast.Call) and getattr(child.func, "id", None) == name:
-                    found.append((path, inner, child))
+                if isinstance(child, ast.Call):
+                    func = child.func
+                    bare = not of and getattr(func, "id", None) == name
+                    dotted = bool(of) and isinstance(func, ast.Attribute) and func.attr == name and getattr(func.value, "id", None) == of
+                    if bare or dotted:
+                        found.append((path, inner, child))
                 stack.append((child, inner))
     return found
+
+
+# Переклейки вне роутера (`flow_policy`, планировщик) и заранее спрошенная рамка кнопки — строкой таблицы первым аргументом.
+_POLICY_FIRST = ("apply", "label_for", "frame_kept")
 
 
 def test_label_changes_only_through_policy_table():
@@ -68,6 +78,15 @@ def test_every_relabel_names_a_table_row_at_its_site():
         if row.to is not None and isinstance(to, ast.Constant):
             assert to.value == row.to, f"{policy}: в таблице → {row.to}, в коде → {to.value}"
         used.add(policy)
+    for name in _POLICY_FIRST:
+        for path, fn, call in _calls(name, of="topic_policy"):
+            if fn == "_relabel":
+                continue  # сам шлюз роутера: строку ему передают места переклейки (проверено выше)
+            assert call.args and isinstance(call.args[0], ast.Constant), f"{path.name}:{call.lineno}: строка — константой"
+            policy = call.args[0].value
+            assert policy in topic_policy.TABLE, f"{path.name}:{call.lineno}: строки {policy!r} нет в таблице"
+            assert topic_policy.TABLE[policy].site == fn, f"{policy}: в таблице место {topic_policy.TABLE[policy].site}, в коде — {fn}"
+            used.add(policy)
     assert set(topic_policy.TABLE) == used, f"строки таблицы без места в коде: {sorted(set(topic_policy.TABLE) - used)}"
 
 
@@ -93,7 +112,9 @@ def test_changed_label_is_explained_by_table(mini_prod_world, monkeypatch):  # n
             continue
         changed += 1
         trail = tel.get("tu_relabel_src") or []
+        assert all(step.split(":", 1)[0] in topic_policy.TABLE for step in trail), trail
+        # Строки планировщика переклеивают метку плана, а не решения (`label_for`): итог решения — по прочим строкам.
+        trail = [step for step in trail if topic_policy.TABLE[step.split(":", 1)[0]].site != "build_plan"]
         assert trail, (reply, tel)
         assert trail[-1].endswith(f">{tel['tu_label_final']}"), (reply, trail)
-        assert all(step.split(":", 1)[0] in topic_policy.TABLE for step in trail), trail
     assert changed >= 2, "корпус вырожден: ни одна переклейка не сработала"
