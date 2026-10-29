@@ -383,19 +383,48 @@ def _finish(state: SessionState, response: ResponseEnvelope) -> dict[str, Any] |
     return expects
 
 
-# Оффер оператора вопросом «да/нет» — так кончается каждый оффер бота (`mark_operator_offer_pending`).
+# Оффер оператора вопросом «да/нет» — так кончается каждый оффер бота (`mark_operator_offer_pending`); короткая форма — у оффера
+# «услуги нет в клинике» (`response_builder.UNSUPPORTED_CATALOG_OPERATOR_OFFER`: «…переведу на оператора. Перевести?»).
 OPERATOR_OFFER_QUESTION = "Перевести на оператора?"
+OPERATOR_OFFER_QUESTIONS = (OPERATOR_OFFER_QUESTION, "Перевести?")
 
 
 # Вопросы хода, которых пациент не видит: текст вторичного оффера не показывается (с `fec9770`), оффер — сам проверяемый вопрос.
 _UNSEEN_OR_OFFER = (Question.SECONDARY_OFFER, Question.OPERATOR_OFFER)
 
 
+def offer_question_span(text: str) -> tuple[int, int] | None:
+    """Где в тексте ответа последний вопрос-оффер оператора (начало, конец); нет — None."""
+
+    low = str(text or "").lower()
+    spans = [(at, at + len(q)) for q in OPERATOR_OFFER_QUESTIONS if (at := low.rfind(q.lower())) >= 0]
+    return max(spans) if spans else None
+
+
+def _without_quotes(line: str) -> str:
+    """Без цитат «…»: пример вопроса в кавычках («Сколько стоит УЗИ?») — не вопрос бота."""
+
+    out, depth = [], 0
+    for char in line:
+        depth += char == "«"
+        if not depth:
+            out.append(char)
+        depth -= char == "»" and depth > 0
+    return "".join(out)
+
+
+def asks_hanging_question(state: SessionState) -> bool:
+    """Ход оставил висящим вопрос, который видит пациент, кроме оффера (вопрос-слот, выбор, подтверждение)."""
+
+    return any(item.question not in _UNSEEN_OR_OFFER and _armed(state, item.question) for item in _ASKED.get())
+
+
 def one_question_violation(text: str, field: dict[str, Any] | None, handoff: bool = False) -> str:
     """И-1 (Д2 звено 2, консилиум 29.10): в сообщении бота не больше одного висящего вопроса, и поле ожидания — ровно он.
 
-    Оффер оператора вопросом — единственный вопрос сообщения: до него нет «?» (ссылки не в счёт), и ход не задал другого вопроса (`asked()` —
-    просьба «укажите данные…» тоже вопрос, хотя без «?»); `_expects` — оффер. Перевод (`handoff`) вопросов не оставляет.
+    Оффер оператора вопросом — единственный вопрос сообщения: ни до, ни после него нет «?» (ссылки и цитаты «…» не в счёт), и ход не
+    задал другого вопроса (`asked()` — просьба «укажите данные…» тоже вопрос, хотя без «?»); `_expects` — оффер, где бы в тексте
+    оффер ни стоял (и внутри составного ответа: пункт подготовки в обзоре цены). Перевод (`handoff`) вопросов не оставляет.
 
     :return: пусто — инвариант цел; иначе вид нарушения: `two_questions` (вопрос бота и оффер в одном сообщении),
         `offer_not_expected` (оффер есть, а поле ждёт другого ответа)
@@ -404,10 +433,11 @@ def one_question_violation(text: str, field: dict[str, Any] | None, handoff: boo
     if handoff:
         return ""
     shown = str(text or "")
-    at = shown.lower().rfind(OPERATOR_OFFER_QUESTION.lower())
-    if at < 0:
+    span = offer_question_span(shown)
+    if span is None:
         return ""
-    if "?" in _without_links(shown[:at]) or any(item.question not in _UNSEEN_OR_OFFER for item in _ASKED.get()):
+    rest = _without_quotes(_without_links(shown[: span[0]] + "\n" + shown[span[1] :]))
+    if "?" in rest or any(item.question not in _UNSEEN_OR_OFFER for item in _ASKED.get()):
         return "two_questions"
     if (field or {}).get("type") != Question.OPERATOR_OFFER.value:
         return "offer_not_expected"

@@ -684,6 +684,29 @@ def _maybe_offer_operator_on_reask_limit(
     return ResponseEnvelope(text=expects.reask_limit_text(limited), handoff=False, state_update=response.state_update)
 
 
+def _finish_turn(state: SessionState, memory: MemoryStore, response: ResponseEnvelope) -> None:
+    """Конец хода — одна точка для всех путей ответа: вопрос-оффер, который увидит пациент, — висящий вопрос, затем поле ожидания.
+
+    Под `expects_by_understanding = on` (И-1, И-2): оффер вопросом, собранный в текст мимо `mark_operator_offer_pending` (пункт
+    подготовки «…подскажет оператор. Перевести на оператора?» внутри обзора цены, тексты инструментов), ставит `_expects =
+    operator_offer` здесь — иначе «да» на него не переводило. Висит в сообщении и другой вопрос бота — оффер становится
+    необязывающей строкой («Если удобнее, напишите «оператор» — соединю»): два висящих вопроса не задаются. Off — как было.
+    """
+
+    if pending_answer.by_understanding_on() and not response.handoff and not state.last_entities.get("_operator_offer_pending"):
+        span = expects.offer_question_span(response.text)
+        if span is not None and expects.asks_hanging_question(state):
+            from .recovery_policy import OPERATOR_HINT_TEXT
+
+            text = response.text or ""
+            response.text = text[: span[0]] + OPERATOR_HINT_TEXT + text[span[1] :]
+            turn_telemetry.note(rendered_offer="hint")
+        elif span is not None:
+            mark_operator_offer_pending(state, memory)
+            turn_telemetry.note(rendered_offer="armed")
+    expects.finish_turn(state, response)
+
+
 # Дедлайн хода истёк (`llm_turn_deadline_s`): LLM не успела там, где была нужна, — честно, без ответа правил с фактом.
 DEADLINE_OFFER_TEXT = "Не успел подготовить точный ответ — чтобы не ошибиться, его даст оператор. Перевести на оператора?"
 
@@ -4405,7 +4428,7 @@ async def patient_routing_stream(
     if pending_answer.branch_side_question(answered):
         side = await _answer_branch_side_question(user_text, state, services, memory, runtime_options, debug)
         if side is not None:
-            expects.finish_turn(state, side)
+            _finish_turn(state, memory, side)
             memory.append_turn(state, role="user", text=said)
             memory.append_turn(state, role="assistant", text=side.text)
             update_summary(state, reason="normal")
@@ -4425,7 +4448,7 @@ async def patient_routing_stream(
                 debug, label="TEST_RESULT", handoff=False, flags={"button_side_answer"}, context_action="continue"
             ),
         )
-        expects.finish_turn(state, side)
+        _finish_turn(state, memory, side)
         memory.append_turn(state, role="user", text=said)
         memory.append_turn(state, role="assistant", text=side.text)
         update_summary(state, reason="normal")
@@ -4443,7 +4466,7 @@ async def patient_routing_stream(
         if precheck.handoff:
             clear_on_handoff(state, memory)
         precheck = _maybe_offer_operator_on_reask_limit(precheck, state, memory)
-        expects.finish_turn(state, precheck)
+        _finish_turn(state, memory, precheck)
         yield precheck
         return
 
@@ -4503,7 +4526,7 @@ async def patient_routing_stream(
     address_flow.finish_turn(state)  # метка адресной кнопки — следующей реплике (`address_branch_flags`)
     button_flow.finish_leaf(state)  # метка листа без своего вопроса — следующей реплике (`frame`)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
-    expects.finish_turn(state, response)
+    _finish_turn(state, memory, response)
 
     memory.append_turn(state, role="user", text=said)
     memory.append_turn(state, role="assistant", text=response.text)
