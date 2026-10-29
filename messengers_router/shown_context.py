@@ -136,11 +136,15 @@ def parsed_input(phrases: str) -> None:
 def sync_prepare(state: SessionState, payload: dict[str, Any]) -> None:
     """Ответ подготовки после фразы разбора в слоте (`parsed_input`): контекст — показанные памятки МИС (`prepare_shown`; названия
     карточек справочника — услуги клиники): одна — она (`remember`), несколько или ни одной (памятка базы знаний, общая памятка,
-    «памятки нет») — без единственной услуги. Без фразы разбора в слоте — как было: подготовка контекст не пишет."""
+    «памятки нет») — без единственной услуги. Без фразы разбора в слоте — как было: подготовка контекст не пишет. Ответ — вопрос
+    бота о том же предмете («с наркозом или без?», `prepare_variants`): разговор о предмете не закончен, фраза — вход висящего
+    вопроса и остаётся (стенд 30.10, `yn_prep_offer_davai`: без неё «давай» на вопрос о наркозе теряло колоноскопию)."""
 
     if not _PARSED.get() or _norm(str(state.last_entities.get("service_name") or "")) != _PARSED.get():
         return
     _PARSED.set("")
+    if isinstance(payload.get("prepare_variants"), dict):
+        return
     names = [str(name) for name in payload.get("prepare_shown") or [] if str(name or "").strip()]
     remember(state, names)
     if len(names) != 1:

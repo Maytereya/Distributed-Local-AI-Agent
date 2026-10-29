@@ -298,6 +298,23 @@ def test_end_of_turn_drops_only_the_unshown_phrase():
     assert state.last_entities["service_name"] == "Папилломавирус 16/18 (колич.)" and shown_context.SHOWN_KEY not in state.last_entities
 
 
+def test_bot_question_about_the_same_subject_keeps_it():
+    """Ответ подготовки — вопрос бота о том же предмете («с наркозом или без?»): фраза разбора остаётся входом висящего вопроса и
+    конец хода её не снимает (стенд 30.10, `yn_prep_offer_davai`: «как подготовиться к колоноскопии» → вопрос о наркозе → «давай» —
+    без предмета «Хорошо, пишите» вместо оффера оператора)."""
+
+    from messengers_router import shown_context
+    from messengers_router.mess_types import SessionState
+
+    state = SessionState(session_id="s")
+    shown_context.begin_turn(state)
+    state.last_entities["service_name"] = "Колоноскопии"
+    shown_context.parsed_input("колоноскопии")
+    shown_context.sync_prepare(state, {"prepare": "Исследование будет с наркозом или без?", "prepare_variants": {"with": "А", "without": "Б"}})
+    shown_context.finish_turn(state)
+    assert state.last_entities["service_name"] == "Колоноскопии" and shown_context.SHOWN_KEY not in state.last_entities
+
+
 @pytest.mark.parametrize("dialog", ["P1", "P1_HAVE"])
 def test_char_dialogs_p1_hold_under_on(dialog, d21_world, monkeypatch):  # noqa: F811
     """Диалоги П-1 сетки деплоя 22 (`tests/test_two_turn_shown_context_class.py`, xfail strict Н-1 под конфигом деплоя 21) под
