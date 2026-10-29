@@ -236,6 +236,7 @@ class MessengerRouterConfig:
     pending_in_frame: str
     price_not_found_by_data: str
     frame_policy: str
+    shown_by_id: str
     expects_by_understanding: str
     insurance_topic: str
     price_select_named: str
@@ -810,6 +811,10 @@ settings = Settings(
         # темой (Д3); срочное, перевод на оператора, существующая и идущая запись (`overrides`) — как всегда
         # (STEP-2026-10-30-FRAME-POLICY, Н-2). off — как было. [MESSENGER_ROUTER] frame_policy
         frame_policy=_get_enum("MESSENGER_ROUTER", "frame_policy", default="off", allowed={"off", "on"}),
+        # Показанное прошлым ответом — строки прайса по `serviceId`, а не названия: у одного названия бывает несколько строк с
+        # разной ценой, и «а сколько стоит?» отвечало ценой первой строки прайса (BUG-2026-10-30-SHOWN-BY-NAME). off — как было.
+        # [MESSENGER_ROUTER] shown_by_id
+        shown_by_id=_get_enum("MESSENGER_ROUTER", "shown_by_id", default="off", allowed={"off", "on"}),
         # «Продолжает ли реплика висящий вопрос» решает одно решение хода — одна функция ответа (`pending_answer`, исход судьи);
         # правила предпроверки записи, prelock, переклеек записи и планировщика — только сужение структурного ответа и путь при
         # сбое LLM. Оффер оператора не ставится вопросом поверх вопроса бота: первый повтор — необязывающая строка, второй шаг
@@ -1039,6 +1044,7 @@ MR_BUTTON_FRAME_CHECK = settings.messenger_router.button_frame_check
 MR_PENDING_IN_FRAME = settings.messenger_router.pending_in_frame
 MR_PRICE_NOT_FOUND_BY_DATA = settings.messenger_router.price_not_found_by_data
 MR_FRAME_POLICY = settings.messenger_router.frame_policy
+MR_SHOWN_BY_ID = settings.messenger_router.shown_by_id
 MR_EXPECTS_BY_UNDERSTANDING = settings.messenger_router.expects_by_understanding
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named

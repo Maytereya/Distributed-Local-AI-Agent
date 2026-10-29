@@ -98,7 +98,7 @@ def loose_qualifier(text: str) -> bool:
 def number_is_choice(text: str) -> bool:
     """Число — номер из показанного прошлым ответом, а не код услуги (находка № 8 дизайна): «1» после списка цен — первая
     строка списка, а не услуга с кодом 1 (коды 1–20 в прайсе все заняты). Мерило — данные хода: ответ показал пациенту
-    столько строк (`shown_context.previous()`), и число не больше их числа."""
+    столько строк (`shown_context.shown_count()`), и число не больше их числа."""
 
     raw = str(text or "").strip()
-    return raw.isdigit() and 0 < int(raw) <= len(shown_context.previous())
+    return raw.isdigit() and 0 < int(raw) <= shown_context.shown_count()

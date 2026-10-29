@@ -986,10 +986,11 @@ async def _compound_prices_for_each(
     услуги — её обычным путём (как на выбор одного пункта), ответы — подряд. Какая-то не дала ответа или ведёт к переводу —
     None: дальше, как было (первая услуга)."""
 
-    from .shown_context import SHOWN_KEY
+    from .shown_context import SHOWN_IDS_KEY, SHOWN_KEY, by_id_on
 
     texts: list[str] = []
     shown: list[str] = []
+    shown_ids: list[str] = []
     last: RouteDecision | None = None
     for service_name in chosen:
         memory.merge_entities(state, {"service_name": service_name}, label="PRICE")
@@ -1011,6 +1012,7 @@ async def _compound_prices_for_each(
             return None  # нет цены, перевод или встречный вопрос (город, уточнение) — по одной, как было
         texts.append(str(env.text).strip())
         shown.extend(str(name) for name in state.last_entities.get(SHOWN_KEY) or () if str(name or "").strip())
+        shown_ids.extend(str(rid) for rid in state.last_entities.get(SHOWN_IDS_KEY) or () if str(rid or "").strip())
         last = decision
     if last is None:
         return None
@@ -1020,6 +1022,11 @@ async def _compound_prices_for_each(
     state.last_entities.pop("secondary_intents", None)
     # Контекст = показанное (решение владельца 14.10): показаны обе услуги — одной «услуги контекста» нет.
     state.last_entities[SHOWN_KEY] = list(dict.fromkeys(shown))
+    if by_id_on():  # строки обеих услуг — по `serviceId` (BUG-2026-10-30-SHOWN-BY-NAME)
+        if shown_ids:
+            state.last_entities[SHOWN_IDS_KEY] = list(dict.fromkeys(shown_ids))
+        else:
+            state.last_entities.pop(SHOWN_IDS_KEY, None)
     state.last_entities.pop("service_name", None)
     state.last_entities.pop("test_name", None)
     return last, Plan(label="PRICE"), Evidence(items={ek.COMPOUND_PRICE_RESPONSE: {"text": "\n\n".join(texts)}})
@@ -4230,11 +4237,16 @@ async def _answer_branch_side_question(
         if not booking_price or (booking_specialty and not _price_rows_of_specialty(ctx.evidence, booking_specialty)):
             return None
     from . import renderer
-    from .shown_context import SHOWN_KEY, remember
+    from .shown_context import SHOWN_IDS_KEY, SHOWN_KEY, by_id_on, remember
 
     answer_text = str(response.text).strip()
     if SHOWN_KEY in scratch.last_entities:  # что пациент увидел в побочном ответе — контекст следующего хода
         state.last_entities[SHOWN_KEY] = scratch.last_entities[SHOWN_KEY]
+        if by_id_on():
+            if SHOWN_IDS_KEY in scratch.last_entities:
+                state.last_entities[SHOWN_IDS_KEY] = scratch.last_entities[SHOWN_IDS_KEY]
+            else:
+                state.last_entities.pop(SHOWN_IDS_KEY, None)
     if decision.label == "PRICE" and booking_specialty:
         # Несколько строк приёма специальности — все со своими ценами, а не первая строка и врачи (решение 25.09 №2,
         # BUG-2026-10-20-BRANCH-SIDE-PRICE-ONE-ROW): у невролога первичный приём стоит 3 000, 6 500 и 20 000 у разных
@@ -4242,7 +4254,8 @@ async def _answer_branch_side_question(
         rows = await _booking_consult_price_rows(booking_specialty)
         if len(rows) > 1:
             answer_text = renderer.format_consult_price_rows(rows)
-            remember(state, [str(row.get("serviceName") or "") for row in rows])
+            ids = [str(row.get("serviceId") or "") for row in rows if str(row.get("serviceId") or "").strip()] if by_id_on() else None
+            remember(state, [str(row.get("serviceName") or "") for row in rows], ids)
     # Вопрос о филиале — прежний: в поле ожидания его текст со списком записи, не текст побочного ответа (в ответе о
     # часах — свой нумерованный список филиалов города, BUG-2026-10-20-BRANCH-AFTER-SIDE-FOREIGN).
     expects.keep_asking()

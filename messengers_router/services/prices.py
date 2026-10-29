@@ -490,15 +490,9 @@ def _rows_shown_before(query: str, rows: list[dict[str, Any]]) -> list[dict[str,
     этими строками, а не семейством по названию из контекста (находка 4: после одной строки «Глюкоза» повтор
     показывал «Глюкозу в моче» и «в синовиальной жидкости»). None — прежний путь."""
 
-    shown = shown_context.previous()
-    if not shown or not _names_no_service(query):
+    if not shown_context.previous() or not _names_no_service(query):
         return None
-    by_name: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        name = str(row.get("serviceName") or row.get("name") or "").strip() if isinstance(row, dict) else ""
-        by_name.setdefault(name, row)
-    found = [by_name[name] for name in shown if name in by_name]
-    return found or None
+    return shown_context.rows_shown(rows) or None  # одна точка: по `serviceId` под `shown_by_id`, иначе по названию
 
 
 def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]], *, reply: str = "") -> str:

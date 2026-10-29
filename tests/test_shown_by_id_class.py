@@ -68,33 +68,36 @@ def test_fixture_price_has_duplicate_names_with_different_prices() -> None:
     assert set(_GENERAL) <= set(_groups())
 
 
-@pytest.mark.xfail(strict=True, reason=_BUG)
+@pytest.mark.parametrize("switch", [pytest.param("off", marks=pytest.mark.xfail(strict=True, reason=_BUG)), "on"])
 @pytest.mark.parametrize("name", sorted(_groups()))
-def test_followup_after_both_rows_answers_every_shown_price(d21_world, monkeypatch, name: str) -> None:  # noqa: F811
+def test_followup_after_both_rows_answers_every_shown_price(d21_world, monkeypatch, name: str, switch: str) -> None:  # noqa: F811
     rows = _groups()[name]
-    record = uc.run(d21_world, monkeypatch, [uc.say(f"сколько стоит {name.lower()}", services=(name.lower(),)), _FOLLOWUP])
+    turns = [uc.say(f"сколько стоит {name.lower()}", services=(name.lower(),)), _FOLLOWUP]
+    record = uc.run(d21_world, monkeypatch, turns, cfg={"MR_SHOWN_BY_ID": switch})
     shown = _shown_costs(record[0]["text"], rows)
     assert shown == {row["cost"] for row in rows}, record[0]["text"]  # предусловие: пациент видел все строки названия
     assert _shown_costs(record[1]["text"], rows) == shown, record[1]["text"]
 
 
 @pytest.mark.parametrize(
-    "name, index",
+    "name, index, switch",
     [
-        pytest.param(name, k, id=f"{phrase}-{k}", marks=() if k == 0 else pytest.mark.xfail(strict=True, reason=_BUG))
+        pytest.param(name, k, switch, id=f"{phrase}-{k}-{switch}", marks=pytest.mark.xfail(strict=True, reason=_BUG) if k and switch == "off" else ())
         for name, phrase in sorted(_GENERAL.items())
         for k in range(len(_groups().get(name, ())))
+        for switch in ("off", "on")
     ],
 )
-def test_followup_after_one_shown_row_answers_its_price(d21_world, monkeypatch, name: str, index: int) -> None:  # noqa: F811
-    """Выбор LLM показал одну строку группы — «а сколько стоит?» отвечает её ценой. Первая в прайсе проходит случайно
-    (`setdefault` берёт её), остальные — чужая цена."""
+def test_followup_after_one_shown_row_answers_its_price(d21_world, monkeypatch, name: str, index: int, switch: str) -> None:  # noqa: F811
+    """Выбор LLM показал одну строку группы — «а сколько стоит?» отвечает её ценой. Под off первая в прайсе проходит случайно
+    (`setdefault` берёт её), остальные — чужая цена; под `shown_by_id = on` — каждая своей."""
 
     rows = _groups()[name]
     row = rows[index]
     pick = uc.picked(f"{name} — {int(row['cost'])} руб.")
     phrase = _GENERAL[name]
-    record = uc.run(d21_world, monkeypatch, [uc.say(f"сколько стоит {phrase}", services=(phrase,), choices={"price_service_general": pick}), _FOLLOWUP])
+    turns = [uc.say(f"сколько стоит {phrase}", services=(phrase,), choices={"price_service_general": pick}), _FOLLOWUP]
+    record = uc.run(d21_world, monkeypatch, turns, cfg={"MR_SHOWN_BY_ID": switch})
     assert "choose_price_service_general" in record[0]["asked"]
     assert _shown_costs(record[0]["text"], rows) == {row["cost"]}, record[0]["text"]  # предусловие: показана ровно эта строка
     assert _shown_costs(record[1]["text"], rows) == {row["cost"]}, record[1]["text"]
