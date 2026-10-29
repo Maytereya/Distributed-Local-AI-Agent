@@ -1713,6 +1713,22 @@ _GROUNDER_REJECTED_SLOT_FLAGS: dict[str, frozenset[str]] = {
 }
 
 
+async def _service_slot_from_parse(quick: dict[str, Any], label: str, user_text: str, *, missing: list[str]) -> dict[str, Any]:
+    """Слот-услуга, которого не хватает ходу, — под `pending_in_frame` из разбора хода, как у грундера
+    (`turn_understanding.service_slot`, Д3-слот), а не из слов реплики: «а как к нему подготовиться?» — показанная услуга,
+    а не «Нему подготовиться»; «а что нужно перед ним?» — тоже она, а не переспрос. Пусто — слот не пишется. off — как было."""
+
+    if "service_name" not in quick and not any("service_name" in str(rule) for rule in missing):
+        return quick
+    parsed = await turn_understanding.service_slot(label, user_text)
+    if parsed is None:
+        return quick
+    if parsed:
+        return {**quick, "service_name": parsed}
+    turn_telemetry.note(tu_slot_dropped="quick_fill")
+    return {k: v for k, v in quick.items() if k != "service_name"}
+
+
 def _suppress_grounder_rejected_slots(
     quick: dict[str, Any] | None,
     decision_flags: set[str] | frozenset[str] | None,
@@ -3915,6 +3931,8 @@ async def _complete_route_after_doctor_guard(
             if quick_now:
                 quick_now = await _sanitize_doctor_in_entities(quick_now, services, label=decision.label)
                 quick_now = _suppress_grounder_rejected_slots(quick_now, decision.flags)
+            quick_now = await _service_slot_from_parse(quick_now or {}, decision.label, user_text, missing=missing_now)
+            if quick_now:
                 memory.merge_entities(state, quick_now, label=decision.label)
         elif decision.label == "APPOINTMENT" and state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
             # В активном сценарии записи продолжаем извлекать филиал/дату/время
