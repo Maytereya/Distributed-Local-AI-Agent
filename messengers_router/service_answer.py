@@ -304,12 +304,30 @@ async def _ask(question: str, facts: Sequence[Fact], *, exact: bool = False) -> 
     return Verdict(NO_DATA), picked.terms  # вопрос о клинике, ни один пункт ответа не держит
 
 
-async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = (), exact: bool = False) -> Verdict:
-    """Что ответить на вопрос о клинике по её данным (`exact` — без исхода «похожее» пациенту). Сбой LLM — FAILED: что делать,
-    решает вызывающий."""
+def turn_parse_terms(question: str) -> tuple[list[str], list[dict[str, Any]]]:
+    """Фразы-услуги и их сильные строки прайса из разбора хода (`turn_parse`) — кандидаты первого круга поиска фактов: слова
+    реплики целиком («У вас есть чекап для мужчин 60+? Что входит и какая цена?») находят не те строки, а фраза разбора
+    («чекап для мужчин») — те (STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA: ложное «нет данных» у g0440, g0380, g0369). Разбора этой
+    реплики нет или он не решён — пусто, поиск по реплике, как было."""
+
+    from . import turn_understanding
+
+    parse = turn_understanding.parse_for(question)  # единственный вход читателей в разбор хода
+    if parse is None:
+        return [], []
+    texts = list(dict.fromkeys(t for t in ((p.full or p.text).strip() for p in parse.items) if t))
+    rows = [row for p in parse.items for row in p.rows if isinstance(row, dict)]
+    return texts, rows
+
+
+async def decide(
+    question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = (), exact: bool = False, terms: Sequence[str] = ()
+) -> Verdict:
+    """Что ответить на вопрос о клинике по её данным (`exact` — без исхода «похожее» пациенту; `terms` — фразы-услуги разбора
+    хода, поиск первого круга — по ним и по реплике). Сбой LLM — FAILED: что делать, решает вызывающий."""
 
     spent_before = llm_runtime.turn_decisions_spent()
-    facts = await gather_facts(question, first_rows=first_rows)
+    facts = await gather_facts(question, texts=[*terms, question] if terms else (), first_rows=first_rows)
     verdict, terms = await _ask(question, facts, exact=exact)
     rounds = 1
     if verdict.kind == NO_DATA and terms:

@@ -90,3 +90,21 @@ def test_price_that_answered_or_failed_to_parse_is_not_given_up(payload, monkeyp
     decision = RouteDecision(label="PRICE", confidence=0.9)
     assert not service_answer.price_gave_up(decision, _price(payload))
     assert service_answer.price_gave_up(decision, _price({"prices": [], "note": "price_match_policy: none_fit", "clarify_text": "x"}))
+
+
+def test_first_round_candidates_come_from_the_turn_parse(monkeypatch):
+    """Кандидаты первого круга — фразы-услуги разбора хода и их строки, а не только слова реплики целиком."""
+
+    from messengers_router import turn_parse
+    from messengers_router.turn_parse import ParsedPhrase, ParseStatus, PhraseParse
+
+    question = "У вас есть чекап для мужчин 60+? Что входит и какая цена?"
+    row = {"serviceId": 1, "serviceName": "Мужской чекап"}
+    parse = PhraseParse(
+        reply=question, status=ParseStatus.PICKED, source="llm",
+        items=(ParsedPhrase(text="чекап для мужчин", start=10, end=26, strength="weak", rows=(row,), full="чекап для мужчин 60+"),),
+    )
+    monkeypatch.setattr(turn_parse, "phrases_now", lambda: parse)
+    terms, rows = service_answer.turn_parse_terms(question)
+    assert terms == ["чекап для мужчин 60+"] and rows == [row]
+    assert service_answer.turn_parse_terms("другая реплика") == ([], [])  # разбор не этой реплики — поиск по реплике, как было
