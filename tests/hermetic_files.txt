@@ -246,3 +246,4 @@ tests/test_service_answer_no_similar_class.py
 tests/test_spans_oracle.py
 tests/test_understanding_contract_class.py
 tests/test_two_turn_shown_context_class.py
+tests/test_button_frame_phrases_d21.py
