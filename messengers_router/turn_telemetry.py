@@ -14,7 +14,7 @@
 - `label`, `decision_source` (как подписал NLU), `nlu_llm` — звалась ли LLM-классификация
   на этом ходе (подпись `llm_primary` у решения правила врёт — DEBT-1, поэтому факт вызова
   пишется отдельно), `rule` — первый флаг `rule_*`;
-- `nlu_src` — кто решил тему на уровне NLU: `rule` (ветка правила `legacy_v2` или guardrail `llm_primary`; `nlu_rule` —
+- `nlu_src` — кто решил тему на уровне NLU: `rule` (ветка правила `legacy_v2`; `nlu_rule` —
   флаги ветки, без PII и вторичных намерений) или `llm` (правило не сработало — LLM-классификатор); замер хода (б), 20.10;
 - ход (б), телеметрия до этапа 2 (консилиум 20.10 §4): `tu_label_nlu` — метка сразу после NLU, `tu_label_final` — с которой
   ход ответил (разница — переклейки после NLU, `tu_relabel_src`); `tu_understanding_src` — услуги ценового хода взяты из
@@ -22,8 +22,6 @@
   `llm_bypass` | `k3` | `none`); `tu_p2_verdict` — вердикт суда П2 (`none` — суда не было); `input_not_reply` /
   `input_no_parse` — сколько раз читатель цены получил вход не из разбора этой реплики (путь правил K1–K3);
   `tu_relabel_src` — сработавшие строки таблицы политик темы (`topic_policy`), `<строка>:<было>><стало>`, по порядку;
-- `nlu_fallback = rules` и `nlu_fail` (`unavailable` | `invalid`) — под `llm_primary` разбор LLM не состоялся и ход решили
-  правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
 - `nlu_timeout_s` — LLM-классификатор не уложился в потолок `classifier_timeout_s` (очередь и генерация вместе), значение —
   потолок; ход пошёл путём сбоя LLM (BUG-2026-10-27-CLASSIFIER-NO-TIMEOUT);
 - нагрузка LLM (BUG-2026-10-27-LLM-QUEUE-GIVES-UP): `llm_deadline_s` — дедлайн хода (`llm_turn_deadline_s`), `llm_deadline_hit` —

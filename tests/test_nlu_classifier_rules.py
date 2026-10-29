@@ -1,13 +1,15 @@
+"""Разбор NLU без движка `llm_primary` (снят 29.10, К2): правила классификатора, заглушка сбоя LLM, уточнение, debug.
+
+Файл до 29.10 — `tests/test_llm_primary_nlu.py`; тесты выбора движка и guardrail `llm_primary` сняты вместе с движком.
+"""
+
 import asyncio
-import inspect
 import logging
 
 import pytest
 
 from messengers_router import classifier
-from messengers_router.llm_mode_policy import normalize_runtime_options
 from messengers_router.mess_types import RouteDecision, SessionState
-from messengers_router.nlu_pipeline import NLUResult, NLUCandidate, analyze_with_candidates
 from messengers_router.recovery_policy import evaluate_recovery
 from messengers_router.router import _debug_meta
 from messengers_router.mess_types import Evidence, Plan
@@ -15,15 +17,6 @@ from messengers_router.mess_types import Evidence, Plan
 
 def run(coro):
     return asyncio.run(coro)
-
-
-def test_guardrail_precheck_is_sync():
-    decision = classifier.guardrail_precheck("привет", {})
-
-    assert not inspect.iscoroutinefunction(classifier.guardrail_precheck)
-    assert decision is not None
-    assert decision.label == "OTHER"
-    assert "smalltalk_greeting" in decision.flags
 
 
 def test_ollama_classify_payload_logs_failure(monkeypatch, caplog):
@@ -39,61 +32,6 @@ def test_ollama_classify_payload_logs_failure(monkeypatch, caplog):
     assert data["label"] == "OTHER"
     assert "ollama_timeout" in data["flags"]
     assert "ollama_classify_failed" in caplog.text
-
-
-def test_llm_primary_engine_used_when_enabled(monkeypatch):
-    async def fake_llm_primary(text, state, runtime_options=None):
-        _ = text, state, runtime_options
-        return NLUResult(
-            decision=RouteDecision(
-                label="PRICE",
-                confidence=0.83,
-                entities={"service_name": "УЗИ брюшной полости"},
-                flags={"llm_primary"},
-                source="llm_primary",
-                clarify_needed=False,
-            ),
-            candidates=[NLUCandidate(source="llm_primary", label="PRICE", confidence=0.83)],
-            merged_from="llm_primary",
-            trace={"final_decision": {"label": "PRICE", "source": "llm_primary"}},
-        )
-
-    async def fake_legacy(text, state, runtime_options=None):
-        _ = text, state, runtime_options
-        raise AssertionError("legacy engine should not be used")
-
-    monkeypatch.setattr("messengers_router.nlu_pipeline.c.MR_NLU_ENGINE", "llm_primary")
-    monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_llm_primary_with_candidates", fake_llm_primary)
-    monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_legacy_with_candidates", fake_legacy)
-
-    state = SessionState(session_id="llm-primary")
-    out = run(analyze_with_candidates("сколько стоит узи", state, normalize_runtime_options(llm_mode="hybrid")))
-
-    assert out.decision.label == "PRICE"
-    assert out.decision.source == "llm_primary"
-
-
-def test_strict_mode_forces_legacy_engine(monkeypatch):
-    async def fake_llm_primary(text, state, runtime_options=None):
-        _ = text, state, runtime_options
-        raise AssertionError("llm_primary engine should not be used in strict mode")
-
-    async def fake_legacy(text, state, runtime_options=None):
-        _ = text, state, runtime_options
-        return NLUResult(
-            decision=RouteDecision(label="OTHER", confidence=0.4, source="fallback"),
-            candidates=[NLUCandidate(source="legacy", label="OTHER", confidence=0.4)],
-            merged_from="legacy",
-        )
-
-    monkeypatch.setattr("messengers_router.nlu_pipeline.c.MR_NLU_ENGINE", "llm_primary")
-    monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_llm_primary_with_candidates", fake_llm_primary)
-    monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_legacy_with_candidates", fake_legacy)
-
-    state = SessionState(session_id="strict")
-    out = run(analyze_with_candidates("привет", state, normalize_runtime_options(llm_mode="strict")))
-
-    assert out.decision.source == "fallback"
 
 
 def test_structured_slot_request_recovery():

@@ -13,7 +13,7 @@
 
 - Интенты: `APPOINTMENT`, `DOCTOR_SCHEDULE`, `DOCTOR_INFO`, `PRICE`, `ADDRESS`, `TEST_ASSIST`, `TEST_RESULT`, `PREPARE`, `NEWS`, `OTHER`, `URGENT`, `COMPLAINT`, `MEDICAL_ADVICE`.
 - Stateful-диалог: память сессии, pending-слоты, подтверждение/отмена записи, topic-switch guardrails.
-- NLU v2 pipeline с feature flags (`legacy_v2` / `llm_primary`) и debug trace.
+- NLU-пайплайн `legacy_v2` (правило, иначе разбор LLM) и debug trace.
 - Entity grounding перед merge в state.
 - Детерминированная сборка ответов через `response_builder.py`.
 - Handoff-политики для high-risk сценариев.

@@ -65,7 +65,7 @@ tests/test_lab_visit_timing.py
 tests/test_llama_schedule_cache.py
 tests/test_llm_connect_diag.py
 tests/test_llm_name_cache.py
-tests/test_llm_primary_nlu.py
+tests/test_nlu_classifier_rules.py
 tests/test_llm_runtime_hygiene.py
 tests/test_llm_structured.py
 tests/test_memory_dialog_state.py
@@ -189,7 +189,6 @@ tests/test_pending_buttons_class.py
 tests/test_clarify_code_leak_class.py
 tests/test_switch_bench_sets.py
 tests/test_basket_weak_phrase_judge_class.py
-tests/test_llm_primary_rules_fallback_class.py
 tests/test_prepare_subject_class.py
 tests/test_branch_side_price_class.py
 tests/test_branch_answer_after_side_class.py

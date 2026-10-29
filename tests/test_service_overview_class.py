@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_service_answer_class import _classifier, _number_of, answer_world  # noqa: F401
 from tests.test_service_answer_class import turn as _svc_turn
 

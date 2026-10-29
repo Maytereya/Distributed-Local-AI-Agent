@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from tests.test_llm_primary_rules_fallback_class import _down, _turn
+from tests._llm_helpers import _down, _turn
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _TEST_ASSIST = "есть ли у вас анализ на ферритин"
@@ -27,7 +27,7 @@ def _run(world, monkeypatch, reply: str, *, rules: str, answer) -> dict:
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_TOPIC_BY_LLM", rules, raising=False)
-    return _turn(world, monkeypatch, reply, engine="legacy_v2", fallback="off", answer=answer)
+    return _turn(world, monkeypatch, reply, answer=answer)
 
 
 def test_empty_switch_keeps_rule_without_llm(mini_prod_world, monkeypatch):  # noqa: F811

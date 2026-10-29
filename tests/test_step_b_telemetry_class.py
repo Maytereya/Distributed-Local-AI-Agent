@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 
-from tests.test_llm_primary_rules_fallback_class import _turn
+from tests._llm_helpers import _turn
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _LLM_ANSWER = json.dumps({"label": "OTHER", "confidence": 0.9, "context_action": "new_topic", "entities": {}})
@@ -31,7 +31,7 @@ _REPLIES = (
 
 
 def _tel(world, monkeypatch, reply: str, spans: tuple[str, ...] | None = None) -> dict:
-    return _turn(world, monkeypatch, reply, engine="legacy_v2", fallback="off", answer=_LLM_ANSWER, spans=spans)["telemetry"]
+    return _turn(world, monkeypatch, reply, answer=_LLM_ANSWER, spans=spans)["telemetry"]
 
 
 def test_every_nlu_turn_has_label_after_nlu_and_final(mini_prod_world, monkeypatch):  # noqa: F811

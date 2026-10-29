@@ -12,31 +12,27 @@ import asyncio
 import json
 from typing import Any
 
-import pytest
 
 from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime
 from tests.test_booking_slots_by_meaning import _LLM
-from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
+from tests._llm_helpers import _CLASSIFIER_MARK
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _LLM_ANSWER = json.dumps({"label": "OTHER", "confidence": 0.9, "context_action": "new_topic", "entities": {}})
 
 
-def _turn(world_dir, monkeypatch, reply: str, *, engine: str) -> dict[str, Any]:
+def _turn(world_dir, monkeypatch, reply: str) -> dict[str, Any]:
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
-    from messengers_router.runtime_config import config as cfg
     from messengers_router.services import Services
 
     async def run() -> dict[str, Any]:
-        req = MessengerGenerateRequest(session_id=f"intent-{engine}-{reply}", text=reply, debug=True)
+        req = MessengerGenerateRequest(session_id=f"intent-{reply}", text=reply, debug=True)
         body = json.loads((await messenger_generate_once(req, memory=MemoryStore(), services=Services())).body)
         return (body.get("state_update") or {}).get("debug") or {}
 
     with ev_world.FrozenWorld(world_dir, "day") as world, monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_NLU_ENGINE", engine, raising=False)
-        patch.setattr(cfg, "MR_LLM_PRIMARY_RULES_FALLBACK", "on", raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM({_CLASSIFIER_MARK: _LLM_ANSWER}))
         choice._CACHE.clear()
@@ -57,11 +53,10 @@ _REPLIES = (
 )
 
 
-@pytest.mark.parametrize("engine", ["legacy_v2", "llm_primary"])
-def test_intent_is_built_once_after_nlu_and_matches_the_plan(engine, mini_prod_world, monkeypatch):  # noqa: F811
+def test_intent_is_built_once_after_nlu_and_matches_the_plan(mini_prod_world, monkeypatch):  # noqa: F811
     seen = 0
     for reply in _REPLIES:
-        out = _turn(mini_prod_world, monkeypatch, reply, engine=engine)
+        out = _turn(mini_prod_world, monkeypatch, reply)
         tel = out["telemetry"]
         assert "tu_intent_mismatch" not in tel, (reply, tel)
         if "tu_label_nlu" not in tel:

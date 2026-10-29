@@ -65,7 +65,6 @@ from .policies import (
     low_confidence_policy,
     extract_service_phrase,
     extract_specialty,
-    missing_slots,
     service_name_conflicts_with_doctor,
     detect_unsupported_catalog,
     detect_specific_lab_code_intent,
@@ -82,7 +81,6 @@ _INVALID_DOCTOR_TOKEN_RE = re.compile(
 )
 _REFINE_INTENTS = {"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
 _REFINE_SIGNAL_RE = re.compile(r"\b(передумал\w*|передумала\w*|лучше|или|а\s+если|а\s+вот|уточн\w*)\b", re.I)
-_ALLOWED_CLARIFY_REASONS = {"", "intent_disambiguation", "slot_request", "context_repair", "low_confidence"}
 _PATIENT_NAME_ONLY_RE = re.compile(r"^\s*[А-ЯЁа-яё\-]{2,}(?:\s+[А-ЯЁа-яё\-]{2,}){1,2}\s*$")
 _PATIENT_NAME_STOPWORDS = {
     "анализ",
@@ -291,24 +289,6 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
 
 # Пометки ответа-заглушки `ollama_classify_payload`: разбора LLM не было.
 _LLM_FAILURE_FLAGS = frozenset({"ollama_timeout", "ollama_non_json"})
-
-
-def classify_payload_failure(raw_text: str, data: dict[str, Any]) -> str | None:
-    """Вид сбоя разбора классификатора: `unavailable` (вызов не состоялся — недоступна, таймаут, бюджет хода,
-    предохранитель), `invalid` (ответ не JSON или метка вне контракта) или None — LLM ответила внятно.
-
-    Санитайзер молча превращает метку вне контракта в OTHER — такой «ответ» неотличим от настоящего OTHER, поэтому
-    метку проверяем по сырому тексту модели.
-    """
-    flags = _normalize_flags(data.get("flags"))
-    if "ollama_timeout" in flags:
-        return "unavailable"
-    if "ollama_non_json" in flags:
-        return "invalid"
-    obj = _extract_json(raw_text)
-    if not isinstance(obj, dict) or obj.get("label") not in PATIENT_LABEL_PRIORITY:
-        return "invalid"
-    return None
 
 
 async def ollama_classify_json(prompt: str, *, queue_timeout_ms: int = 30000) -> dict[str, Any]:
@@ -815,36 +795,6 @@ def _normalize_context_action(x: Any) -> ContextAction:
     return cast(ContextAction, "continue")
 
 
-def _normalize_clarify_reason(x: Any) -> str:
-    if isinstance(x, str) and x in _ALLOWED_CLARIFY_REASONS:
-        return x
-    return ""
-
-
-def _normalize_intent_candidates(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        label = item.strip()
-        if label in PATIENT_LABEL_PRIORITY and label not in out:
-            out.append(label)
-    return out[:4]
-
-
-def _normalize_clarify_slots(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    for item in value:
-        slot = str(item or "").strip()
-        if slot and slot not in out:
-            out.append(slot)
-    return out[:8]
-
-
 def _derive_context_action(
     text: str,
     label: Label,
@@ -968,214 +918,6 @@ def _build_unsupported_catalog_decision(text: str, local_flags: set[str]) -> Rou
         context_action="continue",
         source="guardrail",
     )
-
-
-def guardrail_precheck(
-    text: str,
-    last_entities: dict[str, Any],
-    *,
-    flags: set[str] | None = None,
-) -> RouteDecision | None:
-    """Hard-gated guardrails до запуска primary LLM NLU."""
-    local_flags: set[str] = set(flags or set())
-    local_flags |= detect_pii(text)
-
-    if _is_smalltalk_greeting(text):
-        return RouteDecision(
-            label="OTHER",
-            confidence=0.99,
-            entities={},
-            flags=local_flags | {"smalltalk_greeting"},
-            needs_handoff=False,
-            context_action="continue",
-            source="guardrail",
-        )
-    if detect_urgent(text):
-        return RouteDecision(
-            label="URGENT",
-            confidence=1.0,
-            entities={},
-            flags=local_flags | {"urgent"},
-            needs_handoff=True,
-            context_action="new_topic",
-            source="guardrail",
-        )
-    if detect_complaint(text):
-        return RouteDecision(
-            label="COMPLAINT",
-            confidence=1.0,
-            entities={},
-            flags=local_flags | {"complaint"},
-            needs_handoff=True,
-            context_action="new_topic",
-            source="guardrail",
-        )
-    if detect_medical_advice(text) or detect_test_interpretation(text):
-        return RouteDecision(
-            label="MEDICAL_ADVICE",
-            confidence=1.0,
-            entities={},
-            flags=local_flags | {"medical_advice"},
-            needs_handoff=True,
-            context_action="new_topic",
-            source="guardrail",
-        )
-    unsupported = _build_unsupported_catalog_decision(text, local_flags)
-    if unsupported is not None:
-        return unsupported
-    if detect_doc_request_intent(text):
-        doc_kind = "tax" if detect_tax_doc_request_intent(text) else "generic"
-        kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
-        return RouteDecision(
-            label="OTHER",
-            confidence=CONFIDENCE.rule_hardcode,
-            entities={"doc_request_kind": doc_kind},
-            flags=local_flags | {"doc_request_main_index", kind_flag},
-            needs_handoff=False,
-            context_action="new_topic",
-            source="guardrail",
-        )
-    _ = last_entities
-    return None
-
-
-def _postprocess_primary_decision(
-    text: str,
-    last_entities: dict[str, Any],
-    data: dict[str, Any],
-) -> RouteDecision:
-    label = _normalize_label(data.get("label"))
-    conf = _normalize_confidence(data.get("confidence"))
-    entities = _sanitize_entities(data.get("entities"))
-    turn_names.note_llm(text, entities, failed=bool(_normalize_flags(data.get("flags")) & _LLM_FAILURE_FLAGS))
-    flags = _normalize_flags(data.get("flags")) | detect_pii(text)
-    context_action = _normalize_context_action(data.get("context_action"))
-    clarify_needed = bool(data.get("clarify_needed"))
-    clarify_reason = _normalize_clarify_reason(data.get("clarify_reason"))
-    clarify_slots = _normalize_clarify_slots(data.get("clarify_slots"))
-    intent_candidates = _normalize_intent_candidates(data.get("intent_candidates"))
-
-    if not entities.get("order_id"):
-        oid = _extract_order_id(text)
-        if oid:
-            entities["order_id"] = oid
-
-    if label == "TEST_RESULT" and not entities.get("result_action"):
-        t = text.lower()
-        entities["result_action"] = "get_pdf" if ("pdf" in t or "пдф" in t or "файл" in t or "скач" in t) else "status"
-
-    if label == "PRICE" and not entities.get("doctor_name"):
-        doctor_name = _extract_doctor_name(text, mode="price")
-        if doctor_name:
-            entities["doctor_name"] = doctor_name
-
-    if low_confidence_policy(conf):
-        flags.add("low_confidence")
-
-    hints = _collect_rule_intent_hints(text, last_entities)
-    if not intent_candidates:
-        intent_candidates = [lbl for lbl in hints if lbl != label][:3]
-
-    if label == "OTHER" and "low_confidence" in flags and intent_candidates:
-        clarify_needed = True
-        clarify_reason = clarify_reason or "intent_disambiguation"
-
-    missing = missing_slots(label, {**last_entities, **entities})
-    if label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"} and missing:
-        clarify_needed = True
-        clarify_reason = clarify_reason or "slot_request"
-        if not clarify_slots:
-            clarify_slots = missing
-
-    if context_action == "continue":
-        derived_action = _derive_context_action(text, label, entities, last_entities)
-        if derived_action != "continue":
-            context_action = derived_action
-
-    return _attach_secondary_intents(
-        text,
-        RouteDecision(
-            label=label,
-            confidence=conf,
-            entities=entities,
-            flags=flags,
-            needs_handoff=False,
-            context_action=context_action,
-            source="llm_primary",
-            clarify_needed=clarify_needed,
-            clarify_reason=clarify_reason,
-            clarify_slots=clarify_slots,
-            intent_candidates=intent_candidates,
-        ),
-        last_entities,
-    )
-
-
-async def analyze_llm_primary(
-    text: str,
-    last_entities: dict[str, Any],
-    runtime_options: RuntimeOptions | None = None,
-) -> tuple[RouteDecision, dict[str, Any]]:
-    flags: set[str] = set()
-    guardrail = guardrail_precheck(text, last_entities, flags=flags)
-    if guardrail is not None:
-        return guardrail, {
-            "guardrail_pre": {
-                "hit": True,
-                "label": guardrail.label,
-                "flags": sorted(list(guardrail.flags)),
-            },
-            "llm_primary_raw": "",
-            "llm_primary_sanitized": {},
-            "guardrail_post": {},
-            "final_decision": {
-                "label": guardrail.label,
-                "source": guardrail.source,
-            },
-        }
-
-    seeded = _seed_entities_from_memory(last_entities)
-    prompt = _build_classify_prompt(text, seeded)
-    queue_timeout_ms = int(runtime_options.queue_timeout_ms) if runtime_options else 30000
-    raw_text, data = await ollama_classify_payload(prompt, queue_timeout_ms=queue_timeout_ms)
-    decision = _postprocess_primary_decision(text, last_entities, data)
-
-    if runtime_options and runtime_options.allows_refine_pass and decision.clarify_needed and decision.label in _REFINE_INTENTS:
-        refined = await _maybe_refine_live_intent(text, last_entities, decision, runtime_options=runtime_options)
-        if refined.label != decision.label or refined.entities != decision.entities:
-            decision = RouteDecision(
-                label=refined.label,
-                confidence=max(decision.confidence, refined.confidence),
-                entities=dict(refined.entities),
-                flags=set(decision.flags) | set(refined.flags),
-                needs_handoff=False,
-                context_action=refined.context_action,
-                source="llm_primary",
-                clarify_needed=decision.clarify_needed,
-                clarify_reason=decision.clarify_reason,
-                clarify_slots=list(decision.clarify_slots),
-                intent_candidates=list(decision.intent_candidates),
-            )
-
-    trace = {
-        "guardrail_pre": {"hit": False},
-        "llm_primary_raw": raw_text,
-        "llm_primary_sanitized": data,
-        "llm_primary_failure": classify_payload_failure(raw_text, data),
-        "guardrail_post": {
-            "clarify_needed": decision.clarify_needed,
-            "clarify_reason": decision.clarify_reason,
-            "clarify_slots": list(decision.clarify_slots),
-            "intent_candidates": list(decision.intent_candidates),
-            "flags": sorted(list(decision.flags)),
-        },
-        "final_decision": {
-            "label": decision.label,
-            "confidence": decision.confidence,
-            "source": decision.source,
-        },
-    }
-    return decision, trace
 
 
 def _attach_secondary_intents(
@@ -1658,17 +1400,12 @@ async def analyze(
     last_entities: dict[str, Any],
     runtime_options: RuntimeOptions | None = None,
     prefetched_rule: RouteDecision | None = None,
-    prefetched_llm: dict[str, Any] | None = None,
     skip_rule: bool = False,
 ) -> RouteDecision:
     """Решение `legacy_v2`: правило, если сработало, иначе разбор LLM.
 
     `skip_rule` — тему решает LLM, правило не считается (ход (б), этап 4: правило из `topic_by_llm` — кандидат,
     его решение вызывающий передаёт в слияние сам).
-
-    `prefetched_llm` — санитизированный ответ классификатора на тот же промпт, уже полученный на этом ходе (запасной
-    путь `llm_primary`, `nlu_pipeline`): второй вызов LLM не делается, решение то же, что дал бы `legacy_v2` при том же
-    ответе модели.
     """
     flags: set[str] = set()
     flags |= detect_pii(text)
@@ -1717,10 +1454,7 @@ async def analyze(
 
     prompt = _build_classify_prompt(text, seeded)
     queue_timeout_ms = int(runtime_options.queue_timeout_ms) if runtime_options else 30000
-    if prefetched_llm is not None:
-        data = prefetched_llm
-    else:
-        data = await ollama_classify_json(prompt, queue_timeout_ms=queue_timeout_ms)
+    data = await ollama_classify_json(prompt, queue_timeout_ms=queue_timeout_ms)
 
     label = _normalize_label(data.get("label"))
     conf = _normalize_confidence(data.get("confidence"))

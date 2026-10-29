@@ -18,7 +18,7 @@ import pytest
 
 from messengers_router import classifier
 from messengers_router.runtime_config import config as cfg
-from tests.test_llm_primary_rules_fallback_class import _turn
+from tests._llm_helpers import _turn
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -66,8 +66,8 @@ def test_on_prompt_asks_for_found_fields_only_right_after_json_only(monkeypatch)
 def test_compact_answer_is_the_same_turn_as_the_long_one(reply, mini_prod_world, monkeypatch):  # noqa: F811
     text, label, found = _REPLIES[reply]
     monkeypatch.setattr(cfg, "MR_CLASSIFIER_COMPACT", "on", raising=False)
-    short = _turn(mini_prod_world, monkeypatch, text, engine="legacy_v2", fallback="off", answer=_answer(label, found, compact=True))
-    long = _turn(mini_prod_world, monkeypatch, text, engine="legacy_v2", fallback="off", answer=_answer(label, found, compact=False))
+    short = _turn(mini_prod_world, monkeypatch, text, answer=_answer(label, found, compact=True))
+    long = _turn(mini_prod_world, monkeypatch, text, answer=_answer(label, found, compact=False))
 
     assert (short["text"], short["label"]) == (long["text"], long["label"])
     assert short["telemetry"].get("tu_label_nlu") == long["telemetry"].get("tu_label_nlu")
