@@ -56,6 +56,23 @@ UNCLEAR_OPERATOR_OFFER_TEXT = "Похоже, мне не удаётся помо
 OPERATOR_HINT_TEXT = "Если удобнее, напишите «оператор» — соединю."
 
 
+def accepts_operator_invitation(text: str) -> bool:
+    """Ответ на приглашение бота соединить с оператором (`OPERATOR_HINT_TEXT`): явная просьба — и без слова «оператор»
+    («да, пожалуйста, соедините», «переключите»), объект «с оператором» задан приглашением; отказ или оговорка («не надо
+    соединять», «потом») — не просьба. Без LLM (И-2: перевод по явной просьбе — на любом шаге и при сбое модели); голое «да» —
+    не просьба. Определение одно — `_OPERATOR_REQUEST_RE`: его ветка «соедините / переведите / позовите … человека» с объектом из
+    приглашения.
+
+    :param text: реплика пациента сразу после приглашения
+    """
+
+    from .policies import _has_refusal_or_hedge, _normalize_confirmation_text
+
+    if _has_refusal_or_hedge(_normalize_confirmation_text(text)):
+        return False
+    return explicit_operator_requested(text) or bool(_OPERATOR_REQUEST_RE.search(f"{text} человека"))
+
+
 def operator_offer_with_reason(what: str) -> str:
     """Второй шаг без продвижения: вопроса бота больше нет — один вопрос-оффер, назвав, чего не хватило (принцип 5, И-3)."""
 

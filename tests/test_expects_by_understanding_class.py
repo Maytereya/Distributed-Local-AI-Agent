@@ -279,3 +279,49 @@ def test_answer_judged_by_llm_keeps_the_topic_of_the_question(d21_world, monkeyp
     off = uc.run(d21_world, monkeypatch, dialog, session="off-gastro")
     on = uc.run(d21_world, monkeypatch, dialog, cfg=ON, session="on-gastro")
     assert [(t["text"], t["plan"]) for t in on] == [(t["text"], t["plan"]) for t in off] and on[1]["plan"][0] == "PREPARE"
+
+
+# --------------------------------------------------------------------------- явная просьба после строки-приглашения, без LLM (И-2)
+
+# Вид вопроса слота → ходы до строки «напишите «оператор» — соединю» при недоступной LLM (`down`: харнесс без понимания).
+_INVITED_DOWN = {
+    "price_text": [uc.say("сколько стоит?"), uc.say("а цена?")],  # `pa_offer_yes_please` набора `pending_answer`
+    "procedure": [uc.press("menu.appointment.prepare"), uc.say("не знаю"), uc.say("без понятия")],
+    "test_goal": [uc.press("menu.tests.suggest"), uc.say("хм")],
+    "result_data": [uc.press("menu.results.lookup"), uc.say("не помню номер")],
+    "booking_target": [uc.press("menu.appointment.book"), uc.say("хм"), uc.say("ну хм")],
+    "branch_pick": [uc.say("запишите к кардиологу"), uc.say("хм"), uc.say("ну хм"), uc.say("ещё хм")],
+}
+
+
+@pytest.mark.parametrize("slot", list(_INVITED_DOWN))
+@pytest.mark.parametrize("reply", ["да, пожалуйста, соедините", "соедините", "переключите на человека", "оператор"])
+def test_request_to_connect_after_the_invitation_is_a_handoff_without_llm(slot, reply, d21_world, monkeypatch):  # noqa: F811
+    """После строки-приглашения просьба соединить — перевод и без слова «оператор», до судьи и при недоступной LLM (финальная
+    карточка деплоя 22, `down`: «да, пожалуйста, соедините» отвечало «Уточните название»)."""
+
+    record = uc.run(d21_world, monkeypatch, [*_INVITED_DOWN[slot], uc.say(reply)], cfg=ON, session=f"invited-{slot}-{reply}")
+    assert record[-2]["text"].endswith(OPERATOR_HINT_TEXT), record[-2]["text"]
+    assert record[-1]["handoff"], record[-1]["text"]
+
+
+@pytest.mark.parametrize("slot", list(_INVITED_DOWN))
+@pytest.mark.parametrize("reply", ["да", "не надо соединять", "потом соедините"])
+def test_bare_yes_or_refusal_after_the_invitation_is_not_a_handoff(slot, reply, d21_world, monkeypatch):  # noqa: F811
+    """«да» после строки — не согласие на перевод (И-2): ответ — не перевод по просьбе. На тексте цены «да» уходит путём цены
+    названием услуги, и тот сам сдаётся оператору («Чтобы не ошибиться…») — это поведение пути цены, не приглашения."""
+
+    from messengers_router.policies import handoff_message
+
+    record = uc.run(d21_world, monkeypatch, [*_INVITED_DOWN[slot], uc.say(reply)], cfg=ON, session=f"not-invited-{slot}-{reply}")
+    assert record[-1]["text"] != handoff_message("manual_operator"), record[-1]["text"]
+    if slot != "price_text":
+        assert not record[-1]["handoff"], record[-1]["text"]
+
+
+def test_request_to_connect_without_invitation_is_as_before(d21_world, monkeypatch):  # noqa: F811
+    """Без приглашения (off, или прошлый ответ его не делал) — как было: «соедините» без «оператора» само по себе не перевод."""
+
+    for cfg in ({}, ON):
+        record = uc.run(d21_world, monkeypatch, [uc.say("сколько стоит ферритин", services=("ферритин",)), uc.say("соедините")], cfg=cfg, session=f"no-invite-{bool(cfg)}")
+        assert not record[-1]["handoff"], record[-1]["text"]

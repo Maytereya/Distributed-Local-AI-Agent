@@ -104,7 +104,7 @@ from .policies import (
     strip_booking_necessity,
 )
 from .service_phrase import extract_service_phrase
-from .recovery_policy import contextual_reply_kind, explicit_operator_requested
+from .recovery_policy import accepts_operator_invitation, contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
@@ -645,6 +645,15 @@ def _offer_operator_without_second_question(
     return ResponseEnvelope(
         text=operator_offer_with_reason(reason), attachments=[], handoff=False, state_update=response.state_update
     )
+
+
+def _operator_invited(state: SessionState) -> bool:
+    """Прошлое сообщение бота пригласило соединить с оператором необязывающей строкой (`OPERATOR_HINT_TEXT`, вариант (А))."""
+
+    from .recovery_policy import OPERATOR_HINT_TEXT
+
+    said = next((t for t in reversed(state.history) if isinstance(t, dict) and t.get("role") == "assistant"), None)
+    return said is not None and OPERATOR_HINT_TEXT in str(said.get("text") or "")
 
 
 def _maybe_offer_operator_on_reask_limit(
@@ -4397,8 +4406,11 @@ async def patient_routing_stream(
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
-    # Явный запрос оператора — приоритет над всем, кроме срочного (оно выше) и ответа на вопрос бота.
-    if explicit_operator_requested(user_text) and not pending_answer.answers_question(answered):
+    # Явный запрос оператора — приоритет над всем, кроме срочного (оно выше) и ответа на вопрос бота. Под
+    # `expects_by_understanding = on` бот вместо оффера «да/нет» приглашает строкой («напишите «оператор» — соединю»): просьба
+    # соединить в ответ на неё — явный запрос и без слова «оператор», до судьи и без LLM (И-2).
+    invited = pending_answer.by_understanding_on() and _operator_invited(state) and accepts_operator_invitation(user_text)
+    if invited or (explicit_operator_requested(user_text) and not pending_answer.answers_question(answered)):
         clear_on_handoff(state, memory)
         yield ResponseEnvelope(
             text=handoff_message("manual_operator"),
