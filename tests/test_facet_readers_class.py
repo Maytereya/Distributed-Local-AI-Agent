@@ -92,7 +92,9 @@ def test_readiness_of_service_with_rows_of_different_deadlines_lists_them(mini_p
     assert "readiness_from_mis" in (turn["telemetry"].get("tu_acted") or []), turn["telemetry"]
     text = turn["text"]
     assert "Посев мочи с идентификацией культур" in text, text
-    assert "1 100 руб. — 6 дней" in text and "1 050 руб. — 3–5 дней" in text, text
+    assert "(1 100 руб.) — 6 дней" in text and "(1 050 руб.) — 3–5 дней" in text, text
+    # Цена — рядом с названием строки (иначе цена без привязки к услуге): в каждой строке с ценой есть название.
+    assert all(_CULTURE_NAME in line for line in text.splitlines() if "руб." in line), text
     assert "оператор" not in text.lower(), text
 
 

@@ -162,12 +162,9 @@ def build_readiness_response(evidence: Evidence) -> ResponseEnvelope | None:
     if len(lines) == 1:
         name, deadline, _ = lines[0]
         text = f"Срок готовности «{name}» — {deadline}."
-    elif len({name for name, _, _ in lines}) == 1 and all(variant for _, _, variant in lines):
-        # Строки одной услуги с разными сроками — каждая со своей ценой, как цена списком (STEP-2026-10-30-FACET-READERS).
-        text = f"Срок готовности «{lines[0][0]}» зависит от варианта:\n" + "\n".join(
-            f"— {variant} — {deadline}" for _, deadline, variant in lines
-        )
     else:
+        # Строки одной услуги с разными сроками — каждая с названием и своей ценой рядом, как цена списком
+        # (STEP-2026-10-30-FACET-READERS): цена без названия в строке — цена без привязки к услуге.
         text = "Сроки готовности:\n" + "\n".join(
             f"— «{name}»{f' ({variant})' if variant else ''} — {deadline}" for name, deadline, variant in lines
         )
