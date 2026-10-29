@@ -41,10 +41,8 @@ from ._prices_helpers import (
 )
 from ._regions import (
     _inject_region_cities,
-    _is_explicit_non_samara_region,
     _is_samara_city_value,
     _region_display_name,
-    _region_matches_samara_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,8 +133,6 @@ class Services:
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
     _regions_last_failed: bool = field(default=False, init=False)
     _branches_warm_failed_at: float = field(default=0.0, init=False)
-    _procedure_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
-    _procedure_rows_loaded_at: float = field(default=0.0, init=False)
     _service_catalog_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _service_catalog_rows_loaded_at: float = field(default=0.0, init=False)
     _service_catalog_last_error: str = field(default="", init=False)
@@ -146,13 +142,11 @@ class Services:
     # блокировка, чтобы несколько запросов параллельно не перегенерировали кэш
     _doctors_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _regions_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
-    _procedure_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _service_catalog_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     # TTL in-memory кэша (латентность, сек, определят свежесть кэша)
     doctors_mem_ttl_seconds: int = 300
     regions_mem_ttl_seconds: int = 300
-    procedure_rows_mem_ttl_seconds: int = 300
     service_catalog_mem_ttl_seconds: int = 300
     schedule_fresh_ttl_seconds: int = field(
         default_factory=lambda: _runtime_int(
@@ -440,52 +434,6 @@ class Services:
                 if n:
                     tokens.add(n)
         return tokens
-
-    async def _ensure_procedure_rows_loaded(self) -> list[dict[str, Any]]:
-        """
-        Готовит in-memory индекс процедур по филиалам из doctor_prices.
-
-        Источник: `api_price.load_doctor_prices()` (кэш по branch-level regionId).
-        Для защиты от мусора оставляем только самарские строки с реальными адресами.
-
-        :return: строки вида {"serviceName": str, "regionName": str}
-        """
-        now = time.time()
-        if self._procedure_rows_cache and (now - self._procedure_rows_loaded_at) < self.procedure_rows_mem_ttl_seconds:
-            return self._procedure_rows_cache
-
-        async with self._procedure_rows_lock:
-            now = time.time()
-            if self._procedure_rows_cache and (now - self._procedure_rows_loaded_at) < self.procedure_rows_mem_ttl_seconds:
-                return self._procedure_rows_cache
-
-            try:
-                rows = await asyncio.to_thread(api_price.load_doctor_prices)
-            except Exception:
-                rows = []
-            if not isinstance(rows, list):
-                rows = []
-
-            samara_tokens = await self._samara_region_tokens()
-            filtered: list[dict[str, Any]] = []
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                service_name = str(row.get("serviceName") or "").strip()
-                region_name = str(row.get("regionName") or "").strip()
-                if not service_name or not region_name:
-                    continue
-                if not _looks_like_real_address(region_name):
-                    continue
-                if _is_explicit_non_samara_region(region_name):
-                    continue
-                if samara_tokens and not _region_matches_samara_tokens(region_name, samara_tokens):
-                    continue
-                filtered.append({"serviceName": service_name, "regionName": region_name})
-
-            self._procedure_rows_cache = filtered
-            self._procedure_rows_loaded_at = time.time()
-            return self._procedure_rows_cache
 
     async def _ensure_service_catalog_rows_loaded(self) -> list[dict[str, Any]]:
         """

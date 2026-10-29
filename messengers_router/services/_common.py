@@ -10,7 +10,6 @@ fallback-генераторы.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Optional
 
@@ -112,51 +111,6 @@ def _dedupe_str(items: list[str], *, max_items: int = 8) -> list[str]:
         if len(out) >= max_items:
             break
     return out
-
-
-def _extract_json_object(text: str) -> dict[str, Any] | None:
-    """
-    Извлекает первый JSON-объект из произвольного текстового ответа модели.
-
-    :param text: raw-ответ LLM
-    :return: dict или None
-    """
-
-    s = str(text or "").strip()
-    if not s:
-        return None
-    start = s.find("{")
-    if start < 0:
-        return None
-    depth = 0
-    in_str = False
-    escaped = False
-    for idx in range(start, len(s)):
-        ch = s[idx]
-        if escaped:
-            escaped = False
-            continue
-        if ch == "\\":
-            escaped = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
-            depth += 1
-            continue
-        if ch == "}":
-            depth -= 1
-            if depth == 0:
-                chunk = s[start : idx + 1]
-                try:
-                    obj = json.loads(chunk)
-                except Exception:
-                    return None
-                return obj if isinstance(obj, dict) else None
-    return None
 
 
 def _has_nearest_hint(text: str) -> bool:

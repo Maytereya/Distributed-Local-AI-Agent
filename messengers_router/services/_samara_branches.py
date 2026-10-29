@@ -155,29 +155,6 @@ def load_seed() -> list[dict[str, Any]]:
     return _seed_cache
 
 
-def resolve_samara_branches(live_regions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
-    """Самарские филиалы с fallback: live(здоровый) → last-good снапшот → seed.
-
-    Возвращает (строки, источник). Персист last-good делается в `_ensure_regions_loaded`
-    на свежем fetch (естественный TTL-троттлинг), не здесь. Если все источники
-    неправдоподобны — отдаёт то, что есть от live (≤1), и пусть гард деградации в
-    address_info честно сообщит о проблеме.
-
-    :param live_regions: полный список /regions (все города) из живой загрузки
-    :return: (самарские строки-филиалы, метка источника)
-    """
-    live_samara = samara_subset(live_regions)
-    if is_healthy_samara(live_samara):
-        return live_samara, "live"
-    snap = load_snapshot()
-    if is_healthy_samara(snap):
-        return snap, "snapshot"
-    seed = load_seed()
-    if is_healthy_samara(seed):
-        return seed, "seed"
-    return live_samara, "degraded_partial"
-
-
 def fallback_branches() -> list[dict[str, Any]]:
     """Статический fallback самарских филиалов: last-good снапшот → seed.
 
