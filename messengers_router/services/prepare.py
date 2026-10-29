@@ -32,7 +32,7 @@ from ._prepare_select_llm import (
 )
 from ._prices_helpers import _PRICE_TOKEN_RE, _catalog_rows
 from ._strong_match import strong_rows
-from ._turn_phrases import phrase_rows, strong_window
+from ._phrase_words import phrase_rows, strong_window
 from ._prepare import (
     _PREPARE_ENTITY_RE,
     _PrepareCandidate,

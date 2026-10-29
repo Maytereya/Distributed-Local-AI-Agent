@@ -45,8 +45,8 @@ from ._doctors_helpers import (
 from ._prepare import _is_prepare_requested_in_price_query
 from ._basket_select import basket_calc, basket_from_phrases, choose_basket_rows, failed_unpriced
 from ._strong_match import strong_rows
-from ._turn_phrases import _FILLER
-from ._turn_phrases import _tokens as _phrase_tokens
+from ._phrase_words import _FILLER
+from ._phrase_words import _tokens as _phrase_tokens
 from ._price_select_llm import (
     PriceSelection,
     distinct_services,
@@ -306,7 +306,7 @@ async def _multi_price_payload(
 def _names_a_service(fragments: list[str]) -> list[str]:
     """«Не распознал» корзины из фраз (под `turn_parse = on`): фрагмент только из обвязки и родовых слов
     («анализов» из «Стоимость анализов: …») услугу не называет — не печатаем. Мерило — то же, что у
-    генератора фраз для промежутков между позициями (`_turn_phrases._FILLER`), без новых словарей
+    генератора фраз для промежутков между позициями (`_phrase_words._FILLER`), без новых словарей
     (STEP-2026-10-14-L15B-6-T3, п. 8)."""
 
     return [fragment for fragment in fragments if any(token.key not in _FILLER for token in _phrase_tokens(str(fragment or "")))]

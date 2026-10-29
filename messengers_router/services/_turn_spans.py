@@ -38,7 +38,7 @@ from . import _price_by_parse
 from ._common import _normalise_catalog_text
 from ._prices_helpers import _PRICE_TOKEN_RE
 from ._strong_match import _catalog_index
-from ._turn_phrases import phrase_rows
+from ._phrase_words import phrase_rows
 
 logger = logging.getLogger(__name__)
 

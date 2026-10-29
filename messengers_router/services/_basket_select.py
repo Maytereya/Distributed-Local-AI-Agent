@@ -110,11 +110,11 @@ def _word_candidates(fragment: str, retail_rows: list[dict[str, Any]]) -> list[d
 
     Только варианты для выбора LLM корзины: строку выбирает LLM, при её сбое позиция остаётся «Не распознал»
     (кандидаты по словам — не та услуга с ценой). Слово — токен фразы вне обвязки и родовых слов
-    (`_turn_phrases._FILLER`); строки слова — сильное совпадение по данным МИС (название, синоним, код) и
+    (`_phrase_words._FILLER`); строки слова — сильное совпадение по данным МИС (название, синоним, код) и
     ранжирование прайса. Новых регулярок и словарей нет.
     """
 
-    from ._turn_phrases import _FILLER, _tokens
+    from ._phrase_words import _FILLER, _tokens
 
     seen: set[tuple[str, str, str]] = set()
     out: list[dict[str, Any]] = []
@@ -140,7 +140,7 @@ def _context_candidates(index: int, items: list[dict[str, Any]], retail_rows: li
     словам; новых регулярок и словарей нет.
     """
 
-    from ._turn_phrases import _FILLER, _tokens
+    from ._phrase_words import _FILLER, _tokens
 
     def words(i: int) -> list[str]:
         text = str(items[i].get("fragment") or items[i]["service_name"])
@@ -435,7 +435,7 @@ async def choose_basket_rows(
 def _journal_fragment(fragment: str) -> str:
     """Фраза слабой позиции для журнала синонимов (L-14, шаг 2) — как фраза одиночной услуги: без речевой обвязки с
     краёв (`turn_understanding._bare_phrase`, те же списки): «а ггтп» → «ггтп»; позиция из одной обвязки — пусто, в
-    журнал не пишется. Фразы разбора режут края только по `_turn_phrases._WRAPPER`, «а» в нём нет."""
+    журнал не пишется. Фразы разбора режут края только по `_phrase_words._WRAPPER`, «а» в нём нет."""
 
     from ..turn_understanding import _bare_phrase  # понимание хода импортирует сервисы цены — не на уровне модуля
 

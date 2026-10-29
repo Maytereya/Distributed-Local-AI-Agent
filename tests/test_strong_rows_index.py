@@ -19,7 +19,7 @@ from messengers_router import turn_parse
 from messengers_router.services import _biomaterial as bio
 from messengers_router.services import _price_by_parse
 from messengers_router.services import _strong_match as sm
-from messengers_router.services import _turn_phrases as tp
+from messengers_router.services import _phrase_words as tp
 from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services._prices_helpers import _extract_price_service_from_query
 from tests.test_price_turns_golden import FIXTURE

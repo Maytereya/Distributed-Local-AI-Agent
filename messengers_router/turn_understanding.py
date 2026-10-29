@@ -62,7 +62,7 @@ from . import turn_names, turn_parse, turn_telemetry
 from .choice import NO_WORDS, Option, Status, Task, choose
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
-from .services import _turn_phrases, _turn_spans
+from .services import _phrase_words, _turn_phrases, _turn_spans
 from .services._biomaterial import _SPEECH_WRAPPER
 from .services._strong_match import strong_rows
 from .services._prices_helpers import (
@@ -82,9 +82,9 @@ MODES = ("off", "shadow", "on")
 _PRICE_TURN_LABELS = frozenset({"PRICE", "TEST_ASSIST"})
 
 # Речевая обвязка с краёв фразы одиночной услуги (L-14, шаг 2): слова вопроса о цене и вежливость
-# (`_turn_phrases._WRAPPER`) и речевая обвязка слоя синонимов МИС (`_SPEECH_WRAPPER`: «а», «сдать», «тест»).
+# (`_phrase_words._WRAPPER`) и речевая обвязка слоя синонимов МИС (`_SPEECH_WRAPPER`: «а», «сдать», «тест»).
 # Новых слов нет — оба списка лингвистические и уже служат тем же: отделить название от оформления просьбы.
-_MENTION_EDGE = _turn_phrases._WRAPPER | _SPEECH_WRAPPER
+_MENTION_EDGE = _phrase_words._WRAPPER | _SPEECH_WRAPPER
 
 
 @dataclass(frozen=True)
@@ -681,7 +681,7 @@ def _bare_phrase(raw: str) -> str:
     трогаем; от фразы осталась одна обвязка — пусто."""
 
     raw = str(raw or "")
-    toks = _turn_phrases._tokens(raw)
+    toks = _phrase_words._tokens(raw)
     i, j = 0, len(toks) - 1
     while i <= j and toks[i].key in _MENTION_EDGE:
         i += 1
@@ -708,7 +708,7 @@ def _single_mention(probe: str) -> tuple[ServiceMention, ...]:
     путь цены, как раньше). Фразы нет — ничего."""
 
     phrase = _bare_phrase(_extract_price_service_from_query(probe) or "")
-    if all(t.key in _turn_phrases._FILLER for t in _turn_phrases._tokens(phrase)):
+    if all(t.key in _phrase_words._FILLER for t in _phrase_words._tokens(phrase)):
         return ()  # от реплики осталась только обвязка («сколько стоит?», «а цена?») — услуги нет
     return (_mention(phrase, strong_rows(probe, _catalog_rows(None)), "rules"),)
 
@@ -972,5 +972,5 @@ def _agreement(parse: turn_parse.PhraseParse, text: str, facet: str | None, tu: 
     if not parse.is_list:
         return "merge"
     items, _unrecognized = _multi_price_items(probe, catalog)
-    rules = {_turn_phrases.bare(str(item.get("fragment") or item.get("service_name") or "")) for item in items}
-    return "same" if rules == {_turn_phrases.bare(item.text) for item in parse.items} else "other"
+    rules = {_phrase_words.bare(str(item.get("fragment") or item.get("service_name") or "")) for item in items}
+    return "same" if rules == {_phrase_words.bare(item.text) for item in parse.items} else "other"

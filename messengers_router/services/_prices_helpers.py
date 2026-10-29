@@ -3569,7 +3569,7 @@ def _weak_phrase_judge(fragment: str, retail_rows: list[dict[str, Any]]) -> tupl
     """Сильное название внутри слабой фразы и слова вокруг — для суда LLM корзины (выключатель `basket_weak_phrase_judge`
     снят 22.10 — неделя `on` на проде с деплоя 11)."""
 
-    from ._turn_phrases import strong_inside  # разбор хода импортирует этот модуль — не на уровне модуля
+    from ._phrase_words import strong_inside  # разбор хода импортирует этот модуль — не на уровне модуля
 
     return strong_inside(fragment, retail_rows)
 
