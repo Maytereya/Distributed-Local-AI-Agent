@@ -160,14 +160,15 @@ _DOMAIN = "domain"
 
 
 def frame_judge_on() -> bool:
-    """Рамку кнопки проверяет сам судья ответа (вариант Б): `button_answer_topic = frame` и `button_frame_check = judge`."""
+    """Рамку кнопки проверяет сам судья ответа (вариант Б): `button_answer_topic = frame` и `button_frame_check = judge`
+    (или `judge_leaf` — тот же судья и у листа без своего вопроса, `button_flow.leaf_judge_on`)."""
 
     from .runtime_config import config as cfg
 
     def _value(key: str) -> str:
         return str(getattr(cfg, key, "") or "").strip().lower()
 
-    return _value("MR_BUTTON_ANSWER_TOPIC") == "frame" and _value("MR_BUTTON_FRAME_CHECK") == "judge"
+    return _value("MR_BUTTON_ANSWER_TOPIC") == "frame" and _value("MR_BUTTON_FRAME_CHECK") in ("judge", "judge_leaf")
 
 
 def in_frame_on() -> bool:
