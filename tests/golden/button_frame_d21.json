@@ -1,0 +1,791 @@
+{
+ "menu.address|followup|а до скольки работаете?": {
+  "press": {
+   "label": "ADDRESS",
+   "handoff": false,
+   "expects": null
+  },
+  "label": "OTHER",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ },
+ "menu.appointment.book|answer|к кардиологу": {
+  "press": {
+   "label": "APPOINTMENT",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "APPOINTMENT",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "Кардиологу"
+  },
+  "expects": "appointment_branch",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.appointment.book|domain|а кардиолог в субботу принимает?": {
+  "press": {
+   "label": "APPOINTMENT",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "APPOINTMENT",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": "appointment_branch",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.appointment.book|new_topic|где ближайший филиал?": {
+  "press": {
+   "label": "APPOINTMENT",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "ADDRESS",
+  "handoff": false,
+  "topic_by": "llm",
+  "pending": [
+   "new_topic",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.appointment.change|answer|на пятницу": {
+  "press": {
+   "label": null,
+   "handoff": false,
+   "expects": null
+  },
+  "label": "APPOINTMENT",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "Пятницу"
+  },
+  "expects": "appointment_branch",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.appointment.prepare|answer|гастроскопия": {
+  "press": {
+   "label": "PREPARE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PREPARE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "Гастроскопия"
+  },
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ },
+ "menu.appointment.prepare|domain|а гастроскопию под наркозом делаете?": {
+  "press": {
+   "label": "PREPARE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PREPARE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "а гастроскопию под наркозом делаете"
+  },
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ },
+ "menu.appointment.schedule|answer|кардиолог": {
+  "press": {
+   "label": "DOCTOR_SCHEDULE",
+   "handoff": false,
+   "expects": null
+  },
+  "label": "DOCTOR_SCHEDULE",
+  "handoff": false,
+  "topic_by": "llm",
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.docs.contract|followup|спасибо": {
+  "press": {
+   "label": null,
+   "handoff": true,
+   "expects": null
+  },
+  "label": "OTHER",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.docs.sick_leave|followup|сколько стоит больничный?": {
+  "press": {
+   "label": null,
+   "handoff": true,
+   "expects": null
+  },
+  "label": null,
+  "handoff": true,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.docs.tax|followup|за прошлый год можно?": {
+  "press": {
+   "label": "OTHER",
+   "handoff": false,
+   "expects": null
+  },
+  "label": "OTHER",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.operator|followup|сколько стоит ферритин": {
+  "press": {
+   "label": "OTHER",
+   "handoff": true,
+   "expects": null
+  },
+  "label": "PRICE",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "Ферритин"
+  },
+  "expects": "secondary_offer",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.operator|urgent|у меня сильная боль в груди и трудно дышать": {
+  "press": {
+   "label": "OTHER",
+   "handoff": true,
+   "expects": null
+  },
+  "label": "URGENT",
+  "handoff": true,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": true
+ },
+ "menu.price.doctor|answer|невролог": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PRICE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.price.doctor|domain|а невролог у вас есть?": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PRICE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.price.doctor|operator|соедините с оператором": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "OTHER",
+  "handoff": true,
+  "topic_by": null,
+  "pending": [
+   "new_topic",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.price.promo|followup|а на анализы есть скидки?": {
+  "press": {
+   "label": "NEWS",
+   "handoff": true,
+   "expects": null
+  },
+  "label": "NEWS",
+  "handoff": true,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.price.test|answer|глюкоза": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PRICE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "Глюкоза"
+  },
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.price.test|domain|а ферритин у вас делают?": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PRICE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.price.test|new_topic|где ближайший филиал?": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "ADDRESS",
+  "handoff": false,
+  "topic_by": "llm",
+  "pending": [
+   "new_topic",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.price.test|urgent|у меня сильная боль в груди и трудно дышать": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "URGENT",
+  "handoff": true,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": true
+ },
+ "menu.results.eta|followup|да": {
+  "press": {
+   "label": null,
+   "handoff": true,
+   "expects": null
+  },
+  "label": "OTHER",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.results.lookup|answer|Иванов, 1989, Бг, 123": {
+  "press": {
+   "label": "TEST_RESULT",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "TEST_RESULT",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.results.lookup|domain|а сколько ждать результат?": {
+  "press": {
+   "label": "TEST_RESULT",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "TEST_RESULT",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ },
+ "menu.results.missing|answer|не помню номер": {
+  "press": {
+   "label": "TEST_RESULT",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "TEST_RESULT",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ },
+ "menu.results.missing|new_topic|где ближайший филиал?": {
+  "press": {
+   "label": "TEST_RESULT",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "ADDRESS",
+  "handoff": false,
+  "topic_by": "llm",
+  "pending": [
+   "new_topic",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.booking_needed|other|Записаться на хгч": {
+  "press": {
+   "label": "ADDRESS",
+   "handoff": false,
+   "expects": null
+  },
+  "label": "APPOINTMENT",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": "other",
+  "slot": {},
+  "expects": "booking_service",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.booking_needed|same|Записаться на хгч": {
+  "press": {
+   "label": "ADDRESS",
+   "handoff": false,
+   "expects": null
+  },
+  "label": "ADDRESS",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   null,
+   null
+  ],
+  "frame": "same",
+  "slot": {
+   "service_name": "Хгч"
+  },
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.booking_needed|same|а ферритин тоже без записи?": {
+  "press": {
+   "label": "ADDRESS",
+   "handoff": false,
+   "expects": null
+  },
+  "label": "ADDRESS",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   null,
+   null
+  ],
+  "frame": "same",
+  "slot": {
+   "service_name": "анализы"
+  },
+  "expects": "secondary_offer",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.prepare|answer|ферритин": {
+  "press": {
+   "label": "PREPARE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PREPARE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "Ферритин",
+   "test_goal": "ферритин"
+  },
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ },
+ "menu.tests.prepare|domain|а у вас делают ВПЧ?": {
+  "press": {
+   "label": "PREPARE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PREPARE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "а у вас делают ВПЧ"
+  },
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ },
+ "menu.tests.prepare|new_topic|а сколько стоит ТТГ?": {
+  "press": {
+   "label": "PREPARE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PRICE",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   "new_topic",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {
+   "test_goal": "а сколько стоит ТТГ?"
+  },
+  "expects": "secondary_offer",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.prepare|urgent|у меня сильная боль в груди и трудно дышать": {
+  "press": {
+   "label": "PREPARE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "URGENT",
+  "handoff": true,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": true
+ },
+ "menu.tests.price|answer|ферритин": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PRICE",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {
+   "service_name": "Ферритин"
+  },
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.price|domain|есть ли у вас узи щитовидки": {
+  "press": {
+   "label": "PRICE",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "PRICE",
+  "handoff": true,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.suggest|answer|для мамы, ей 60 лет": {
+  "press": {
+   "label": "TEST_ASSIST",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "TEST_ASSIST",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {
+   "test_goal": "для мамы, ей 60 лет"
+  },
+  "expects": "operator_offer",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.suggest|domain|а какие анализы на щитовидку бывают?": {
+  "press": {
+   "label": "TEST_ASSIST",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "TEST_ASSIST",
+  "handoff": false,
+  "topic_by": "button_answer",
+  "pending": [
+   "answer",
+   "fast"
+  ],
+  "frame": null,
+  "slot": {
+   "test_goal": "а какие анализы на щитовидку бывают?"
+  },
+  "expects": "operator_offer",
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.suggest|new_topic|где ближайший филиал?": {
+  "press": {
+   "label": "TEST_ASSIST",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "ADDRESS",
+  "handoff": false,
+  "topic_by": "llm",
+  "pending": [
+   "new_topic",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.suggest|operator|соедините с оператором": {
+  "press": {
+   "label": "TEST_ASSIST",
+   "handoff": false,
+   "expects": "slot_value"
+  },
+  "label": "OTHER",
+  "handoff": true,
+  "topic_by": null,
+  "pending": [
+   "answer",
+   "llm"
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": null,
+  "offer": false,
+  "urgent": false
+ },
+ "menu.tests.where|followup|а на Ленина есть?": {
+  "press": {
+   "label": "ADDRESS",
+   "handoff": false,
+   "expects": null
+  },
+  "label": "OTHER",
+  "handoff": false,
+  "topic_by": null,
+  "pending": [
+   null,
+   null
+  ],
+  "frame": null,
+  "slot": {},
+  "expects": "operator_offer",
+  "offer": true,
+  "urgent": false
+ }
+}
