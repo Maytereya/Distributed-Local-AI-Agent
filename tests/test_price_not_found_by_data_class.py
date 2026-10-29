@@ -108,3 +108,41 @@ def test_first_round_candidates_come_from_the_turn_parse(monkeypatch):
     terms, rows = service_answer.turn_parse_terms(question)
     assert terms == ["чекап для мужчин 60+"] and rows == [row]
     assert service_answer.turn_parse_terms("другая реплика") == ([], [])  # разбор не этой реплики — поиск по реплике, как было
+
+
+def _similar(prompt: str) -> str:
+    if "Прайс клиники: Ежегодный Чекап" in prompt:
+        return verdict(outcome="similar", picks=(_number_of(prompt, "Прайс клиники: Ежегодный Чекап"),))
+    return verdict(outcome="no_data", terms=("Ежегодный Чекап",))
+
+
+def _checked(monkeypatch, check):
+    from messengers_router.services import _qualifier_pool
+
+    async def fake(question, rows):
+        return check
+
+    monkeypatch.setattr(_qualifier_pool, "check_rows", fake)
+
+
+def test_similar_confirmed_by_the_c3_check_is_shown_with_an_honest_heading(answer_world, monkeypatch):  # noqa: F811
+    """«Похожее», которое проверка С3 признала той же услугой без условия из вопроса, — строки данных с заголовком «точно такой
+    нет, есть похожие» и оффером, как «в таком виде нет» у цены, а не скрытое «нет данных»."""
+
+    from messengers_router.services import _qualifier_pool
+
+    _checked(monkeypatch, _qualifier_pool.RowsCheck(service=True, missing=("60+",)))
+    out = _turn(answer_world, monkeypatch, _similar, switch="on", calls=5)
+    assert out["text"].startswith(service_answer.SIMILAR_HEADING), out["text"]
+    assert "— Ежегодный Чекап — 2 055 руб." in out["text"] and out["pending_offer"], out["text"]
+
+
+@pytest.mark.parametrize("check", ["другая услуга", None])
+def test_similar_not_confirmed_is_an_honest_offer_without_foreign_rows(check, answer_world, monkeypatch):  # noqa: F811
+    """Проверка С3 сказала «другая услуга», не ответила или уточнений нет — «похожее» не печатаем: честное «нет данных», без чужих строк."""
+
+    from messengers_router.services import _qualifier_pool
+
+    _checked(monkeypatch, _qualifier_pool.RowsCheck(service=False) if check else None)
+    out = _turn(answer_world, monkeypatch, _similar, switch="on", calls=5)
+    assert out["text"].startswith(service_answer.NO_DATA_TEXT) and "Ежегодный Чекап" not in out["text"], out["text"]

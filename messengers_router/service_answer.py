@@ -284,7 +284,9 @@ def _merge(old: Sequence[Fact], new: Sequence[Fact]) -> list[Fact]:
     return [*old, *[fact for fact in new if fact.key() not in keys]][:_ROUND_FACTS]
 
 
-async def _ask(question: str, facts: Sequence[Fact], *, exact: bool = False) -> tuple[Verdict, tuple[str, ...]]:
+async def _ask(
+    question: str, facts: Sequence[Fact], *, exact: bool = False, show_similar: bool = False
+) -> tuple[Verdict, tuple[str, ...]]:
     exact = exact or no_similar()
     options = [Option(id=str(i), text=fact.option_text()) for i, fact in enumerate(facts)]
     picked = await choose(EXACT_TASK if exact else TASK, question, options)
@@ -292,7 +294,7 @@ async def _ask(question: str, facts: Sequence[Fact], *, exact: bool = False) -> 
         return Verdict(FAILED), ()
     chosen = tuple(facts[int(i)] for i in picked.ids)
     if picked.status is Status.OUTCOME:
-        if picked.outcome == SIMILAR and exact:
+        if picked.outcome == SIMILAR and exact and not show_similar:
             # Близкое, но другое — не ответ пациенту: честный оффер (и второй круг по терминам модели, как у «нет данных»).
             turn_telemetry.note(svc_answer_similar_hidden=len(chosen))
             return Verdict(NO_DATA), picked.terms
@@ -321,20 +323,27 @@ def turn_parse_terms(question: str) -> tuple[list[str], list[dict[str, Any]]]:
 
 
 async def decide(
-    question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = (), exact: bool = False, terms: Sequence[str] = ()
+    question: str,
+    *,
+    site: str,
+    first_rows: Sequence[dict[str, Any]] = (),
+    exact: bool = False,
+    terms: Sequence[str] = (),
+    show_similar: bool = False,
 ) -> Verdict:
-    """Что ответить на вопрос о клинике по её данным (`exact` — без исхода «похожее» пациенту; `terms` — фразы-услуги разбора
-    хода, поиск первого круга — по ним и по реплике). Сбой LLM — FAILED: что делать, решает вызывающий."""
+    """Что ответить на вопрос о клинике по её данным (`exact` — задача без «похожего» с исходом «общий вопрос»; `show_similar` —
+    «похожее» у неё всё же показывать пациенту с честным заголовком; `terms` — фразы-услуги разбора хода, поиск первого круга —
+    по ним и по реплике). Сбой LLM — FAILED: что делать, решает вызывающий."""
 
     spent_before = llm_runtime.turn_decisions_spent()
     facts = await gather_facts(question, texts=[*terms, question] if terms else (), first_rows=first_rows)
-    verdict, terms = await _ask(question, facts, exact=exact)
+    verdict, terms = await _ask(question, facts, exact=exact, show_similar=show_similar)
     rounds = 1
     if verdict.kind == NO_DATA and terms:
         extra = await gather_facts(question, texts=terms)
         merged = _merge(facts, extra)
         if len(merged) > len(facts):
-            verdict, _terms = await _ask(question, merged, exact=exact)
+            verdict, _terms = await _ask(question, merged, exact=exact, show_similar=show_similar)
             rounds = 2
     turn_telemetry.note(svc_answer=verdict.kind, svc_answer_site=site, svc_answer_facts=len(verdict.facts), svc_answer_rounds=rounds)
     return Verdict(verdict.kind, verdict.facts, calls=max(0, llm_runtime.turn_decisions_spent() - spent_before))
@@ -361,6 +370,24 @@ def price_gave_up(decision: Any, evidence: Any) -> bool:
         return False
     note = str(payload.get("note") or "")
     return not payload.get("clarify_text") or note == "price_match_policy: none_fit"
+
+
+async def confirm_similar(question: str, verdict: Verdict) -> Verdict:
+    """«Похожее» показываем, только если отдельный вопрос LLM механизма С3 (`_qualifier_pool.check_rows`: что из названного пациентом
+    есть в строке) подтвердил: строка — та же услуга, только без условия из вопроса («Мужской чекап» на «чекап для мужчин 60+»). Не
+    подтверждена, уточнений в разборе нет (тогда «похожее» — другая услуга) или проверка не ответила — строку не показываем; не
+    осталось ни одной — «нет данных», честный оффер. Шум «похожего» без проверки: «контейнер со шпателем» → «Преаналитика Salivette»,
+    чужая цена +2 / +2 (STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA)."""
+
+    if verdict.kind != SIMILAR or not verdict.facts:
+        return verdict
+    from .services import _qualifier_pool
+
+    priced = [fact for fact in verdict.facts if fact.kind == "price" and fact.row][:3]
+    checks = await asyncio.gather(*(_qualifier_pool.check_rows(question, [fact.row]) for fact in priced), return_exceptions=True)
+    kept = tuple(fact for fact, check in zip(priced, checks) if isinstance(check, _qualifier_pool.RowsCheck) and check.service)
+    turn_telemetry.note(svc_similar_checked=len(priced), svc_similar_kept=len(kept))
+    return Verdict(SIMILAR, kept, calls=verdict.calls) if kept else Verdict(NO_DATA, calls=verdict.calls)
 
 
 def refund(verdict: Verdict) -> None:

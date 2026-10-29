@@ -800,7 +800,13 @@ async def _render_impl(
     # клиники — строки прайса и памяток со вторым кругом поиска, без «похожего»; нет данных — честный оффер; сбой — ответ цены, как было.
     if service_answer.price_gave_up(ctx.decision, ctx.evidence):
         terms, rows = service_answer.turn_parse_terms(ctx.text)  # кандидаты первого круга — фразы-услуги разбора хода
-        verdict = await service_answer.decide(ctx.text, site="price_not_found", exact=True, terms=terms, first_rows=rows)
+        # «Похожее» — с честным заголовком «точно такой нет, есть похожие» (как «в таком виде нет» у цены, С3; решение владельца
+        # 29.10 по g0388 / g0811), но только строки, которые проверка С3 признала той же услугой без условия из вопроса: скрытое
+        # оно давало ложное «нет данных» (чекап для мужчин 60+), показанное без проверки — шум и чужие цены.
+        verdict = await service_answer.decide(
+            ctx.text, site="price_not_found", exact=True, terms=terms, first_rows=rows, show_similar=True
+        )
+        verdict = await service_answer.confirm_similar(ctx.text, verdict)  # «похожее» — только то же, что проверка С3 подтвердила
         answer = service_answer.envelope(verdict, ctx.state, memory)
         if answer is not None:
             ctx.response = answer
