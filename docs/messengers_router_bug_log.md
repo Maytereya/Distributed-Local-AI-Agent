@@ -11,6 +11,29 @@
 
 ---
 
+## STEP-2026-10-30-REFINE-BY-LLM-BRANCH — уточнение LLM (refine) не зовётся у ветки, чью тему решает LLM (Н-3 карты «Понимания») — СДЕЛАНО, без выключателя
+
+- **Симптом (карта `~/Dev/handoffs/2026-10-30_understanding_map.md` §3, Н-3):** `nlu_pipeline._rule_decision` звал проход правил с
+  `allow_refine=True` раньше, чем ход узнавал, отдана ли ветка LLM (`_topic_by_llm`). У ветки `rule_schedule` (в `topic_by_llm` с деплоя 19)
+  проход правил вызывал `classifier_refine_patient`, затем тему всё равно решал `classifier_patient`; итог refine шёл в слияние
+  только донором сущностей и флагов, а вызов — вне лимита решений хода (`llm_decision_turn_calls`).
+- **Корень:** вопрос «кто решает тему этого хода» задавался дважды и в разном порядке: проход правил решал про refine сам (`allow_refine`
+  — константа), ход — после него (`_topic_by_llm`).
+- **Фикс:** `deterministic_rule_decision(allow_refine=...)` принимает и предикат над решением ветки до уточнения; `_rule_decision`
+  передаёт `not _topic_by_llm(base, …, note=False)` — тот же вопрос, что задаёт ход, без второго прохода правил. Ветки, где тему решает
+  правило (`rule_appointment`, ход нажатия кнопки с темой, `llm_mode = strict`), зовут refine, как раньше.
+- **Что стало единым / что снято:** решение «тему решает LLM» — одна функция (`_topic_by_llm`) для классификатора и для refine; снят
+  лишний вызов LLM вне лимита хода.
+- **Замер (replay, c = 1, конфиг деплоя 21 из `runs/nason_*/run.json`):** повтор кода до правки против `nason_*` — 0 / 1008, 0 / 201,
+  0 / 867; после правки против до — ответы 0 / 1008, 0 / 201, 0 / 867 (`d22q_base_*` → `d22q_n3_*`); вызовы `classifier_refine_patient`
+  24 → 16 (кнопки), 5 → 5 (test), 28 → 18 (dev) — итого 57 → 39; `classifier_patient` без изменений (97 / 113 / 562); промахов кэша 0.
+- **Инвариант класса:** ветка правила из `topic_by_llm` за ход не зовёт `classifier_refine_patient` (0 раз), ветка правила вне списка — не
+  больше одного раза; итог хода у веток правила — прежний.
+- **Покрытие:** `tests/test_refine_once_per_turn.py` — `test_branch_decided_by_llm_never_calls_refine` (расписание под `topic_by_llm`:
+  refine 0, `topic_by_llm` в флагах), `test_branch_decided_by_rule_keeps_refine_under_topic_by_llm` (запись: refine 1), прежние
+  инварианты — на `topic_by_llm` пусто; `tests/test_classifier_timeout_class.py` — у `rule_schedule` под `topic_by_llm` один вызов
+  классификатора под предохранителем, а не два.
+
 ## STEP-2026-10-29-BUTTON-FRAME — кнопка задаёт рамку хода: после нажатия листа цены реплика уходила в чужую тему (грубые ошибки кнопок) — СДЕЛАНО под выключателем (`button_answer_topic = frame`, off)
 
 - **Симптом (стенд деплоя 20, `s20con_btn`, судья на всех ответах):** у 86 из 236 провалов кнопок тема ответа ≠ теме нажатого листа

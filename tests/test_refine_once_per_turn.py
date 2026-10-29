@@ -2,6 +2,8 @@
 
 Инварианты класса «один и тот же вызов LLM дважды за ход»:
 - через эндпоинт любой ход зовёт refine-pass (`classifier_refine_patient`) не больше одного раза;
+- ветка правила, чью тему решает LLM-классификатор (`topic_by_llm`), refine не зовёт вовсе: его итог выбросили бы, а вызов
+  шёл вне лимита решений хода (Н-3, STEP-2026-10-30-REFINE-BY-LLM-BRANCH); та же ветка без `topic_by_llm` refine зовёт;
 - ранний safety-гард (`early_guards`) от refine не зависит: refine уточняет только
   DOCTOR_SCHEDULE / DOCTOR_INFO / APPOINTMENT в несрочные метки, срочность он не даёт и не снимает;
 - итог хода (текст ответа, метка, сущности) — тот же, что при прежнем двойном refine
@@ -30,13 +32,17 @@ _REFINE_MARKER = "refine-pass"
 # Реплики, которые детерминированный слой отдаёт в refine (серые DOCTOR_SCHEDULE / APPOINTMENT),
 # и соседи без refine — счётчик не должен расти и у них. «Расскажи про врача» в refine больше не идёт:
 # ветка `rule_doctor_info` снята, тему решает классификатор (STEP-2026-10-28-C6-RULES-NEVER-FIRED).
-_REFINE_TEXTS = [
+# Ветка `rule_schedule` — тему решает правило, пока ветки нет в `topic_by_llm`; ветка `rule_appointment` — всегда правило.
+_SCHEDULE_TEXTS = [
     "покажи расписание кардиолога",
     "когда принимает невролог",
     "расписание врачей на завтра",
+]
+_APPOINTMENT_TEXTS = [
     "хочу записаться к кардиологу или лучше к терапевту",
     "запишите меня на прием, уточню у кого позже",
 ]
+_REFINE_TEXTS = _SCHEDULE_TEXTS + _APPOINTMENT_TEXTS
 _OTHER_TEXTS = [
     "сколько стоит общий анализ крови",
     "задыхаюсь",
@@ -76,6 +82,10 @@ class _PromptDeterministicOllama:
 def fake_llm(monkeypatch):
     from agent_logic_2.nayka_api import api_nayka, api_price
 
+    from messengers_router.runtime_config import config as cfg
+
+    # Расписание — правилом (как до `topic_by_llm`): набор ниже проверяет сам refine; ветку LLM — отдельные тесты.
+    monkeypatch.setattr(cfg, "MR_TOPIC_BY_LLM", "", raising=False)
     fake = _PromptDeterministicOllama()
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
     monkeypatch.setattr(api_nayka, "site_regions", lambda *a, **kw: [])
@@ -169,3 +179,28 @@ def test_refine_never_changes_safety_status_of_rule_pass(fake_llm, text):
     with_refine, without = asyncio.run(both())
     safety = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
     assert (getattr(with_refine, "label", None) in safety) == (getattr(without, "label", None) in safety)
+
+
+@pytest.mark.parametrize("text", _SCHEDULE_TEXTS)
+def test_branch_decided_by_llm_never_calls_refine(fake_llm, monkeypatch, text):
+    """Н-3: тему ветки решает классификатор — уточнение правила не зовётся, классификатор зовётся (тема — у LLM)."""
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_TOPIC_BY_LLM", "rule_schedule", raising=False)
+    body = _turn(text)
+
+    assert body["text"]
+    assert fake_llm.refine_calls == 0, f"{text!r}: refine у ветки topic_by_llm — {fake_llm.refine_calls} раз(а)"
+    flags = ((body.get("state_update") or {}).get("debug") or {}).get("decision", {}).get("flags") or []
+    assert "topic_by_llm" in flags, "ветка не ушла в LLM — проверка refine пустая"
+
+
+@pytest.mark.parametrize("text", _APPOINTMENT_TEXTS)
+def test_branch_decided_by_rule_keeps_refine_under_topic_by_llm(fake_llm, monkeypatch, text):
+    """Обратная сторона: ветка не из `topic_by_llm` уточнение зовёт и при включённом списке — снят только лишний вызов."""
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_TOPIC_BY_LLM", "rule_schedule", raising=False)
+    _turn(text)
+
+    assert fake_llm.refine_calls == 1
