@@ -510,9 +510,12 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
     if not isinstance(pending_label, str):
         return decision.label
     # Для добора города не разрешаем случайному ADDRESS-решению
-    # (обычно на короткий ответ "Самара") ломать исходный flow.
+    # (обычно на короткий ответ "Самара") ломать исходный flow. PRICE здесь нет: тему хода переклеивает строка
+    # `flow_price_city_reply_override` роутера (решение, план и состояние диалога — одной темы); планировщик метку плана
+    # молча не переклеивает (Н-5, STEP-2026-10-30-PRICE-CITY-REPLY-NOT-DUPLICATE). TEST_ASSIST / APPOINTMENT — пока здесь
+    # (двойная схема; один механизм ожидаемого ответа — шаг 3 плана деплоя 22).
     if (
-        pending_label in {"PRICE", "TEST_ASSIST", "APPOINTMENT"}
+        pending_label in {"TEST_ASSIST", "APPOINTMENT"}
         and decision.label == "ADDRESS"
         and _is_city_only_reply(user_text)
     ):

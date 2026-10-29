@@ -2090,13 +2090,15 @@ def test_build_appointment_schedule_preview_response_skips_for_reschedule_action
     assert env is None
 
 
-def test_apply_pending_override_keeps_price_flow_on_city_reply():
+def test_apply_pending_override_leaves_price_city_reply_to_router_row():
+    """Н-5: ответ городом на вопрос цены переклеивает строка роутера `flow_price_city_reply_override` (решение хода, со
+    следом), планировщик метку плана молча не меняет — ход целиком: `test_city_reply_to_price_question_keeps_decision_and_plan_one_topic`."""
     decision = RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"})
     pending = {"label": "PRICE", "missing": ["_any_of:city,branch_name,branch_id"]}
 
     label = apply_pending_override(decision, pending, user_text="Самара")
 
-    assert label == "PRICE"
+    assert label == "ADDRESS"
 
 
 def test_apply_pending_override_keeps_price_flow_on_catalog_service_reply(monkeypatch):
@@ -3617,10 +3619,10 @@ def test_route_message_city_only_reply_keeps_price_label(monkeypatch):
 
 @pytest.mark.parametrize("reply", ["Самара", "в самаре", "г. Самара"])
 def test_city_reply_to_price_question_keeps_decision_and_plan_one_topic(monkeypatch, reply):
-    """Н-5 (STEP-2026-10-30-PRICE-CITY-REPLY-NOT-DUPLICATE): переклейка `flow_price_city_reply_override` — не дубль ветки
-    `flow_policy._apply_pending_override`. Планировщик меняет только метку плана; без переклейки решение хода осталось бы
-    ADDRESS при плане PRICE, а состояние диалога ушло бы в `ADDRESS_FLOW` (следующий ход — по адресу). Инвариант класса:
-    ответ городом на висящий вопрос цены — решение, план и состояние диалога одной темы."""
+    """Н-5 (STEP-2026-10-30-PRICE-CITY-REPLY-NOT-DUPLICATE): тему ответа городом на вопрос цены решает одна строка роутера
+    `flow_price_city_reply_override` (со следом); PRICE-часть ветки планировщика `_apply_pending_override` снята. Без строки
+    решение хода осталось бы ADDRESS, а состояние диалога ушло бы в `ADDRESS_FLOW` (следующий ход — по адресу). Инвариант
+    класса: ответ городом на висящий вопрос цены — решение, план и состояние диалога одной темы."""
 
     async def fake_analyze_with_candidates(_text, _state, runtime_options=None, **_kwargs):
         decision = RouteDecision(label="ADDRESS", confidence=0.9, entities={}, flags={"rule_address"}, needs_handoff=False)
@@ -3634,7 +3636,8 @@ def test_city_reply_to_price_question_keeps_decision_and_plan_one_topic(monkeypa
     decision, plan, _evidence = route_via_endpoint(reply, state, Services(), memory)
 
     assert decision.label == plan.label == "PRICE"
-    assert state.last_entities.get("_dialog_state") != "ADDRESS_FLOW", state.last_entities.get("_dialog_state")
+    assert "flow_price_city_reply_override" in decision.flags
+    assert state.last_entities.get("_dialog_state") == "IDLE", state.last_entities.get("_dialog_state")
 
 
 def test_route_message_operator_offer_yes_handoffs():
