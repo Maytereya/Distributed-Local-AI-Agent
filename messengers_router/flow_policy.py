@@ -470,12 +470,19 @@ async def prelock_active_appointment_turn(
     return None
 
 
-def _is_short_prepare_followup(text: str) -> bool:
+def _is_short_reply(text: str) -> bool:
+    """Короткая реплика (до 64 знаков и 5 слов) — форма, не смысл: граница кандидатов «пациент только назвал услугу»."""
+
     s = str(text or "").strip()
     if not s or len(s) > 64:
         return False
     tokens = [t for t in re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s) if t]
-    if not tokens or len(tokens) > 5:
+    return 0 < len(tokens) <= 5
+
+
+def _is_short_prepare_followup(text: str) -> bool:
+    s = str(text or "").strip()
+    if not _is_short_reply(s):
         return False
     if detect_price_intent(s) or detect_address_intent(s) or detect_doc_request_intent(s):
         return False
@@ -1203,6 +1210,10 @@ def is_city_only_reply(text: str) -> bool:
 
 def is_short_prepare_followup(text: str) -> bool:
     return _is_short_prepare_followup(text)
+
+
+def is_short_reply(text: str) -> bool:
+    return _is_short_reply(text)
 
 
 def looks_like_patient_fio(text: str) -> bool:

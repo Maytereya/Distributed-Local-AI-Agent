@@ -37,6 +37,15 @@
 `[MESSENGER_ROUTER] parse_agree_telemetry = on | off` (T7, шаг 4; по умолчанию off с 16.10, решение владельца): `off` —
 согласия нет, правила считаются лениво (`_observe_parse_on_lazy`) —
 только когда разбор не годится для действия или решён одной слабой фразой; ответы те же, экономия — CPU хода.
+
+Тип вопроса хода (`facet`) — деплой 22, шаг 2 (STEP-2026-10-30-FACET-BY-LLM). Выключатель
+`[MESSENGER_ROUTER] facet_by_llm = off | on` (умолчание off — как было: `facet` ставят детекторы `price_turn_facet`). Под `on`
+его решает LLM — одно решение на ход (`turn_facet`, задача `turn_facet`, промпт в двух локациях): цена / есть ли / где-когда /
+нужна ли запись / срок / подготовка / просто назвал / ни одно (`FACETS`; правила дают подмножество тех же имён). На ходе цены
+вопрос задаётся вместе с разбором реплики и пишется в `TurnUnderstanding.facet` (`facet_src = llm`); на других ходах — первым
+читателем, которому он нужен (переклейки после цены и подготовки, обзор названия): объекта понимания там пока нет, решение
+хода хранит `_FACET`. Сбой LLM, лимит хода, нет слов пациента — как было: `facet` правил (`facet_src = fail | rules`), читатели
+идут своим прежним путём. Телеметрия — `tu_facet`, `tu_facet_src`, `tu_facet_fail` (причина сбоя: `budget` — лимит хода).
 """
 
 from __future__ import annotations
@@ -50,6 +59,7 @@ from collections.abc import Awaitable
 from typing import Any, Sequence
 
 from . import turn_names, turn_parse, turn_telemetry
+from .choice import NO_WORDS, Option, Status, Task, choose
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
 from .services import _turn_phrases, _turn_spans
@@ -95,8 +105,9 @@ class ServiceMention:
 class TurnUnderstanding:
     services: tuple[ServiceMention, ...] = ()
     services_rule: str = ""
-    facet: str | None = None  # readiness | prepare | booking | where | price | None
+    facet: str | None = None  # тип вопроса: одно из `FACETS` или None (правила не нашли)
     facet_rule: str = ""
+    facet_src: str = ""  # llm | rules | fail (под `facet_by_llm = on`); пусто — решали только правила (off)
     reply: str = ""  # реплика хода, по которой построено понимание
     # Названа ли в реплике услуга — одно решение хода (U6, ход (б), этап 2): ставит производитель под `turn_understanding_one`
     # (`_decide_named`), планировщик цены читает. None — не решено (выключатель off): читатель идёт прежним путём.
@@ -129,13 +140,16 @@ class TurnUnderstanding:
         return len(self.services) if self.is_list else 0
 
     def as_debug(self) -> dict[str, Any]:
-        return {
+        out = {
             "services": list(self.service_names),
             "services_rule": self.services_rule,
             "facet": self.facet,
             "facet_rule": self.facet_rule,
             "acted": list(_ACTED.get()),
         }
+        if self.facet_src:
+            out["facet_src"] = self.facet_src
+        return out
 
 
 @dataclass
@@ -165,6 +179,8 @@ class TurnIntent:
 _CURRENT: contextvars.ContextVar[TurnUnderstanding | None] = contextvars.ContextVar("mr_turn_understanding", default=None)
 _INTENT: contextvars.ContextVar[TurnIntent | None] = contextvars.ContextVar("mr_turn_intent", default=None)
 _ACTED: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_turn_understanding_acted", default=())
+# Тип вопроса хода под `facet_by_llm = on`: (реплика, задача решения) — одно решение на ход для всех читателей.
+_FACET: contextvars.ContextVar[tuple[str, asyncio.Future[FacetDecision]] | None] = contextvars.ContextVar("mr_turn_facet", default=None)
 
 
 def mode() -> str:
@@ -186,6 +202,7 @@ def begin_turn() -> None:
     _CURRENT.set(None)
     _ACTED.set(())
     _INTENT.set(None)
+    _FACET.set(None)
     turn_parse.begin()
     turn_names.begin()
 
@@ -336,6 +353,103 @@ def price_turn_facet(text: str) -> tuple[str | None, str]:
     return None, ""
 
 
+FACET_TASK = Task(name="turn_facet", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+# Варианты — `choose_test_assist_facet_full` (П1, BUG-2026-10-22-P1-FACET-NONE-AS-PRICE) плюс «нужна ли запись», отделённая от
+# «где и когда»; `id` — имена `facet` понимания хода (правила дают их подмножество: readiness, prepare, booking, where, price).
+FACET_OPTIONS = (
+    Option(id="price", text="Узнать стоимость анализа или услуги"),
+    Option(id="availability", text="Узнать, есть ли такой анализ или услуга в клинике, делают ли его, что в него входит"),
+    Option(id="where", text="Узнать, где или в какое время можно сдать анализ или пройти услугу"),
+    Option(id="booking", text="Узнать, нужна ли запись или можно прийти без записи"),
+    Option(id="readiness", text="Узнать срок готовности результата"),
+    Option(id="prepare", text="Узнать, как подготовиться к анализу или услуге"),
+    Option(id="bare", text="Просто назвал анализ или услугу, без вопроса"),
+)
+FACET_NONE = "none"  # LLM: спрашивают о другом (возраст, значение показателя, свой материал) или смысл неясен
+FACETS = (*(o.id for o in FACET_OPTIONS), FACET_NONE)
+
+
+@dataclass(frozen=True)
+class FacetDecision:
+    """Тип вопроса хода: `value` — одно из `FACETS` или None; `src` — `llm` (решила LLM), `fail` (сбой или лимит хода —
+    значение правил), `rules` (выключатель off или слов пациента нет — значение правил); `rule` — детектор правил."""
+
+    value: str | None
+    src: str
+    rule: str = ""
+
+
+def facet_by_llm() -> bool:
+    """`[MESSENGER_ROUTER] facet_by_llm = on`; мусор и отсутствие — off (как было)."""
+
+    return str(getattr(_cfg, "MR_FACET_BY_LLM", "off") or "").strip().lower() == "on"
+
+
+def start_facet(user_text: str) -> asyncio.Future[FacetDecision]:
+    """Запустить решение о типе вопроса этой реплики (или вернуть уже запущенное в этом ходе) — без ожидания: на ходе цены
+    вопрос идёт параллельно разбору реплики."""
+
+    text = str(user_text or "")
+    held = _FACET.get()
+    if held is not None and held[0] == text:
+        return held[1]
+    task = asyncio.ensure_future(_decide_facet(text))
+    _FACET.set((text, task))
+    return task
+
+
+async def turn_facet(user_text: str) -> FacetDecision:
+    """Тип вопроса хода — одно решение на ход (первый читатель задаёт вопрос, остальные берут его ответ)."""
+
+    return await start_facet(user_text)
+
+
+async def llm_facet(user_text: str) -> str | None:
+    """Тип вопроса, по которому читатель действует под `facet_by_llm = on`: решение LLM этой реплики. None — выключатель off,
+    сбой LLM, лимит хода, слов нет: читатель идёт прежним путём (своими детекторами)."""
+
+    if not facet_by_llm():
+        return None
+    decided = await turn_facet(user_text)
+    return decided.value if decided.src == "llm" else None
+
+
+async def _decide_facet(text: str) -> FacetDecision:
+    rule_value, rule = price_turn_facet(text)
+    if not facet_by_llm():
+        return FacetDecision(rule_value, "rules", rule)
+    try:
+        picked = await choose(FACET_TASK, text, FACET_OPTIONS)
+    except Exception:  # новый слой: его сбой не ломает ход — тип вопроса правил, как было
+        logger.warning("turn_facet_failed", exc_info=True)
+        turn_telemetry.note(tu_facet=rule_value, tu_facet_src="fail", tu_facet_fail="error")
+        return FacetDecision(rule_value, "fail", rule)
+    if picked.status is Status.PICKED and picked.ids:
+        decided = FacetDecision(picked.ids[0], "llm", "llm")
+    elif picked.status is Status.NONE_FIT:
+        decided = FacetDecision(FACET_NONE, "llm", "llm")
+    elif picked.reason == NO_WORDS:
+        decided = FacetDecision(rule_value, "rules", rule)  # ход нажатия кнопки: смысл задала кнопка, судить нечего
+    else:
+        decided = FacetDecision(rule_value, "fail", rule)
+        turn_telemetry.note(tu_facet_fail=picked.reason or picked.status.value)
+    turn_telemetry.note(tu_facet=decided.value, tu_facet_src=decided.src)
+    return decided
+
+
+async def _with_facet(tu: TurnUnderstanding, facet: asyncio.Future[FacetDecision]) -> TurnUnderstanding:
+    """Понимание хода цены с типом вопроса от LLM; сбой — тип правил остаётся, отмечен источник."""
+
+    decided = await facet
+    if decided.src == "llm":
+        tu = replace(tu, facet=decided.value, facet_rule="llm", facet_src="llm")
+    else:
+        tu = replace(tu, facet_src=decided.src)
+    _CURRENT.set(tu)
+    turn_telemetry.note(tu_facet=tu.facet, tu_facet_src=tu.facet_src)
+    return tu
+
+
 def understand_price_turn(text: str) -> TurnUnderstanding:
     """Услуги и свойство ценовой реплики. Чистая функция: без состояния и без LLM.
 
@@ -412,8 +526,16 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
     if not is_price_turn(label, pending) or not str(user_text or "").strip():
         return None
     if mode() != "off":
+        # Тип вопроса от LLM (`facet_by_llm = on`) — параллельно разбору реплики; ход ждёт обоих.
+        facet = start_facet(user_text) if facet_by_llm() else None
         tu = await (_observe_parse_on(user_text) if agree_telemetry() else _observe_parse_on_lazy(user_text))
-        return _decide_named(tu, user_text) if tu is not None and one_enabled() else tu
+        tu = _decide_named(tu, user_text) if tu is not None and one_enabled() else tu
+        if facet is None:
+            return tu
+        if tu is None:
+            await facet  # понимание упало — решение о типе вопроса остаётся читателям хода (`llm_facet`)
+            return None
+        return await _with_facet(tu, facet)
     await _observe_phrases(user_text)
     return None
 

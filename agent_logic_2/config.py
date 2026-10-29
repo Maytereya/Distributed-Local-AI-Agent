@@ -204,6 +204,7 @@ class MessengerRouterConfig:
     topic_override_llm: str
     topic_shadow_llm: str
     p1_facet_none_offer: str
+    facet_by_llm: str
     turn_spans_llm: str
     prepare_by_parse: str
     price_by_parse: str
@@ -636,6 +637,11 @@ settings = Settings(
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
         # По умолчанию on — как на проде с 22.10 (деплой 15; STEP-2026-10-15-DEFAULTS-B).
         p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="on", allowed={"off", "on"}),
+        # Тип вопроса хода решает LLM (деплой 22, шаг 2, STEP-2026-10-30-FACET-BY-LLM): одно решение на ход (`turn_understanding.
+        # turn_facet`, задача `turn_facet`) — цена / есть ли / где-когда / нужна ли запись / срок / подготовка / просто назвал / ни
+        # одно; его читают срок (`_maybe_readiness_reply`), планировщик, П1, обзор названия и переклейки после цены и подготовки
+        # вместо своих детекторов. Сбой LLM — как было (детекторы). off — как было. [MESSENGER_ROUTER] facet_by_llm
+        facet_by_llm=_get_enum("MESSENGER_ROUTER", "facet_by_llm", default="off", allowed={"off", "on"}),
         # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
@@ -972,6 +978,7 @@ MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
+MR_FACET_BY_LLM = settings.messenger_router.facet_by_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse

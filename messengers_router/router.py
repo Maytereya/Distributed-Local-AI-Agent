@@ -48,6 +48,7 @@ from .flow_policy import (
     is_appointment_waiting_patient_name,
     is_city_only_reply,
     is_short_prepare_followup,
+    is_short_reply,
     looks_like_patient_fio,
     normalize_secondary_labels,
     prelock_active_appointment_turn,
@@ -1879,6 +1880,10 @@ async def _inject_catalog_candidates(
     )
 
 
+# Тип вопроса хода (`turn_understanding.FACETS`) → вариант П1: «где» и «нужна ли запись» у П1 — один (`where_when`).
+_P1_FROM_TURN_FACET = {"where": "where_when", "booking": "where_when"}
+
+
 async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> str:
     """Ход `topic_by_llm` (тему решила LLM: TEST_ASSIST), каталог нашёл услугу — что пациент о ней спрашивает, решает LLM
     (ход (б), STEP-2026-10-21-B-P1-FACET). Не такой ход — пустая строка: П1 работает как было."""
@@ -1886,7 +1891,15 @@ async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> 
     flags = set(decision.flags or ())
     if decision.label != "TEST_ASSIST" or "topic_by_llm" not in flags or "catalog_service_exact" not in flags:
         return ""
-    facet = await booking_slots.test_assist_facet(user_text, full=_p1_facet_none_offer())
+    if turn_understanding.facet_by_llm():
+        # Тип вопроса хода уже решён (`facet_by_llm = on`, STEP-2026-10-30-FACET-BY-LLM): П1 берёт его, а не спрашивает заново.
+        # «Где» и «нужна ли запись» — один вариант П1 (`where_when`, адреса), как в его прежней задаче; сбой — пустая строка.
+        by_turn = await turn_understanding.llm_facet(user_text)
+        facet = _P1_FROM_TURN_FACET.get(by_turn or "", by_turn or "")
+        if facet:
+            turn_understanding.note_acted("p1_turn_facet")
+    else:
+        facet = await booking_slots.test_assist_facet(user_text, full=_p1_facet_none_offer())
     turn_telemetry.note(tu_p1_facet=facet or "failed")
     return facet
 
@@ -1945,7 +1958,8 @@ def _relabel_test_assist_catalog_hit_as_price(
     if (
         understanding is not None
         and understanding.is_list
-        and understanding.facet in (None, "price")
+        # «просто назвал» — тип вопроса от LLM (`facet_by_llm = on`); правила его не дают — у них это None
+        and understanding.facet in (None, "price", "bare")
         and not detect_test_assist_goal_phrasing(user_text)
     ):
         turn_understanding.note_acted("list_is_price")
@@ -2570,11 +2584,17 @@ async def _maybe_service_overview(
         or memory.get_pending(state)
         or state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
         or not service_overview.candidate(user_text)
-        # Явный вопрос о цене, сроке, подготовке — не голое название; «запись» и «где» по буквам детектора walk-in не в
-        # счёт («Анализ T-SPOT» он считает записью) — их решает LLM (исход `asks`).
-        or turn_understanding.price_turn_facet(user_text)[0] in {"price", "readiness", "prepare"}
     ):
         return None
+    # Явный вопрос о цене, сроке, подготовке — не голое название; «запись» и «где» по буквам детектора walk-in не в
+    # счёт («Анализ T-SPOT» он считает записью) — их решает LLM (исход `asks`). Под `facet_by_llm = on` тип вопроса — решение
+    # хода (LLM), его сбой — детекторы, как было.
+    by_turn = await turn_understanding.llm_facet(user_text)
+    facet = by_turn if by_turn is not None else turn_understanding.price_turn_facet(user_text)[0]
+    if facet in {"price", "readiness", "prepare"}:
+        return None
+    if by_turn is not None:
+        turn_understanding.note_acted("overview_turn_facet")
     overview = await service_overview.decide(user_text, without_reception=decision.label in _OVERVIEW_NO_RECEPTION_LABELS)
     if overview is None:
         return None
@@ -2955,12 +2975,21 @@ async def _apply_post_nlu_guardrails(
 
     last_label_before = str(state.last_entities.get("_last_label") or "")
     service_context = str(state.last_entities.get("service_name") or state.last_entities.get("test_name") or "").strip()
+    # Продолжение после цены: тип вопроса под `facet_by_llm = on` — решение хода (LLM), а не детекторы этих строк; сбой —
+    # детекторы, как было (STEP-2026-10-30-FACET-BY-LLM).
+    price_followup = last_label_before == "PRICE" and bool(service_context)
+    by_turn = (
+        await turn_understanding.llm_facet(user_text)
+        if price_followup and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "APPOINTMENT"}
+        else None
+    )
     if (
-        last_label_before == "PRICE"
-        and service_context
-        and detect_prepare_intent(user_text)
+        price_followup
+        and (by_turn == "prepare" if by_turn is not None else detect_prepare_intent(user_text))
         and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE"}
     ):
+        if by_turn is not None:
+            turn_understanding.note_acted("followup_prepare_turn_facet")
         entities = dict(decision.entities)
         if not entities.get("service_name"):
             entities["service_name"] = service_context
@@ -2973,18 +3002,25 @@ async def _apply_post_nlu_guardrails(
             needs_handoff=False,
             context_action="continue",
         )
-    if (
-        last_label_before == "PRICE"
-        and service_context
-        and decision.label in {"OTHER", "TEST_ASSIST", "DOCTOR_INFO", "APPOINTMENT"}
-    ):
+    if price_followup and decision.label in {"OTHER", "TEST_ASSIST", "DOCTOR_INFO", "APPOINTMENT"}:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
-        followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
         by_llm: bool | None = None
-        if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
-            decision, by_llm = await _walkin_by_llm(decision, user_text, site="flow_price_followup_address")
-        if by_llm is not False and followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+        if by_turn is not None:
+            # Спрашивают «где / когда» или «нужна ли запись» — решение хода; без записи ли услуга — LLM по правилу клиники
+            # (`walkin`), без неё (выключатель, сбой) — детектор, как было.
+            asks_where = by_turn in {"where", "booking"}
+            if asks_where:
+                decision, by_llm = await _walkin_by_llm(decision, user_text, site="flow_price_followup_address")
+            relabel = asks_where and (by_llm if by_llm is not None else detect_nonbookable_walkin_intent(user_text, merged_ctx))
+            if relabel:
+                turn_understanding.note_acted("followup_address_turn_facet")
+        else:
+            followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
+            if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+                decision, by_llm = await _walkin_by_llm(decision, user_text, site="flow_price_followup_address")
+            relabel = by_llm is not False and followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx)
+        if relabel:
             entities = dict(decision.entities)
             if not entities.get("service_name"):
                 entities["service_name"] = service_context
@@ -3089,13 +3125,24 @@ async def _apply_post_nlu_guardrails(
 
     # Короткий follow-up после PREPARE (например, "вульвоскопия") держим
     # в подготовке, чтобы не сваливаться обратно в TEST_ASSIST.
-    if (
+    # Под `facet_by_llm = on` — по типу вопроса хода (LLM): короткая реплика, где пациент только назвал услугу; сбой — детекторы,
+    # как было (STEP-2026-10-30-FACET-BY-LLM). Короткая форма — граница кандидатов, LLM зовётся только для неё.
+    prepare_followup = (
         str(state.last_entities.get("_last_label") or "") == "PREPARE"
         and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
-        and is_short_prepare_followup(user_text)
-        and not detect_prepare_intent(user_text)
-        and not detect_nonbookable_walkin_intent(user_text, state.last_entities)
         and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
+    )
+    by_turn = await turn_understanding.llm_facet(user_text) if prepare_followup and is_short_reply(user_text) else None
+    if by_turn == "bare":
+        turn_understanding.note_acted("prepare_followup_turn_facet")
+    if prepare_followup and (
+        by_turn == "bare"
+        if by_turn is not None
+        else (
+            is_short_prepare_followup(user_text)
+            and not detect_prepare_intent(user_text)
+            and not detect_nonbookable_walkin_intent(user_text, state.last_entities)
+        )
     ):
         decision = _relabel(
             decision, "flow_prepare_followup_override",

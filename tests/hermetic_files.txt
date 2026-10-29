@@ -244,3 +244,4 @@ tests/test_price_select_named_class.py
 tests/test_booking_options_price_class.py
 tests/test_service_answer_no_similar_class.py
 tests/test_spans_oracle.py
+tests/test_facet_by_llm_class.py
