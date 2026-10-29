@@ -294,8 +294,19 @@ LEAF_KEY = "_button_leaf"
 _LEAF: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("mr_button_leaf", default=None)
 # Лист, в рамку которого вопрос рамки вернул эту реплику: его флаги и сущности — решению хода (`nlu_pipeline`).
 _REFRAMED_LEAF: contextvars.ContextVar[str] = contextvars.ContextVar("mr_button_reframed_leaf", default="")
+# Рамка кнопки этого хода по решению LLM — после NLU (`note_frame`); её читает таблица политик темы (`topic_policy.frame_kept`).
+_FRAME: contextvars.ContextVar[Frame | None] = contextvars.ContextVar("mr_button_turn_frame", default=None)
 # Сообщение в теме нажатой кнопки? — отдельный короткий вопрос после «другой темы» судьи ответа (`frame`).
 FRAME_TASK = Task(name="button_frame", outcomes=("same", "other"), num_predict=24, timeout_s=8, queue_timeout_ms=3000)
+
+
+@dataclass(frozen=True)
+class Frame:
+    """Рамка кнопки хода: тема кнопки и решение о ней. `held` — тема держится (ответ на вопрос кнопки, рамка листа);
+    иначе LLM (судья ответа на вопрос кнопки) признала реплику другой темой."""
+
+    topic: str
+    held: bool
 
 
 @dataclass(frozen=True)
@@ -312,6 +323,7 @@ def reset() -> None:
     _MIXED.set(None)
     _REFRAMED.set("")
     _REFRAMED_LEAF.set("")
+    _FRAME.set(None)
 
 
 def _where(action: button_menu.ButtonAction) -> str:
@@ -505,6 +517,33 @@ def leaf_frame_id() -> str:
     """Id листа без своего вопроса, в рамку которого вопрос рамки вернул эту реплику; иначе пусто (полное понимание хода)."""
 
     return str(_REFRAMED_LEAF.get() or "")
+
+
+def note_frame(answer_topic: str, label: str, flags: Iterable[Any] | None, pending: Any) -> None:
+    """После NLU: рамка кнопки этого хода по решению LLM (`frame_policy`). Тема держится — NLU оставил тему кнопки
+    (`answer_topic`, флаг `button_answer_topic`: ответ на вопрос кнопки, рамка листа). Другая тема — судья ответа на вопрос
+    кнопки (LLM, не быстрые правила) решил «другая тема», и вопрос рамки её не вернул. Сбой LLM, «другое» вопроса рамки листа
+    без своего вопроса (слабый сигнал: бот ничего не спрашивал) и прочее — рамки нет: переклейки — как было."""
+
+    _FRAME.set(None)
+    if answer_topic and label == answer_topic and "button_answer_topic" in set(flags or ()):
+        _FRAME.set(Frame(topic=answer_topic, held=True))
+        return
+    topic = str(pending.get("label") or "") if isinstance(pending, dict) and question_button(pending) else ""
+    found = pending_answer.slot_answer() if topic else None
+    if (
+        found is not None
+        and found.outcome is pending_answer.Outcome.NEW_TOPIC
+        and found.source is pending_answer.Source.LLM
+        and not answer_topic
+    ):
+        _FRAME.set(Frame(topic=topic, held=False))
+
+
+def turn_frame() -> Frame | None:
+    """Рамка кнопки этого хода (`note_frame`); None — рамки нет."""
+
+    return _FRAME.get()
 
 
 def mixed_topic() -> bool:

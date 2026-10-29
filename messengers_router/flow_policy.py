@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-from . import expects, pending_answer, turn_names, turn_understanding
+from . import expects, pending_answer, topic_policy, turn_names, turn_understanding
 from .expects import EXPECTS_KEY
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
@@ -879,22 +879,7 @@ def _apply_context_action(
     # Если пользователь сменил врача в процессе и при этом явно просит расписание
     # (или до этого уже был schedule-контекст), приоритезируем DOCTOR_SCHEDULE.
     prev_label = str(state.last_entities.get("_last_label") or "")
-    if decision.label == "OTHER" and (prev_label == "DOCTOR_SCHEDULE" or detect_schedule_intent(user_text or "")):
-        return RouteDecision(
-            label="DOCTOR_SCHEDULE",
-            confidence=max(decision.confidence, 0.74),
-            entities=entities,
-            flags=sanitized_flags | {"context_action_overwrite_doctor"},
-            needs_handoff=False,
-            context_action=action,
-            source=decision.source,
-            clarify_needed=decision.clarify_needed,
-            clarify_reason=decision.clarify_reason,
-            clarify_slots=list(decision.clarify_slots),
-            intent_candidates=list(decision.intent_candidates),
-        )
-
-    return RouteDecision(
+    overwritten = RouteDecision(
         label=decision.label,
         confidence=decision.confidence,
         entities=entities,
@@ -907,6 +892,24 @@ def _apply_context_action(
         clarify_slots=list(decision.clarify_slots),
         intent_candidates=list(decision.intent_candidates),
     )
+    if decision.label == "OTHER" and (prev_label == "DOCTOR_SCHEDULE" or detect_schedule_intent(user_text or "")):
+        # Переклейка — строкой таблицы политик темы, со следом (`topic_policy`); рамка кнопки её держит (`in_frame`).
+        relabeled = RouteDecision(
+            label="DOCTOR_SCHEDULE",
+            confidence=max(decision.confidence, 0.74),
+            entities=entities,
+            flags=sanitized_flags | {"context_action_overwrite_doctor"},
+            needs_handoff=False,
+            context_action=action,
+            source=decision.source,
+            clarify_needed=decision.clarify_needed,
+            clarify_reason=decision.clarify_reason,
+            clarify_slots=list(decision.clarify_slots),
+            intent_candidates=list(decision.intent_candidates),
+        )
+        return topic_policy.apply("context_action_overwrite_doctor", overwritten, relabeled)
+
+    return overwritten
 
 
 def _secondary_followup_text(labels: list[str]) -> str | None:

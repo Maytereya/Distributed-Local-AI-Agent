@@ -234,6 +234,7 @@ class MessengerRouterConfig:
     button_frame_check: str
     pending_in_frame: str
     price_not_found_by_data: str
+    frame_policy: str
     insurance_topic: str
     price_select_named: str
     bare_name_overview: str
@@ -793,6 +794,11 @@ settings = Settings(
         # (`service_answer`, место `price_not_found`, без «похожего») — строки прайса и памяток, нет данных — честный оффер
         # (STEP-2026-10-29-PRICE-NOT-FOUND-BY-DATA). off — как было. [MESSENGER_ROUTER] price_not_found_by_data
         price_not_found_by_data=_get_enum("MESSENGER_ROUTER", "price_not_found_by_data", default="off", allowed={"off", "on"}),
+        # Рамку кнопки проверяет одна точка — таблица политик темы (`topic_policy`, поле строки `in_frame`): переклейка после NLU
+        # по буквам (`keeps`) не уводит из темы, которую держит кнопка, и не возвращает в неё реплику, которую LLM признала другой
+        # темой (Д3); срочное, перевод на оператора, существующая и идущая запись (`overrides`) — как всегда
+        # (STEP-2026-10-30-FRAME-POLICY, Н-2). off — как было. [MESSENGER_ROUTER] frame_policy
+        frame_policy=_get_enum("MESSENGER_ROUTER", "frame_policy", default="off", allowed={"off", "on"}),
         # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
         # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
         # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — «ответит оператор» и оффер; цена — путь цены.
@@ -1014,6 +1020,7 @@ MR_BUTTON_LEAF_FRAME = settings.messenger_router.button_leaf_frame
 MR_BUTTON_FRAME_CHECK = settings.messenger_router.button_frame_check
 MR_PENDING_IN_FRAME = settings.messenger_router.pending_in_frame
 MR_PRICE_NOT_FOUND_BY_DATA = settings.messenger_router.price_not_found_by_data
+MR_FRAME_POLICY = settings.messenger_router.frame_policy
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview

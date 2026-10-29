@@ -11,7 +11,7 @@ import contextvars
 from collections.abc import Iterator
 from typing import Any
 
-from . import address_flow, address_service, button_flow, expects, turn_understanding
+from . import address_flow, address_service, button_flow, expects, topic_policy, turn_understanding
 from .entity_grounder import service_dropped_by_llm
 from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
@@ -130,7 +130,10 @@ def build_plan(
     runtime_options: RuntimeOptions | None = None,
 ) -> Plan:
     pending = memory.get_pending(state)
-    effective_label = apply_pending_override(decision, pending, user_text=user_text)
+    # Тема висящего вопроса по форме реплики — строкой таблицы политик темы, со следом (`topic_policy`, рамка кнопки — `in_frame`).
+    effective_label = topic_policy.label_for(
+        "plan_pending_override", decision.label, apply_pending_override(decision, pending, user_text=user_text)
+    )
     # Служебный ключ грундера (названия выбора LLM для «где сделать») — вход этого хода, не сущность диалога.
     address_picks = address_service.turn_picks(state.last_entities.pop(address_service.ADDRESS_SERVICE_PICKS_KEY, None))
 
@@ -313,7 +316,7 @@ def build_plan(
         )
         if not has_specific_doctor:
             steps.append(PlanStep(tool="doctors_info", input={"query": user_text, "entities": dict(entities)}))
-            return Plan(label="DOCTOR_INFO", steps=steps)
+            return Plan(label=topic_policy.label_for("plan_doctor_list", label, "DOCTOR_INFO"), steps=steps)
         steps.append(PlanStep(tool="doctors_schedule_week", input={"query": user_text, "entities": dict(entities)}))
         return Plan(label=label, steps=steps)
 
