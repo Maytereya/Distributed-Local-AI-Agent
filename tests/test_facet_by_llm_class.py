@@ -282,13 +282,18 @@ def test_ecg_without_booking_on_test_assist_topic_gets_addresses(ecg_world, monk
     assert out["telemetry"].get("tu_label_final") == "ADDRESS", out["telemetry"]
 
 
-def test_list_named_without_a_question_stays_a_price(mini_prod_world, monkeypatch):  # noqa: F811
-    # Список без вопроса: LLM «просто назвал» — для П1 это цена списка, как None у правил (иначе — воронка подбора).
-    out, _ = _dialog(mini_prod_world, monkeypatch, [("ферритин, глюкоза, холестерин", "TEST_ASSIST", "bare")], switch="on")
+@pytest.mark.parametrize(
+    "reply,facet",
+    [("ферритин, глюкоза, холестерин", "bare"), ("есть ли у вас ферритин, глюкоза, холестерин?", "availability")],
+)
+def test_list_named_without_a_question_stays_a_price(reply, facet, mini_prod_world, monkeypatch):  # noqa: F811
+    # Список без вопроса о сроке, подготовке или месте: «просто назвал» и «есть ли у вас» — цена списка, как None у правил
+    # (иначе — ответ подбора, который на длинном списке теряет позиции: g0320, g0382 стенда 30.10).
+    out, _ = _dialog(mini_prod_world, monkeypatch, [(reply, "TEST_ASSIST", facet)], switch="on")
     tel = out[0]["telemetry"]
-    assert tel.get("tu_facet") == "bare", tel
-    if (tel.get("tu_list") or 0) >= 2:
-        assert tel.get("tu_label_final") == "PRICE", tel
+    assert tel.get("tu_facet") == facet, tel
+    assert (tel.get("tu_list") or 0) >= 2, tel
+    assert tel.get("tu_label_final") == "PRICE", tel
 
 
 # --- сбой и ход без слов -------------------------------------------------------------------------------------------------
