@@ -129,3 +129,27 @@ def test_reader_list_and_unknown_readers(monkeypatch, raw, readers, errors):
     assert turn_understanding.entity_readers() == frozenset(readers)
     assert len(turn_understanding.entities_config_errors()) == errors
     assert sum("entities_by_understanding" in text for text in button_flow.config_conflicts()) == errors
+
+
+def test_seam_every_plan_step_carries_the_turn_understanding(monkeypatch):
+    """Шов шага 5 (STEP-2026-10-30-STEP5-SEAM): `router.build_plan` кладёт понимание хода во вход каждого шага плана — тот же объект,
+    реплика хода; исполнитель его не читает (поведение — гейт), debug его не сериализует."""
+
+    from messengers_router import router as router_mod
+    from messengers_router.mess_types import Evidence
+    from messengers_router.memory import MemoryStore
+    from messengers_router.services import Services
+    from tests.endpoint_turn import route_via_endpoint
+
+    seen: list[list[object]] = []
+
+    async def capture(plan, _state, _services):
+        seen.append([step.understanding for step in plan.steps])
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "execute_plan", capture)
+    state = SessionState(session_id="seam")
+    route_via_endpoint("сколько стоит ферритин", state, Services(), MemoryStore())
+    assert seen and seen[0], seen
+    understood = {id(item) for item in seen[0]}
+    assert len(understood) == 1 and seen[0][0] is not None and getattr(seen[0][0], "reply", "") == "сколько стоит ферритин"

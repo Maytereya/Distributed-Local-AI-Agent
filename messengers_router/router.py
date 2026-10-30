@@ -2712,6 +2712,10 @@ def build_plan(
         user_text=user_text,
         pending=memory.get_pending(state),
     )
+    # Шов шага 5 (STEP-2026-10-30-STEP5-SEAM): понимание хода — во вход каждого шага плана; инструменты его пока не читают.
+    understood = turn_understanding.full() or turn_understanding.current()
+    for step in plan.steps:
+        step.understanding = understood
     return plan
 
 
