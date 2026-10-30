@@ -11,7 +11,7 @@ import contextvars
 from collections.abc import Iterator
 from typing import Any
 
-from . import address_flow, address_service, button_flow, expects, topic_policy, turn_understanding
+from . import address_flow, address_service, button_flow, expects, shown_context, topic_policy, turn_understanding
 from .entity_grounder import service_dropped_by_llm
 from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
@@ -140,8 +140,10 @@ def build_plan(
     # Поле ожидания (вопрос бота, D2.1) — состояние диалога, не сущность: инструментам не отдаём, иначе через их
     # `entities_used` текст вопроса попал бы в промпт свободного ответа LLM и поменял бы ответ.
     entities = expects.without(state.last_entities)
-    if address_flow.ADDRESS_BUTTON_KEY in entities or button_flow.LEAF_KEY in entities:  # метки кнопок — состояние хода
-        entities = {k: v for k, v in entities.items() if k not in (address_flow.ADDRESS_BUTTON_KEY, button_flow.LEAF_KEY)}
+    # Метки кнопок и поле формы шага 5.1б — состояние хода, не сущности: в инструменты (и через `entities_used` — в промпт) не идут.
+    hidden = (address_flow.ADDRESS_BUTTON_KEY, button_flow.LEAF_KEY, shown_context.FORM_KEY)
+    if any(key in entities for key in hidden):
+        entities = {k: v for k, v in entities.items() if k not in hidden}
     if runtime_options is not None:
         entities = {**entities, "__runtime_llm_mode": runtime_options.llm_mode}
     missing = missing_slots(effective_label, entities)
@@ -425,6 +427,42 @@ def build_plan(
             service_known = False
             price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
             turn_understanding.note_acted("planner_price_by_understanding")
+        if (
+            service_known
+            and "price_select" in turn_understanding.entity_readers()
+            and understood_price is not None
+            and any(mention.source == "parse" for mention in understood_price.services)
+            and not shown_context.carried_over(state)
+            and not turn_understanding.absorbed()
+        ):
+            # Шаг 5.3б (STEP-2026-10-30-STEP5-3B-PRICE-SELECT): название этого хода подставлено по буквам (подстановка каталога,
+            # резолвер грундера), а в разборе реплики есть упоминание услуги — строку прайса выбирает LLM по фразе разбора, как у
+            # названного пониманием хода выше. Буквенное название — не ответ правил мимо выбора, но и не выбрасывается: оно кандидат
+            # пула выбора (`CATALOG_HINT_KEY`) — точная строка «Immulite» иначе выпадала из пула (карточка 30.10: чужая цена +4).
+            from .services._price_select_llm import CATALOG_HINT_KEY
+
+            hint = str(price_entities.get("service_name") or price_entities.get("test_name") or "").strip()
+            service_known = False
+            price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
+            price_entities[CATALOG_HINT_KEY] = hint
+            turn_understanding.note_acted("planner_price_select_by_llm")
+        if (
+            service_known
+            and "price" in turn_understanding.entity_readers()
+            and understood_price is not None
+            and any(mention.source == "parse" for mention in understood_price.services)
+            and shown_context.carried_over(state)
+            and not turn_understanding.absorbed()
+        ):
+            # Шаг 5.3а (STEP-2026-10-30-STEP5-3A-PRICE-CONTEXT): в этой реплике есть упоминание услуги (разбор хода, не буквы), а в
+            # состоянии — контекст прошлого хода: он не участвует в выборе строки (резолвер `current_service_name`, выбор
+            # «действующего» названия, контекст выбора LLM) и не называется в ответе (рендер цены читает состояние) — снимается, как
+            # у списка выше. Ход — ответ на свой вопрос бота (строка показанного списка, `absorbed`) — не трогает: предмет задал вопрос.
+            for key in ("service_name", "test_name"):
+                state.last_entities.pop(key, None)
+            service_known = False
+            price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
+            turn_understanding.note_acted("planner_price_context_not_this_turn")
         if scope and service_known:
             # Ответ на вопрос кнопки цены — путь цены по словам реплики в области кнопки: название, которое подставили
             # дозаполнение или классификатор по всему прайсу, область не обходит.

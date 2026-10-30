@@ -713,6 +713,9 @@ def _finish_turn(state: SessionState, memory: MemoryStore, response: ResponseEnv
         elif span is not None:
             mark_operator_offer_pending(state, memory)
             turn_telemetry.note(rendered_offer="armed")
+    # Контекст разговора — только показанное или понятое из данных (шаг 5.1, `entities_by_understanding = context`): по тексту,
+    # который увидит пациент.
+    shown_context.commit_context(state, response.text or "")
     expects.finish_turn(state, response)
 
 
@@ -2716,6 +2719,10 @@ def build_plan(
         user_text=user_text,
         pending=memory.get_pending(state),
     )
+    # Шов шага 5 (STEP-2026-10-30-STEP5-SEAM): понимание хода — во вход каждого шага плана; инструменты его пока не читают.
+    understood = turn_understanding.full() or turn_understanding.current()
+    for step in plan.steps:
+        step.understanding = understood
     return plan
 
 

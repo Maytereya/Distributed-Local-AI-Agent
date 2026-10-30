@@ -310,6 +310,21 @@ def _one_hanging_question(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _entities_force(monkeypatch):
+    """Замер шага 5 на всём гейте: `MR_ENTITIES_FORCE=<читатели>` включает `entities_by_understanding` во всех тестах (тесты старого
+    поведения при этом падают — это и есть список мест, где читатель меняет ответ; в обычном гейте переменной нет)."""
+
+    import os
+
+    from messengers_router.runtime_config import config as rcfg
+
+    forced = os.environ.get("MR_ENTITIES_FORCE", "")
+    if forced:
+        monkeypatch.setattr(rcfg, "MR_ENTITIES_BY_UNDERSTANDING", forced, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _synonym_journal_to_tmp(tmp_path, monkeypatch):
     """Журнал синонимов цены (`price_synonym_suggestions.jsonl`) тесты пишут во временный каталог.
 

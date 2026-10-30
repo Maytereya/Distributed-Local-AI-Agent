@@ -49,6 +49,7 @@ from ._strong_match import strong_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
 from ._price_select_llm import (
+    CATALOG_HINT_KEY,
     FAMILY_VISIBLE_LIMIT,
     PriceSelection,
     distinct_services,
@@ -832,7 +833,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             retail_rows_clean,
             candidates=proposal,
             shown=shown,
-            hints=[service_name, judged],
+            hints=[service_name, judged, str(entities.get(CATALOG_HINT_KEY) or "")],
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             judge_qualifier=bool(judged),

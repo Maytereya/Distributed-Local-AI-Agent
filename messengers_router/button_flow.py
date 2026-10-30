@@ -134,6 +134,9 @@ def config_conflicts() -> list[str]:
     out: list[str] = []
     if pending_answer.frame_judge_on() and not reply_judge_on():
         out.append("button_frame_check=judge требует button_reply_judge=on: «другую тему» в ответе на вопрос кнопки не проверяет никто")
+    from . import turn_understanding  # понимание хода импортирует слои кнопок — импорт на вызове
+
+    out.extend(turn_understanding.entities_config_errors())
     return out
 
 

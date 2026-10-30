@@ -657,6 +657,26 @@ async def turn_facet(user_text: str) -> FacetDecision:
     return await start_facet(user_text)
 
 
+# Читатели шага 5 (сущности из понятого и показанного) — значения ключа `entities_by_understanding` (решение владельца 30.10, Ш5-3).
+ENTITY_READERS = frozenset({"context", "price", "price_select"})
+
+
+def entity_readers() -> frozenset[str]:
+    """Читатели шага 5, которые действуют: `[MESSENGER_ROUTER] entities_by_understanding` — список через запятую; `off`, пусто и
+    неизвестные значения — не действуют (неизвестные — громко при старте, `entities_config_errors`)."""
+
+    raw = str(getattr(_cfg, "MR_ENTITIES_BY_UNDERSTANDING", "off") or "")
+    return frozenset(item.strip().lower() for item in raw.split(",")) & ENTITY_READERS
+
+
+def entities_config_errors() -> list[str]:
+    """Неизвестные читатели в `entities_by_understanding` — ошибка конфига (Н-7: молчаливо неверный ключ не действует)."""
+
+    raw = str(getattr(_cfg, "MR_ENTITIES_BY_UNDERSTANDING", "off") or "")
+    unknown = sorted({item.strip().lower() for item in raw.split(",") if item.strip()} - ENTITY_READERS - {"off"})
+    return [f"entities_by_understanding: неизвестные читатели {', '.join(unknown)} (допустимы: {', '.join(sorted(ENTITY_READERS))})"] if unknown else []
+
+
 def absorbed() -> bool:
     """Ход поглощён ответом на свой вопрос бота (`own_question_reply = on`, BUG-2026-10-30-OWN-LIST-REPLY): одна функция ответа
     на висящий вопрос решила, что реплика — ответ (пункт показанного списка, да / нет, значение слота). Тип вопроса такого хода

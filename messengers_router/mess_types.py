@@ -223,6 +223,10 @@ class PlanStep:
     input: dict[str, Any] = field(default_factory=dict)
     required: bool = True
     auth: AuthLevel = "none"
+    # Понимание хода (`turn_understanding.TurnUnderstanding`) — вход шага (шов шага 5 хода (б), STEP-2026-10-30-STEP5-SEAM): его кладёт
+    # `router.build_plan`, инструменты читают его вместо поиска услуги по реплике заново (читатели — 5.5, 5.3 …). Не в `input`: тот
+    # уходит в debug как JSON; исполнитель шва не читает — поведение не меняется.
+    understanding: Any = field(default=None, compare=False, repr=False)
 
 
 @dataclass

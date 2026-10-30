@@ -147,6 +147,11 @@ def scope_mode() -> str:
     return mode if mode in ("shadow", "on") else "off"
 
 
+# Название, которое этот ход подставил по буквам (подстановка каталога, резолвер грундера), — подсказка выбора строки, а не ответ правил
+# (шаг 5.3б, `entities_by_understanding` с читателем `price_select`): его строки — в пуле LLM, решает LLM.
+CATALOG_HINT_KEY = "__catalog_hint"
+
+
 def price_task(*, judge_qualifier: bool = False, price_answer: bool = True) -> Task:
     """Задача выбора строки прайса: суд условия — свой промпт; под `[MESSENGER_ROUTER] price_judge_conditions = on` — с
     уточнённым правилом 3; на пути ответа о цене (`price_answer`) — промпты с правилом «слишком общее — не группа»

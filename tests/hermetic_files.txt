@@ -253,3 +253,4 @@ tests/test_expects_by_understanding_class.py
 tests/test_shown_by_id_class.py
 tests/test_clarify_reply_accepted_class.py
 tests/test_own_list_reply_class.py
+tests/test_entities_context_class.py

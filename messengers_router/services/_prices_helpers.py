@@ -3824,6 +3824,23 @@ def _catalog_names_normalised(rows: list[dict[str, Any]]) -> tuple[tuple[str, st
     return cached
 
 
+def is_mis_service_name(value: str) -> bool:
+    """Значение — точное название услуги из данных МИС: строка прайса региона или услуга врача (`doctor_prices`, «Ультразвуковое
+    исследование щитовидной железы» у узиста). «Понятое с выбором из данных» для точки фиксации контекста (шаг 5.1,
+    `shown_context.commit_context`). Цены врачей — только если прайс не узнал: их срез читается с диска."""
+
+    norm = _normalise_input(value)
+    if not norm:
+        return False
+    if norm in {name for name, _raw in _catalog_names_normalised(_catalog_rows(None))}:
+        return True
+    try:
+        rows = api_price.load_doctor_prices()
+    except Exception:
+        return False
+    return any(isinstance(row, dict) and _normalise_input(str(row.get("serviceName") or "")) == norm for row in rows)
+
+
 def _catalog_name_covering(tokens: list[str], rows: list[dict[str, Any]]) -> str | None:
     """Название прайса, которое одно покрывает все слова реплики, — тогда это одна услуга.
 
