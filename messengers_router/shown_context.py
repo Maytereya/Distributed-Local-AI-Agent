@@ -29,8 +29,12 @@ import contextvars
 from typing import Any, Iterable
 
 from .mess_types import RouteDecision, SessionState
+from .runtime_config import config as _cfg
 
 SHOWN_KEY = "_shown_services"
+# Под `shown_by_id = on` — `serviceId` показанных строк прайса в порядке показа (BUG-2026-10-30-SHOWN-BY-NAME): у одного
+# названия бывает несколько строк с разной ценой; названия (`SHOWN_KEY`) остаются для текста, сводки и `service_name`.
+SHOWN_IDS_KEY = "_shown_service_ids"
 # Флаг решения walk-in: вопрос без своей услуги — о показанной прошлым ответом (ставит гард walk-in).
 WALKIN_SHOWN_FLAG = "walkin_shown_service"
 # Ход раскрытия семейства: решение классификатора на «показать все» после списка семейства с подсказкой
@@ -49,6 +53,16 @@ _RENDERED_PRICE_ROWS = 5  # рендер цены печатает не боль
 _PREVIOUS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_shown_previous", default=())
 # Услуга контекста до хода (`service_name`): ответ walk-in возвращает её, когда показано несколько строк.
 _BEFORE: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_service_before", default="")
+# `serviceId` строк, показанных прошлым ответом (`shown_by_id`); пусто — не показывал или ход записал только названия.
+_PREVIOUS_IDS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_shown_previous_ids", default=())
+
+
+def by_id_on() -> bool:
+    """`[MESSENGER_ROUTER] shown_by_id = on`: показанное — строки прайса по `serviceId`, не названия. off — как было."""
+
+    return str(getattr(_cfg, "MR_SHOWN_BY_ID", "off") or "").strip().lower() == "on"
+
+
 # Услуга, которую этот ход записал в слот фразой разбора (`pending_in_frame`, `router._pending_slot_value`): вход инструмента хода,
 # а не контекст — после ответа её заменяет показанное (`sync_prepare`) или снимает конец хода (`finish_turn`).
 _PARSED: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_parsed_input", default="")
@@ -56,6 +70,47 @@ _PARSED: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_parsed_i
 
 def _row_name(row: Any) -> str:
     return str(row.get("serviceName") or row.get("name") or "").strip() if isinstance(row, dict) else ""
+
+
+def _row_id(row: Any) -> str:
+    return str(row.get("serviceId") or row.get("service_id") or "").strip() if isinstance(row, dict) else ""
+
+
+def _ids_of(rows: Iterable[Any], names: list[str]) -> list[str]:
+    """`serviceId` строк, которые рендер покажет: строки с показанными названиями, в его порядке, без повторов строки (у одного
+    названия может быть несколько строк — показаны все)."""
+
+    wanted = set(names)
+    return list(dict.fromkeys(rid for row in rows if _row_name(row) in wanted and (rid := _row_id(row))))
+
+
+def shown_price_ids(payload: dict[str, Any]) -> list[str]:
+    """`serviceId` строк ответа цены, которые покажет рендер (`shown_price_names` — их названия)."""
+
+    names = shown_price_names(payload)
+    if not names:
+        return []
+    variants = payload.get("family_variants")
+    if str(payload.get("service_kind") or "").strip().lower() == "family_query" and isinstance(variants, list) and variants:
+        limit = max(1, int(payload.get("visible_limit") or 10))
+        return _ids_of(variants if payload.get("showing_all") else variants[:limit], names)
+    prices = payload.get("prices")
+    return _ids_of(prices if isinstance(prices, list) else [], names)
+
+
+def shown_bundle_ids(payload: dict[str, Any]) -> list[str]:
+    """То же для ответа `service_bundle`; одна напечатанная цена — первая строка."""
+
+    if str(payload.get("clarify_text") or "").strip() or str(payload.get("service_kind") or "").strip().lower() == "family_query":
+        return shown_price_ids(payload)
+    rows = payload.get("retail_prices")
+    rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    names = shown_bundle_names(payload)
+    if not rows or not names:
+        return []
+    if len(rows) > 1 and (str(payload.get("service_kind") or "").strip().lower() == "lab" or payload.get("llm_selected")):
+        return _ids_of(rows[:_RENDERED_PRICE_ROWS], names)
+    return [rid] if (rid := _row_id(rows[0])) else []
 
 
 def shown_price_names(payload: dict[str, Any]) -> list[str]:
@@ -102,6 +157,8 @@ def begin_turn(state: SessionState) -> None:
     shown = state.last_entities.get(SHOWN_KEY)
     _PREVIOUS.set(tuple(str(name) for name in shown if str(name or "").strip()) if isinstance(shown, list) else ())
     _BEFORE.set(str(state.last_entities.get("service_name") or "").strip())
+    ids = state.last_entities.get(SHOWN_IDS_KEY) if by_id_on() else None
+    _PREVIOUS_IDS.set(tuple(str(rid) for rid in ids if str(rid or "").strip()) if isinstance(ids, list) else ())
     _PARSED.set("")
 
 
@@ -111,8 +168,32 @@ def previous() -> tuple[str, ...]:
     return _PREVIOUS.get()
 
 
-def remember(state: SessionState, names: list[str]) -> None:
-    """Показанное — в состояние: `_shown_services` всегда, `service_name` — если ответ назвал одну услугу.
+def shown_count() -> int:
+    """Сколько строк показал пациенту прошлый ответ: под `shown_by_id` — строк прайса (у двух строк одного названия — две),
+    иначе — названий, как было."""
+
+    return len(_PREVIOUS_IDS.get() or _PREVIOUS.get())
+
+
+def rows_shown(rows: Iterable[Any]) -> list[dict[str, Any]]:
+    """Строки прайса, которые показал прошлый ответ, — одна точка для читателей показанного на пути цены. Под `shown_by_id` —
+    по `serviceId`: ровно те строки, что видел пациент (BUG-2026-10-30-SHOWN-BY-NAME); прошлый ответ записал только названия
+    — по названию, как было: первая строка прайса с этим названием (`setdefault`)."""
+
+    candidates = [row for row in rows if isinstance(row, dict)]
+    ids = _PREVIOUS_IDS.get()
+    if ids:
+        by_id = {rid: row for row in candidates if (rid := _row_id(row))}
+        return [by_id[rid] for rid in ids if rid in by_id]
+    by_name: dict[str, dict[str, Any]] = {}
+    for row in candidates:
+        by_name.setdefault(_row_name(row), row)
+    return [by_name[name] for name in _PREVIOUS.get() if name in by_name]
+
+
+def remember(state: SessionState, names: list[str], ids: list[str] | None = None) -> None:
+    """Показанное — в состояние: `_shown_services` всегда, `service_name` — если ответ назвал одну услугу; под `shown_by_id` —
+    и `serviceId` показанных строк (`ids`; ответ без строк прайса — ключ снимается, читатели берут названия).
 
     Правило владельца 14.10 (уточнение решения 13.10): в контексте — только услуга, которую ответ назвал
     пациенту одной строкой (цена или срок); догадка, которой пациент не видел, — никогда. Ответ политики
@@ -120,6 +201,11 @@ def remember(state: SessionState, names: list[str]) -> None:
     """
 
     state.last_entities[SHOWN_KEY] = list(names)
+    if by_id_on():
+        if ids:
+            state.last_entities[SHOWN_IDS_KEY] = list(ids)
+        else:
+            state.last_entities.pop(SHOWN_IDS_KEY, None)
     if len(names) == 1:
         state.last_entities["service_name"] = names[0]
         state.last_entities.pop("test_name", None)
@@ -200,7 +286,7 @@ def sync_price(state: SessionState, payload: dict[str, Any], render_entities: di
     if render_entities.get("doctor_id") or render_entities.get("doctor_name"):
         return
     names = shown_price_names(payload)
-    remember(state, names)
+    remember(state, names, shown_price_ids(payload) if by_id_on() else None)
     _keep_service_on_expand(state, payload, names)
 
 
@@ -208,7 +294,7 @@ def sync_bundle(state: SessionState, payload: dict[str, Any]) -> None:
     """Ответ `build_service_bundle_response` (одна услуга — «По услуге «X» нашёл следующее», корзина)."""
 
     names = shown_bundle_names(payload)
-    remember(state, names)
+    remember(state, names, shown_bundle_ids(payload) if by_id_on() else None)
     _keep_service_on_expand(state, payload, names)
 
 
@@ -258,6 +344,7 @@ def sync_address(state: SessionState, decision: RouteDecision, *, walkin: bool =
     if walkin and is_class(held):
         return
     state.last_entities.pop(SHOWN_KEY, None)
+    state.last_entities.pop(SHOWN_IDS_KEY, None)
 
 
 def _norm(name: str) -> str:
