@@ -88,7 +88,7 @@ BUG-2026-10-20), а не первую строку. Врачи — как сей
 - `[MESSENGER_ROUTER] price_scope_llm = off | shadow | on`, по умолчанию `off` («как было»).
   - `shadow`: вопрос 2.1 задаётся, ответ пишется в журнал, ответ пациенту прежний — даёт число ходов-конфликтов и задержку на проде.
   - `on`: действует.
-- Телеметрия хода: `price_scope` (`one` / `family` / `general` / `skip` / `unavailable`), `price_scope_ms`, `price_family_rows` (число строк).
+- Телеметрия хода: `price_family_scope` (`one` / `family` / `general` / `skip` / `unavailable`), `price_family_scope_ms`, `price_family_rows` (число строк).
 - Промпты в двух локациях: `messengers_router/prompts/choose_price_scope.txt` = `app_data/prompts/mr_choose_price_scope.txt`,
   `choose_price_service_family.txt` = `mr_choose_price_service_family.txt`.
 - Отказ LLM в вопросе 2.1 → как сейчас (первый выбор). Лимит решений хода (`budget`) → как сейчас.

@@ -108,7 +108,7 @@ def test_family_shows_every_variant_without_unasked_conditions(case, mode, mini_
         assert any(name.startswith(prefix) for name in names), (prefix, answer)
     for word in never:
         assert not any(word in name for name in names), (word, answer)
-    assert row.get("price_scope") == "family" and row.get("price_policy") == "family", row
+    assert row.get("price_family_scope") == "family" and row.get("price_policy") == "family", row
     assert 2 <= len(names) <= 8 + 1, answer
 
 
@@ -117,7 +117,7 @@ def test_one_position_keeps_the_single_row(case, mini_prod_world, monkeypatch): 
     answer, row, llm = _turn(case, "one", "on", mini_prod_world, monkeypatch)
     off, _off_row, _ = _turn(case, "one", "off", mini_prod_world, monkeypatch)
     assert llm.scope_asked == 1 and llm.family_asked == 0
-    assert row.get("price_scope") == "one"
+    assert row.get("price_family_scope") == "one"
     assert _names(answer) == _names(off), (answer, off)
 
 
@@ -126,8 +126,8 @@ def test_scope_failure_and_shadow_answer_as_off(case, mini_prod_world, monkeypat
     off, _row, _ = _turn(case, "family", "off", mini_prod_world, monkeypatch)
     junk, junk_row, junk_llm = _turn(case, "", "on", mini_prod_world, monkeypatch)
     shadow, shadow_row, shadow_llm = _turn(case, "family", "shadow", mini_prod_world, monkeypatch)
-    assert _names(junk) == _names(off) and junk_row.get("price_scope") == "unavailable" and junk_llm.family_asked == 0
-    assert _names(shadow) == _names(off) and shadow_row.get("price_scope") == "family" and shadow_llm.family_asked == 0
+    assert _names(junk) == _names(off) and junk_row.get("price_family_scope") == "unavailable" and junk_llm.family_asked == 0
+    assert _names(shadow) == _names(off) and shadow_row.get("price_family_scope") == "family" and shadow_llm.family_asked == 0
 
 
 def test_prompts_are_the_same_in_both_locations() -> None:

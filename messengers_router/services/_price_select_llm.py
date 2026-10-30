@@ -653,7 +653,7 @@ async def _family_rows(question: str, picked: list[dict[str, Any]], pool: list[d
         return None
     started = time.monotonic()
     scope = await choose(SCOPE_TASK, question, [], context="\n".join(names), shadow=mode == "shadow")
-    turn_telemetry.note(price_scope="unavailable" if scope.failed else (scope.outcome or "none"), price_scope_ms=int((time.monotonic() - started) * 1000))
+    turn_telemetry.note(price_family_scope="unavailable" if scope.failed else (scope.outcome or "none"), price_family_scope_ms=int((time.monotonic() - started) * 1000))
     if mode != "on" or scope.failed or scope.outcome != "family":
         return None
     family = await choose(FAMILY_TASK, question, _options(question, pool))
@@ -971,6 +971,10 @@ async def select_price_rows(
     chosen = _prefer_base_variants(second[0], question)
     if journal_phrase:
         _record_synonym_suggestion(journal_phrase, terms, chosen, source=journal_source)
+    # Второй круг — тот же класс: одна строка из пула по терминам, а вариантов несколько («хламидиоз» → только посев).
+    family = await _family_rows(question, chosen, pool_by_terms) if price_answer and not one_round else None
+    if family is not None:
+        return settle(await _checked(question, family, status="family", search_terms=tuple(terms)))
     return settle(await _checked(question, chosen, search_terms=tuple(terms)))
 
 
