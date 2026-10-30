@@ -252,3 +252,4 @@ tests/test_facet_readers_class.py
 tests/test_expects_by_understanding_class.py
 tests/test_clarify_reply_accepted_class.py
 tests/test_own_list_reply_class.py
+tests/test_entities_context_class.py

@@ -52,6 +52,11 @@ _BEFORE: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_service_
 # Услуга, которую этот ход записал в слот фразой разбора (`pending_in_frame`, `router._pending_slot_value`): вход инструмента хода,
 # а не контекст — после ответа её заменяет показанное (`sync_prepare`) или снимает конец хода (`finish_turn`).
 _PARSED: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_parsed_input", default="")
+# Контекст разговора на начало хода (`service_name`, `test_name`) и показал ли ответ этого хода строки (`remember`) — для точки
+# фиксации контекста в конце хода (`commit_context`, шаг 5.1).
+_STARTED: contextvars.ContextVar[tuple[str, str]] = contextvars.ContextVar("mr_shown_context_started", default=("", ""))
+_NOW: contextvars.ContextVar[bool] = contextvars.ContextVar("mr_shown_now", default=False)
+_CONTEXT_KEYS = ("service_name", "test_name")
 
 
 def _row_name(row: Any) -> str:
@@ -103,6 +108,8 @@ def begin_turn(state: SessionState) -> None:
     _PREVIOUS.set(tuple(str(name) for name in shown if str(name or "").strip()) if isinstance(shown, list) else ())
     _BEFORE.set(str(state.last_entities.get("service_name") or "").strip())
     _PARSED.set("")
+    _STARTED.set(tuple(str(state.last_entities.get(key) or "").strip() for key in _CONTEXT_KEYS))  # type: ignore[arg-type]
+    _NOW.set(False)
 
 
 def previous() -> tuple[str, ...]:
@@ -120,6 +127,7 @@ def remember(state: SessionState, names: list[str]) -> None:
     """
 
     state.last_entities[SHOWN_KEY] = list(names)
+    _NOW.set(True)
     if len(names) == 1:
         state.last_entities["service_name"] = names[0]
         state.last_entities.pop("test_name", None)
@@ -159,6 +167,53 @@ def finish_turn(state: SessionState) -> None:
     _PARSED.set("")
     if parsed and _norm(str(state.last_entities.get("service_name") or "")) == parsed:
         state.last_entities.pop("service_name", None)
+
+
+def _form_open(state: SessionState) -> bool:
+    """После хода открыта форма: идёт запись, висит вопрос-слот темы (`_pending`: «Уточните город» адресов, недостающее название)
+    или вопрос о самом предмете («с наркозом или без?»). Тогда `service_name` — вход висящего вопроса формы («анализы» для пунктов
+    сдачи, цель записи), а не контекст разговора; разнести их по полям — шаг 5.1б."""
+
+    from .mess_types import AppointmentPhase
+
+    pending = state.last_entities.get("_pending")
+    return (
+        AppointmentPhase.is_active(state.dialog.phase)
+        or str(state.last_entities.get("_last_label") or "") == "APPOINTMENT"
+        or (isinstance(pending, dict) and bool(pending.get("missing")))
+        or isinstance(state.last_entities.get("_prepare_variant_pending"), dict)
+    )
+
+
+def commit_context(state: SessionState, text: str) -> None:
+    """Точка фиксации контекста разговора в конце хода (шаг 5.1, `entities_by_understanding` с читателем `context`; И-5.2, И-5.2а,
+    И-5.5 дизайна шага 5): значение `service_name` / `test_name`, которое записал этот ход, остаётся контекстом, только если оно
+    показано пациенту — строка ответа (`remember`) или напечатано в тексте ответа, — либо это понятое с выбором из данных (точное
+    название прайса). Фраза пациента, которую ответ не показал («а ВПЧ?» → оффер, «ВПЧ» в слоте после памятки), снимается; назвал
+    новое, но ничего не показано — снимается и показанное прошлым ответом, иначе «а подготовка?» ответило бы о прошлой услуге.
+    Значение, не менявшееся в ходе, и открытую форму (запись, вопрос-слот — поле формы, шаг 5.1б) не трогает. Телеметрия — `tu_ctx_dropped` (ключи)."""
+
+    from . import turn_telemetry, turn_understanding
+    from .services._prices_helpers import is_mis_service_name
+
+    if "context" not in turn_understanding.entity_readers() or _form_open(state):
+        return
+    shown_text = _norm(text)
+    shown_now = {_norm(name) for name in state.last_entities.get(SHOWN_KEY) or [] if _NOW.get()}
+    dropped: list[str] = []
+    for key, started in zip(_CONTEXT_KEYS, _STARTED.get()):
+        value = str(state.last_entities.get(key) or "").strip()
+        if not value or value == started:
+            continue
+        norm = _norm(value)
+        if norm in shown_now or (norm and norm in shown_text) or is_mis_service_name(value):
+            continue
+        state.last_entities.pop(key, None)
+        dropped.append(key)
+    if dropped and not _NOW.get():
+        state.last_entities.pop(SHOWN_KEY, None)  # И-5.2а: назвал новое, ответ ничего не показал — прошлое показанное не предмет
+    if dropped:
+        turn_telemetry.note(tu_ctx_dropped=",".join(dropped))
 
 
 def expands_shown(decision: RouteDecision) -> bool:

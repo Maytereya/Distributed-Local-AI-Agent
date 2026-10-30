@@ -238,6 +238,7 @@ class MessengerRouterConfig:
     frame_policy: str
     expects_by_understanding: str
     own_question_reply: str
+    entities_by_understanding: str
     insurance_topic: str
     price_select_named: str
     bare_name_overview: str
@@ -822,6 +823,12 @@ settings = Settings(
         # названием, «все» раскрывает список; названное в ответ на просьбу остаётся в теме просьбы. Ход, который ответ на свой
         # вопрос поглотил, тип вопроса (`facet_by_llm`) не судит. off — как было. [MESSENGER_ROUTER] own_question_reply
         own_question_reply=_get_enum("MESSENGER_ROUTER", "own_question_reply", default="off", allowed={"off", "on"}),
+        # Шаг 5 хода (б) — сущности из понятого и показанного (дизайн `2026-10-30_step5_entities_design.md`, решение владельца 30.10
+        # Ш5-1…Ш5-3): один ключ, значение — список читателей через запятую (`off` — никто, как было). `context` (5.1) — после хода
+        # в контексте разговора (`service_name` / `test_name`) только показанное пациенту или понятое из данных, фраза пациента — нет;
+        # назвал новое, но ничего не показано — контекст очищается. Неизвестный читатель — громко при старте (Н-7) и не действует.
+        # [MESSENGER_ROUTER] entities_by_understanding
+        entities_by_understanding=_get_str("MESSENGER_ROUTER", "entities_by_understanding", default="off"),
         # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
         # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
         # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — «ответит оператор» и оффер; цена — путь цены.
@@ -1047,6 +1054,7 @@ MR_PRICE_NOT_FOUND_BY_DATA = settings.messenger_router.price_not_found_by_data
 MR_FRAME_POLICY = settings.messenger_router.frame_policy
 MR_EXPECTS_BY_UNDERSTANDING = settings.messenger_router.expects_by_understanding
 MR_OWN_QUESTION_REPLY = settings.messenger_router.own_question_reply
+MR_ENTITIES_BY_UNDERSTANDING = settings.messenger_router.entities_by_understanding
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview
