@@ -240,6 +240,7 @@ class MessengerRouterConfig:
     own_question_reply: str
     insurance_topic: str
     price_select_named: str
+    price_scope_llm: str
     bare_name_overview: str
     booking_options_price: str
     service_answer_no_similar: str
@@ -832,6 +833,11 @@ settings = Settings(
         # (плод, ребёнок до года), — не та»; второй круг по редким словам терминов LLM — и
         # при пустом первом. Суд записи — прежние промпты. off — как было. [MESSENGER_ROUTER] price_select_named
         price_select_named=_get_enum("MESSENGER_ROUTER", "price_select_named", default="off", allowed={"off", "on"}),
+        # Одна позиция или семейство (DESIGN-2026-10-31-PRICE-FAMILY-SCOPE, решение владельца 30.10): выбор строки цены вернул одну
+        # строку при нескольких кандидатах — короткий вопрос LLM «что просит пациент» (одна позиция / семейство / слишком общее);
+        # семейство — все варианты услуги (варианты врача — да, варианты условия — только если просили). shadow — вопрос и
+        # телеметрия без действия. off — как было. [MESSENGER_ROUTER] price_scope_llm
+        price_scope_llm=_get_enum("MESSENGER_ROUTER", "price_scope_llm", default="off", allowed={"off", "shadow", "on"}),
         # Голое название услуги → максимум по данным (STEP-2026-10-21-BARE-NAME-OVERVIEW) — своим выключателем, без
         # `service_answer_from_data` (решение владельца 26.10, топ-5 разбора 95 цен, п. 4): и на темах APPOINTMENT / ADDRESS /
         # DOCTOR_INFO, голое ли название — решает LLM; на записи и врачах — без строк приёма врача (цену приёма к специальности
@@ -1049,6 +1055,7 @@ MR_EXPECTS_BY_UNDERSTANDING = settings.messenger_router.expects_by_understanding
 MR_OWN_QUESTION_REPLY = settings.messenger_router.own_question_reply
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
+MR_PRICE_SCOPE_LLM = settings.messenger_router.price_scope_llm
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview
 MR_BOOKING_OPTIONS_PRICE = settings.messenger_router.booking_options_price
 MR_SERVICE_ANSWER_NO_SIMILAR = settings.messenger_router.service_answer_no_similar
