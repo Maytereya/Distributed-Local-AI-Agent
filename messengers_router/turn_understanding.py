@@ -658,7 +658,7 @@ async def turn_facet(user_text: str) -> FacetDecision:
 
 
 # Читатели шага 5 (сущности из понятого и показанного) — значения ключа `entities_by_understanding` (решение владельца 30.10, Ш5-3).
-ENTITY_READERS = frozenset({"context", "price"})
+ENTITY_READERS = frozenset({"context", "price", "price_select"})
 
 
 def entity_readers() -> frozenset[str]:

@@ -429,6 +429,20 @@ def build_plan(
             turn_understanding.note_acted("planner_price_by_understanding")
         if (
             service_known
+            and "price_select" in turn_understanding.entity_readers()
+            and understood_price is not None
+            and any(mention.source == "parse" for mention in understood_price.services)
+            and not shown_context.carried_over(state)
+            and not turn_understanding.absorbed()
+        ):
+            # Шаг 5.3б (STEP-2026-10-30-STEP5-3B-PRICE-SELECT): название этого хода подставлено по буквам (подстановка каталога,
+            # резолвер грундера), а в разборе реплики есть упоминание услуги — строку прайса выбирает LLM по фразе разбора, как у
+            # названного пониманием хода выше; буквенное название — подсказка резолвера пути цены, а не ответ правил мимо выбора.
+            service_known = False
+            price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
+            turn_understanding.note_acted("planner_price_select_by_llm")
+        if (
+            service_known
             and "price" in turn_understanding.entity_readers()
             and understood_price is not None
             and any(mention.source == "parse" for mention in understood_price.services)

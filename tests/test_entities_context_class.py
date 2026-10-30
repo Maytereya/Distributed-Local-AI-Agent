@@ -245,3 +245,20 @@ def test_price_reader_keeps_the_service_otherwise(monkeypatch, readers, mention,
 
     [step] = _price_plan(monkeypatch, readers, mention=mention, written_now=written_now)
     assert step.get("service_name"), step
+
+
+# Шаг 5.3б — читатель `price_select` (STEP-2026-10-30-STEP5-3B-PRICE-SELECT): название этого хода подставлено по буквам, а в разборе
+# реплики есть упоминание — строку выбирает LLM (`price_info`), а не правила карточки услуги (`service_bundle_info`).
+@pytest.mark.parametrize(
+    ("readers", "mention", "written_now", "tool"),
+    [
+        ("price_select", True, True, "price_info"),
+        ("off", True, True, "service_bundle_info"),  # как было (консилиум 21.10, В2)
+        ("price_select", False, True, "service_bundle_info"),  # разбор услуги не нашёл — как было
+        ("price_select", True, False, "service_bundle_info"),  # контекст прошлого хода — читатель `price`, не этот
+    ],
+    ids=["letters_name_goes_to_llm_select", "off", "no_parse_mention", "carried_context"],
+)
+def test_price_select_reader(monkeypatch, readers, mention, written_now, tool):
+    [step] = _price_plan(monkeypatch, readers, mention=mention, written_now=written_now)
+    assert step["tool"] == tool and (tool != "price_info" or "service_name" not in step), step
