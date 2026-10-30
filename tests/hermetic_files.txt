@@ -248,5 +248,8 @@ tests/test_understanding_contract_class.py
 tests/test_two_turn_shown_context_class.py
 tests/test_button_frame_phrases_d21.py
 tests/test_facet_by_llm_class.py
+tests/test_facet_readers_class.py
 tests/test_expects_by_understanding_class.py
 tests/test_shown_by_id_class.py
+tests/test_clarify_reply_accepted_class.py
+tests/test_own_list_reply_class.py

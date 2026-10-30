@@ -104,7 +104,7 @@ from .policies import (
     strip_booking_necessity,
 )
 from .service_phrase import extract_service_phrase
-from .recovery_policy import contextual_reply_kind, explicit_operator_requested
+from .recovery_policy import accepts_operator_invitation, contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
@@ -647,6 +647,15 @@ def _offer_operator_without_second_question(
     )
 
 
+def _operator_invited(state: SessionState) -> bool:
+    """Прошлое сообщение бота пригласило соединить с оператором необязывающей строкой (`OPERATOR_HINT_TEXT`, вариант (А))."""
+
+    from .recovery_policy import OPERATOR_HINT_TEXT
+
+    said = next((t for t in reversed(state.history) if isinstance(t, dict) and t.get("role") == "assistant"), None)
+    return said is not None and OPERATOR_HINT_TEXT in str(said.get("text") or "")
+
+
 def _maybe_offer_operator_on_reask_limit(
     response: ResponseEnvelope, state: SessionState, memory: MemoryStore
 ) -> ResponseEnvelope:
@@ -682,6 +691,29 @@ def _maybe_offer_operator_on_reask_limit(
     mark_operator_offer_pending(state, memory)
     turn_telemetry.override(answer_source="reask_limit")
     return ResponseEnvelope(text=expects.reask_limit_text(limited), handoff=False, state_update=response.state_update)
+
+
+def _finish_turn(state: SessionState, memory: MemoryStore, response: ResponseEnvelope) -> None:
+    """Конец хода — одна точка для всех путей ответа: вопрос-оффер, который увидит пациент, — висящий вопрос, затем поле ожидания.
+
+    Под `expects_by_understanding = on` (И-1, И-2): оффер вопросом, собранный в текст мимо `mark_operator_offer_pending` (пункт
+    подготовки «…подскажет оператор. Перевести на оператора?» внутри обзора цены, тексты инструментов), ставит `_expects =
+    operator_offer` здесь — иначе «да» на него не переводило. Висит в сообщении и другой вопрос бота — оффер становится
+    необязывающей строкой («Если удобнее, напишите «оператор» — соединю»): два висящих вопроса не задаются. Off — как было.
+    """
+
+    if pending_answer.by_understanding_on() and not response.handoff and not state.last_entities.get("_operator_offer_pending"):
+        span = expects.offer_question_span(response.text)
+        if span is not None and expects.asks_hanging_question(state):
+            from .recovery_policy import OPERATOR_HINT_TEXT
+
+            text = response.text or ""
+            response.text = text[: span[0]] + OPERATOR_HINT_TEXT + text[span[1] :]
+            turn_telemetry.note(rendered_offer="hint")
+        elif span is not None:
+            mark_operator_offer_pending(state, memory)
+            turn_telemetry.note(rendered_offer="armed")
+    expects.finish_turn(state, response)
 
 
 # Дедлайн хода истёк (`llm_turn_deadline_s`): LLM не успела там, где была нужна, — честно, без ответа правил с фактом.
@@ -1721,7 +1753,7 @@ _GROUNDER_REJECTED_SLOT_FLAGS: dict[str, frozenset[str]] = {
 
 
 async def _service_slot_from_parse(quick: dict[str, Any], label: str, user_text: str, *, missing: list[str]) -> dict[str, Any]:
-    """Слот-услуга, которого не хватает ходу, — под `pending_in_frame` из разбора хода, как у грундера
+    """Слот-услуга, которого не хватает ходу, — под `pending_in_frame` или `facet_by_llm` из разбора хода, как у грундера
     (`turn_understanding.service_slot`, Д3-слот), а не из слов реплики: «а как к нему подготовиться?» — показанная услуга,
     а не «Нему подготовиться»; «а что нужно перед ним?» — тоже она, а не переспрос. Пусто — слот не пишется. off — как было."""
 
@@ -1978,8 +2010,9 @@ async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> 
     flags = set(decision.flags or ())
     if decision.label != "TEST_ASSIST" or "topic_by_llm" not in flags or "catalog_service_exact" not in flags:
         return ""
-    if turn_understanding.facet_by_llm():
+    if turn_understanding.facet_by_llm() and not turn_understanding.absorbed():
         # Тип вопроса хода уже решён (`facet_by_llm = on`, STEP-2026-10-30-FACET-BY-LLM): П1 берёт его, а не спрашивает заново.
+        # Ход — ответ на свой вопрос бота (`absorbed`) — тип вопроса не судится: П1 прежним путём.
         # «Где» и «нужна ли запись» — один вариант П1 (`where_when`, адреса), как в его прежней задаче; сбой — пустая строка.
         by_turn = await turn_understanding.llm_facet(user_text)
         facet = _P1_FROM_TURN_FACET.get(by_turn or "", by_turn or "")
@@ -1989,6 +2022,37 @@ async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> 
         facet = await booking_slots.test_assist_facet(user_text, full=_p1_facet_none_offer())
     turn_telemetry.note(tu_p1_facet=facet or "failed")
     return facet
+
+
+async def _route_by_turn_facet(decision: RouteDecision, *, user_text: str) -> RouteDecision:
+    """У каждого типа вопроса на ходе цены — свой читатель (`facet_by_llm = on`, STEP-2026-10-30-FACET-READERS).
+
+    Цена, «просто назвал», «есть ли» — путь цены: строки прайса и есть ответ. Срок — `_maybe_readiness_reply`. Подготовка —
+    памятка; «где» и «нужна ли запись» — адреса (как вариант П1 `where_when`); «ни одно» — данные клиники или честный оффер (как
+    у П1 под `p1_facet_none_offer`). Без читателя ход шёл в шаблон цены: «Кровь на ХГЧ могу ли сдать через 15 минут?» → «Не нашёл
+    актуальную стоимость» (g0458), «Откуда берут биоматериал для ВПЧ?» → то же (g0369). Ответ на вопрос кнопки цены — не здесь:
+    тему задала кнопка («ЭКГ самара» после «Цена анализа» — цена, не адреса). Сбой LLM и off — как было.
+    """
+
+    if decision.label != "PRICE" or not turn_understanding.facet_by_llm():
+        return decision
+    flags = set(decision.flags or ())
+    if "button_answer_topic" in flags or turn_understanding.absorbed():
+        # Ответ на свой вопрос бота — строка показанного списка («1», «первый»), названное на просьбу назвать услугу — тип
+        # вопроса задал вопрос бота, а не голая реплика (BUG-2026-10-30-OWN-LIST-REPLY: «1» → «ни одно» → оффер).
+        return decision
+    facet = await turn_understanding.llm_facet(user_text)
+    if facet == "prepare":
+        routed = _relabel(decision, "turn_facet_prepare", label="PREPARE", flags=flags | {"turn_facet_reader"})
+    elif facet in ("where", "booking"):
+        routed = _relabel(decision, "turn_facet_where", label="ADDRESS", flags=flags | {"turn_facet_reader"})
+    elif facet == "none":
+        routed = _relabel(decision, "turn_facet_none_offer", label="OTHER", flags=flags | {"turn_facet_reader", "topic_other_offer"})
+    else:
+        return decision
+    if routed.label != decision.label:
+        turn_understanding.note_acted(f"facet_reader_{facet}")
+    return routed
 
 
 def _p1_facet_none_offer() -> bool:
@@ -2855,16 +2919,17 @@ async def _pending_slot_value(label: str, slot: str, user_text: str) -> str:
     """Значение вопроса-слота, который одна функция признала ответом, а правила не разобрали (`pending_slot_value`).
 
     off (`pending_in_frame`) — реплика целиком, как было. on — слот-услуга (`pending_answer.SERVICE_SLOTS`) получает позицию из
-    разбора хода (`turn_understanding.service_phrase`; список — фразы через запятую): реплика целиком в названии услуги на
+    разбора хода (`turn_understanding.service_slot` — одна функция для всех писателей слота; список — фразы через запятую,
+    «услуги нет» — показанная прошлым ответом одна услуга): реплика целиком в названии услуги на
     следующем ходе — вопрос пациента вместо услуги («По запросу «Откуда берут биоматериал…»», класс L-13; Н-1 карты
-    «Понимания»). Разбор пуст или сбой — слот не пишется: ход без услуги её уточнит, а не покажет чужую. Разбор подготовки — тот же, что прочтёт инструмент (`observe_prepare_turn`: раз за ход).
-    Цель подбора — свободные слова пациента, как было.
+    «Понимания»). Разбор пуст или сбой — слот не пишется: ход без услуги её уточнит, а не покажет чужую. Разбор подготовки —
+    тот же, что прочтёт инструмент (`observe_prepare_turn`: раз за ход). Фраза — вход инструмента этого хода, не контекст:
+    после ответа услуга контекста — показанное (`shown_context.parsed_input`). Цель подбора — свободные слова пациента, как было.
     """
 
     if not pending_answer.in_frame_on() or slot not in pending_answer.SERVICE_SLOTS:
         return pending_answer.slot_value(user_text)
-    await turn_understanding.observe_prepare_turn(label, user_text=user_text)
-    return pending_answer.slot_value(turn_understanding.service_phrase(user_text))
+    return pending_answer.slot_value(await turn_understanding.service_slot(label, user_text) or "")
 
 
 def _slot_filled_by_rules(user_text: str, state: SessionState, services: Services, memory: MemoryStore) -> bool:
@@ -3386,9 +3451,10 @@ async def _handle_secondary_queue_pending(
         return None
 
     show_all_q, secondary_q = expects.Question.SHOW_ALL, expects.Question.SECONDARY_OFFER
-    if pending_answer.shows_all():
+    if pending_answer.shows_all() or pending_answer.picked(show_all_q):
         # Ответ на подсказку «напишите: "все"» («да, давайте все») — «показать все»: вторичный оффер снимается, как на
-        # «все», ответ читает путь цены (`_price_show_all_requested`).
+        # «все», ответ читает путь цены (`_price_show_all_requested`). Строка показанного списка («давайте второй»,
+        # `own_question_reply`) — так же: ответ на список, а не «да» скрытому офферу; строку читает путь цены.
         state.last_entities["_secondary_offer_pending"] = False
         return None
     if pending_answer.passes(secondary_q) or pending_answer.passes(show_all_q):
@@ -3599,6 +3665,10 @@ async def _resolve_nlu_decision_before_doctor_guard(
             # когда тема есть.
             answer_topic = button_flow.answer_topic(pending_before_nlu)
             firm_topic = answer_topic and (button_flow.mixed_topic() or button_flow.frame_firm())
+            if not answer_topic and pending_answer.clarify_topic(pending_before_nlu):
+                # Ответ на просьбу инструмента назвать услугу (`own_question_reply`), признанный ответом LLM, — тема просьбы, и правило
+                # другой темы по словам реплики её не перебивает (правила сужают, решает LLM; срочное — раньше).
+                answer_topic, firm_topic = pending_answer.clarify_topic(pending_before_nlu), True
             firm = {"answer_topic_firm": True} if firm_topic else {}
             nlu_result = await analyze_with_candidates(
                 user_text,
@@ -3724,6 +3794,7 @@ async def _complete_route_after_doctor_guard(
     decision = _relabel_test_assist_catalog_hit_as_price(
         decision, user_text=user_text, facet=await _test_assist_facet_by_llm(decision, user_text)
     )
+    decision = await _route_by_turn_facet(decision, user_text=user_text)
     decision = await _confirm_appointment_change_verb(decision, user_text=user_text, state=state)
     decision = await _confirm_existing_appointment_question(decision, user_text=user_text, state=state)
 
@@ -4363,7 +4434,9 @@ async def patient_routing_stream(
     if not button_id:
         expected = pending_answer.expected_from(state.last_entities)
         if expected is not None:
-            filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
+            # Просьба инструмента назвать услугу (`own_question_reply`) — правила «значение найдено» её не решают: решает LLM.
+            clarify = pending_answer.clarify_question(memory.get_pending(state))
+            filled = expected[0] == expects.Question.SLOT_VALUE.value and not clarify and _slot_filled_by_rules(user_text, state, services, memory)
             spent = llm_runtime.turn_decisions_spent()
             # Вопрос кнопки меню под `button_answer_topic` / `button_topic_hint`: значение, найденное правилами, LLM проверяет на
             # «другую тему» — правила находят его и в реплике о другом («ЭКГ как подготовиться?» на «Цену анализа»).
@@ -4377,11 +4450,15 @@ async def patient_routing_stream(
                 button=button_flow.judge_context(pending, expected[1]),
             )
             button_flow.refund_topic_judge(answered, pending, spent)
+            pending_answer.settle_clarify(answered, state, memory, spent)
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
-    # Явный запрос оператора — приоритет над всем, кроме срочного (оно выше) и ответа на вопрос бота.
-    if explicit_operator_requested(user_text) and not pending_answer.answers_question(answered):
+    # Явный запрос оператора — приоритет над всем, кроме срочного (оно выше) и ответа на вопрос бота. Под
+    # `expects_by_understanding = on` бот вместо оффера «да/нет» приглашает строкой («напишите «оператор» — соединю»): просьба
+    # соединить в ответ на неё — явный запрос и без слова «оператор», до судьи и без LLM (И-2).
+    invited = pending_answer.by_understanding_on() and _operator_invited(state) and accepts_operator_invitation(user_text)
+    if invited or (explicit_operator_requested(user_text) and not pending_answer.answers_question(answered)):
         clear_on_handoff(state, memory)
         yield ResponseEnvelope(
             text=handoff_message("manual_operator"),
@@ -4436,7 +4513,7 @@ async def patient_routing_stream(
     if pending_answer.branch_side_question(answered):
         side = await _answer_branch_side_question(user_text, state, services, memory, runtime_options, debug)
         if side is not None:
-            expects.finish_turn(state, side)
+            _finish_turn(state, memory, side)
             memory.append_turn(state, role="user", text=said)
             memory.append_turn(state, role="assistant", text=side.text)
             update_summary(state, reason="normal")
@@ -4456,7 +4533,7 @@ async def patient_routing_stream(
                 debug, label="TEST_RESULT", handoff=False, flags={"button_side_answer"}, context_action="continue"
             ),
         )
-        expects.finish_turn(state, side)
+        _finish_turn(state, memory, side)
         memory.append_turn(state, role="user", text=said)
         memory.append_turn(state, role="assistant", text=side.text)
         update_summary(state, reason="normal")
@@ -4474,7 +4551,7 @@ async def patient_routing_stream(
         if precheck.handoff:
             clear_on_handoff(state, memory)
         precheck = _maybe_offer_operator_on_reask_limit(precheck, state, memory)
-        expects.finish_turn(state, precheck)
+        _finish_turn(state, memory, precheck)
         yield precheck
         return
 
@@ -4531,10 +4608,14 @@ async def patient_routing_stream(
     response = offered
     # Смешанное сообщение внутри кнопки (`button_topic_hint`): ответ по теме кнопки — и подсказка кнопки на остальное.
     response = button_flow.with_mixed_hint(response)
+    shown_context.finish_turn(state)  # фраза разбора в слоте, которой ответ не показал, — не контекст следующего хода
     address_flow.finish_turn(state)  # метка адресной кнопки — следующей реплике (`address_branch_flags`)
     button_flow.finish_leaf(state)  # метка листа без своего вопроса — следующей реплике (`frame`)
+    if plan is not None and evidence is not None:
+        # «Уточните название…» инструмента темы — висящий вопрос этой темы (`own_question_reply`), после анти-залипа: его оффер первее.
+        pending_answer.ask_name_after_clarify(plan.label, evidence.items.values(), response.handoff, state, memory)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
-    expects.finish_turn(state, response)
+    _finish_turn(state, memory, response)
 
     memory.append_turn(state, role="user", text=said)
     memory.append_turn(state, role="assistant", text=response.text)

@@ -475,16 +475,28 @@ _NO_SERVICE_NAMED = frozenset({turn_parse.ParseStatus.NONE_FIT, turn_parse.Parse
 CATALOG_CHECKED_LABELS = frozenset({"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"})
 
 
-async def service_slot(label: str, user_text: str) -> str | None:
-    """Слот-услуга темы без проверки каталогом — из разбора хода этой реплики (`pending_in_frame = on`; класс Н-1 «реплика —
-    значением слота», Д3-слот): позиции разбора через запятую; разбор решил «услуги нет» — показанная прошлым ответом услуга,
-    если она одна, иначе ""; сбой — "" (слот не пишется: неизвестно, не назвал ли пациент новую услугу). Одна точка для обоих писателей слота из реплики — грундера сущностей
-    решения и дозаполнения хода. Разбор подготовки строится здесь же — тот, что прочтёт инструмент (`observe_prepare_turn`:
-    раз за ход, второго решения LLM нет). None — как было: выключатель off, тема с проверкой каталогом или разбора нет."""
+def service_slot_on() -> bool:
+    """Слот-услуга — из разбора хода (`service_slot`): под `pending_in_frame` (Н-1) и под `facet_by_llm` (шаг 2). Тип вопроса
+    по LLM снимает переклейку по буквам обратно в тему прошлого хода (`flow_prepare_followup_override`), которая прятала слова
+    вопроса в слоте: «а запишите меня» после памятки шло в памятку, а под `facet_by_llm` — в запись, и та читает слот
+    («запись на Нему подготовиться», финальная карточка набора 22). Защита слота включается вместе с ним. Оба off — как было."""
 
     from .pending_answer import in_frame_on  # не на уровне модуля: функция ответа импортирует понимание хода
 
-    if label in CATALOG_CHECKED_LABELS or not in_frame_on():
+    return in_frame_on() or facet_by_llm()
+
+
+async def service_slot(label: str, user_text: str) -> str | None:
+    """Слот-услуга темы без проверки каталогом — из разбора хода этой реплики (`service_slot_on`; класс Н-1 «реплика —
+    значением слота», Д3-слот): позиции разбора через запятую; разбор решил «услуги нет» — показанная прошлым ответом услуга,
+    если она одна, иначе ""; сбой — "" (слот не пишется: неизвестно, не назвал ли пациент новую услугу). Одна точка для всех
+    писателей слота из реплики — грундера сущностей решения, дозаполнения хода и ответа на вопрос-слот кнопки
+    (`router._pending_slot_value`). Позиции разбора — слова пациента: вход инструмента этого хода, а не контекст следующего
+    (И-5.5 консилиума шага 5) — после ответа их заменяет показанное или снимает конец хода (`shown_context.parsed_input`).
+    Разбор подготовки строится здесь же — тот, что прочтёт инструмент (`observe_prepare_turn`: раз за ход, второго решения LLM
+    нет). None — как было: выключатель off, тема с проверкой каталогом или разбора нет."""
+
+    if label in CATALOG_CHECKED_LABELS or not service_slot_on():
         return None
     await observe_prepare_turn(label, user_text=user_text)
     status = parse_status(user_text)
@@ -495,7 +507,10 @@ async def service_slot(label: str, user_text: str) -> str | None:
         # услугу (правило владельца 14.10 — в контексте услуга, названная пациенту одной строкой; `shown_context`).
         shown = shown_context.previous()
         return shown[0] if len(shown) == 1 else ""
-    return service_phrase(user_text)
+    phrases = service_phrase(user_text)
+    if phrases:
+        shown_context.parsed_input(phrases)
+    return phrases
 
 
 def parse_status(text: str) -> str | None:
@@ -642,11 +657,26 @@ async def turn_facet(user_text: str) -> FacetDecision:
     return await start_facet(user_text)
 
 
+def absorbed() -> bool:
+    """Ход поглощён ответом на свой вопрос бота (`own_question_reply = on`, BUG-2026-10-30-OWN-LIST-REPLY): одна функция ответа
+    на висящий вопрос решила, что реплика — ответ (пункт показанного списка, да / нет, значение слота). Тип вопроса такого хода
+    задал вопрос бота — LLM о голой реплике («1», «первый», «почек») не спрашивается, читатели типа вопроса идут прежним путём.
+    Одно определение для всех читателей типа вопроса (не белый список флагов правил)."""
+
+    from . import pending_answer  # функция ответа импортирует понимание хода — импорт на вызове
+
+    return pending_answer.absorbs_turn()
+
+
 async def llm_facet(user_text: str) -> str | None:
     """Тип вопроса, по которому читатель действует под `facet_by_llm = on`: решение LLM этой реплики. None — выключатель off,
-    сбой LLM, лимит хода, слов нет: читатель идёт прежним путём (своими детекторами)."""
+    сбой LLM, лимит хода, слов нет, ход поглощён ответом на свой вопрос (`absorbed`): читатель идёт прежним путём (своими
+    детекторами)."""
 
     if not facet_by_llm():
+        return None
+    if absorbed():
+        turn_telemetry.note(tu_facet_src="absorbed")
         return None
     decided = await turn_facet(user_text)
     return decided.value if decided.src == "llm" else None
@@ -765,7 +795,7 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
         return None
     if mode() != "off":
         # Тип вопроса от LLM (`facet_by_llm = on`) — параллельно разбору реплики; ход ждёт обоих.
-        facet = start_facet(user_text) if facet_by_llm() else None
+        facet = start_facet(user_text) if facet_by_llm() and not absorbed() else None
         tu = await (_observe_parse_on(user_text) if agree_telemetry() else _observe_parse_on_lazy(user_text))
         tu = _decide_named(tu, user_text) if tu is not None and one_enabled() else tu
         if facet is None:

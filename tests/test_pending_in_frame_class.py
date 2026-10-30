@@ -8,8 +8,10 @@ STEP-2026-10-30-PENDING-IN-FRAME, выключатель `pending_in_frame`).
 
 Инвариант класса: под `pending_in_frame = on` реплика целиком значением слота-услуги не становится — ни у «domain», ни у «ответа»
 судьи; значение — позиции из разбора хода, разбор пуст или упал — слот не пишется; тема кнопки держится; тот же переспрос на ходу
-`in_frame` — повтор для анти-залипа, как у ответа. Цель подбора (`test_goal`) — свободные слова, как у правил. off — байт в байт как было. Через обработчик
-эндпоинта, на два-три хода; LLM — подделки настоящего типа (судья, классификатор, оракул разметки хода `tests.spans_oracle`).
+`in_frame` — повтор для анти-залипа, как у ответа. Фраза разбора в слоте — вход инструмента этого хода, а не контекст: после
+ответа услуга контекста — показанное (одна памятка — она; несколько или ни одной — без единственной услуги; «ВПЧ» в слоте и памятка
+«Папилломавирус 16/18» на экране не дают цены жидкостной цитологии на «а сколько стоит?»). Цель подбора (`test_goal`) — свободные
+слова, как у правил. off — байт в байт как было. Через обработчик эндпоинта, на два-три хода; LLM — подделки настоящего типа (судья, классификатор, оракул разметки хода `tests.spans_oracle`).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from tests.spans_oracle import SpansOracle, keep_llm_breaker_closed
 from tests.test_booking_slots_by_meaning import _LLM
 from tests.test_button_actions import GATEWAY_V1_TITLES
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
+from tests.understanding_contract import d21_world  # noqa: F401 — фикстура
 
 _FRAME_JUDGE_MARK = "пациент спрашивает о другом, но в теме нажатой кнопки"  # судья варианта Б (`choose_pending_free_reply_button_frame`)
 _CLASSIFIER_MARK = "Ты классификатор запросов пациента"
@@ -35,6 +38,9 @@ _PREPARE = "menu.tests.prepare"
 _SUGGEST = "menu.tests.suggest"
 _OWN_QUESTION = "Откуда берут биоматериал для ВПЧ?"
 _PRICE_FOLLOWUP = "а сколько стоит?"
+_MEMO_SELECT_MARK = "Памятки клиники для пациентов"
+# Памятка справочника, которую подготовка покажет на «ВПЧ» (как на стенде: карточка «Папилломавирус 16/18», а не цитология).
+_HPV_MEMO = {"Папилломавирус 16/18 (колич.)": "Подготовка к исследованию на ВПЧ: мазок из цервикального канала, за 2 дня исключить спринцевания."}
 
 
 def _press(button_id: str) -> tuple[str, str]:
@@ -60,6 +66,7 @@ def _dialog(
     judge: dict[str, str],
     phrases: tuple[str, ...] | None = ("ВПЧ",),
     label: str = "PRICE",
+    memos: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
@@ -68,7 +75,10 @@ def _dialog(
 
     session = f"in-frame-{in_frame}-{json.dumps(turns, ensure_ascii=False)}-{json.dumps(judge, ensure_ascii=False)}-{phrases}"
     classifier = json.dumps({"label": label, "confidence": 0.9, "context_action": "new_topic", "entities": {}})
-    inner = _LLM({_FRAME_JUDGE_MARK: _judge(judge), _CLASSIFIER_MARK: classifier, "Сообщение пациента": json.dumps({"picks": []})})
+    answers: dict[str, Any] = {_FRAME_JUDGE_MARK: _judge(judge), _CLASSIFIER_MARK: classifier}
+    if memos:
+        answers[_MEMO_SELECT_MARK] = json.dumps({"match": 1})  # выбор памятки (`prepare_document_select`) — первая из кандидатов
+    inner = _LLM({**answers, "Сообщение пациента": json.dumps({"picks": []})})
 
     async def run(world) -> list[dict[str, Any]]:
         memory, services, out = MemoryStore(), Services(), []
@@ -101,6 +111,11 @@ def _dialog(
         keep_llm_breaker_closed(patch)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", SpansOracle(phrases, inner=inner))
+        if memos:
+            from agent_logic_2.nayka_api import api_service_info
+
+            rows = [{"serviceName": name, "preparation": text} for name, text in memos.items()]
+            patch.setattr(api_service_info, "load_service_info", lambda: rows)
         choice._CACHE.clear()
         return asyncio.run(run(world))
 
@@ -112,17 +127,31 @@ def _service(turn: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- слот-услуга: позиция из разбора, не реплика
 
 
-@pytest.mark.parametrize("outcome", ["domain", "answer"])
-def test_own_question_is_not_the_service_on_the_next_turn(outcome, mini_prod_world, monkeypatch):  # noqa: F811
-    """«Как подготовиться к анализу» → свой вопрос → «а сколько стоит?»: в состоянии — позиция разбора («ВПЧ»), цена — ВПЧ, а не
-    «По услуге «Откуда берут биоматериал…»». И у «domain», и у «ответа» судьи — реплика целиком слотом-услугой не становится."""
+_HPV_SHOWN = next(iter(_HPV_MEMO))
+_FOREIGN_ROW = "Жидкостная цитология"  # строки прайса со словом «ВПЧ», которых памятка не показывала
 
-    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), _OWN_QUESTION, _PRICE_FOLLOWUP], in_frame="on", judge={_OWN_QUESTION: outcome})
+
+@pytest.mark.parametrize("outcome", ["domain", "answer"])
+def test_next_turn_prices_what_the_memo_showed(outcome, mini_prod_world, monkeypatch):  # noqa: F811
+    """«Как подготовиться к анализу» → свой вопрос → «а сколько стоит?»: фраза разбора «ВПЧ» — вход подготовки, а контекст после
+    памятки — показанная карточка «Папилломавирус 16/18 (колич.)»: цена — её, а не «По услуге «Откуда берут…»» (off) и не цены
+    жидкостной цитологии, которых пациент не видел (первая версия шага 1а, карточка набора 22). И у «domain», и у «ответа»."""
+
+    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), _OWN_QUESTION, _PRICE_FOLLOWUP], in_frame="on", judge={_OWN_QUESTION: outcome}, memos=_HPV_MEMO)
     assert turns[1]["telemetry"].get("tu_pending_outcome") == ("in_frame" if outcome == "domain" else "answer"), turns[1]["telemetry"]
-    assert turns[1]["label"] == "PREPARE" and turns[1]["telemetry"].get("nlu_topic_by_llm") == "button_answer", turns[1]
-    assert _service(turns[1]) == "ВПЧ", turns[1]["state"]
-    assert "Откуда" not in turns[2]["text"] and "ВПЧ" in turns[2]["text"], turns[2]["text"]
-    assert all("Откуда" not in str(value) for value in turns[2]["state"].values()), turns[2]["state"]
+    assert turns[1]["label"] == "PREPARE" and _HPV_SHOWN in turns[1]["text"], turns[1]
+    assert _service(turns[1]) == _HPV_SHOWN and turns[1]["state"].get("_shown_services") == [_HPV_SHOWN], turns[1]["state"]
+    assert _HPV_SHOWN in turns[2]["text"] and "490" in turns[2]["text"], turns[2]["text"]
+    assert "Откуда" not in turns[2]["text"] and _FOREIGN_ROW not in turns[2]["text"], turns[2]["text"]
+
+
+def test_nothing_shown_leaves_no_service_for_the_next_turn(mini_prod_world, monkeypatch):  # noqa: F811
+    """Памятки нет («подскажет оператор») — показано ничего: фраза разбора контекстом не становится, «а сколько стоит?» спрашивает
+    название, а не отвечает ценой строк со словом «ВПЧ», которых пациент не видел."""
+
+    turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), _OWN_QUESTION, _PRICE_FOLLOWUP], in_frame="on", judge={_OWN_QUESTION: "domain"})
+    assert turns[1]["telemetry"].get("prepare_subject") == "parse" and not _service(turns[1]), turns[1]
+    assert _FOREIGN_ROW not in turns[2]["text"] and "Откуда" not in turns[2]["text"] and "руб" not in turns[2]["text"], turns[2]["text"]
 
 
 def test_off_keeps_the_reply_in_the_slot_as_before(mini_prod_world, monkeypatch):  # noqa: F811
@@ -148,13 +177,14 @@ def test_no_parse_writes_no_slot(phrases, mini_prod_world, monkeypatch):  # noqa
 @pytest.mark.parametrize("outcome", ["domain", "answer"])
 def test_list_is_the_positions_not_one_of_them(outcome, mini_prod_world, monkeypatch):  # noqa: F811
     """Две услуги в реплике — обе позиции разбора (не одна из них и не реплика): слот закрыт, и инструмент подготовки зовут, а не
-    переспрашивают название (стенд 30.10, g0363: «Можно ли сдать ОАК ребенку … и ОАМ?» — памятка, а не «Напишите название»)."""
+    переспрашивают название (стенд 30.10, g0363: «Можно ли сдать ОАК ребенку … и ОАМ?» — памятка, а не «Напишите название»).
+    Контекст после ответа — показанное (здесь памяток нет — услуги нет), а не список фраз."""
 
     reply = "Можно ли сдать ОАК ребенку в год из пальца и ОАМ?"
     turns = _dialog(mini_prod_world, monkeypatch, [_press(_PREPARE), reply], in_frame="on", judge={reply: outcome}, phrases=("ОАК", "ОАМ"))
     assert turns[1]["telemetry"].get("tu_parse_status") == "picked" and turns[1]["telemetry"].get("tu_parse_n") == 2, turns[1]["telemetry"]
-    assert _service(turns[1]) == "ОАК, ОАМ", turns[1]["state"]
-    assert turns[1]["telemetry"].get("prepare_subject") == "parse", turns[1]["telemetry"]
+    assert turns[1]["telemetry"].get("prepare_subject") == "parse" and "Напишите название" not in turns[1]["text"], turns[1]
+    assert not _service(turns[1]), turns[1]["state"]
 
 
 def test_goal_slot_keeps_free_words(mini_prod_world, monkeypatch):  # noqa: F811
@@ -222,3 +252,78 @@ def test_readers_ask_in_topic_not_the_answer_outcome():
         if re.search(r"Outcome\.(ANSWER|IN_FRAME)\b", line)
     ]
     assert not offenders, offenders
+
+
+
+# --------------------------------------------------------------------------- контекст после ответа в рамке = показанное
+
+
+def test_several_memos_shown_leave_no_single_service():
+    """Несколько показанных карточек — показанное в контексте, единственной услуги нет; ни одной — фраза разбора снимается."""
+
+    from messengers_router import shown_context
+    from messengers_router.mess_types import SessionState
+
+    state = SessionState(session_id="s")
+    for shown, service in ((["ТТГ (TSH)", "Антитела к рецепторам ТТГ"], None), ([], None), (["Ферритин"], "Ферритин")):
+        shown_context.begin_turn(state)
+        state.last_entities["service_name"] = "Ттг"  # слияние сущностей меняет регистр
+        shown_context.parsed_input("ттг")
+        shown_context.sync_prepare(state, {"prepare": "…", "prepare_shown": shown})
+        shown_context.finish_turn(state)
+        assert state.last_entities.get("service_name") == service and state.last_entities.get(shown_context.SHOWN_KEY) == shown
+
+
+def test_end_of_turn_drops_only_the_unshown_phrase():
+    """Ответ не подготовки (переспрос, оффер): фраза разбора снимается в конце хода; услугу, которую ход записал сам (цена —
+    показанная строка), конец хода не трогает. Без фразы разбора в слоте подготовка контекст не пишет — как было."""
+
+    from messengers_router import shown_context
+    from messengers_router.mess_types import SessionState
+
+    state = SessionState(session_id="s")
+    shown_context.begin_turn(state)
+    state.last_entities["service_name"] = "ВПЧ"
+    shown_context.parsed_input("ВПЧ")
+    shown_context.finish_turn(state)
+    assert "service_name" not in state.last_entities
+    shown_context.begin_turn(state)
+    state.last_entities["service_name"] = "ВПЧ"
+    shown_context.parsed_input("ВПЧ")
+    state.last_entities["service_name"] = "Папилломавирус 16/18 (колич.)"  # показала цена хода
+    shown_context.finish_turn(state)
+    assert state.last_entities["service_name"] == "Папилломавирус 16/18 (колич.)"
+    shown_context.begin_turn(state)
+    shown_context.sync_prepare(state, {"prepare": "…", "prepare_shown": ["Ферритин"]})
+    assert state.last_entities["service_name"] == "Папилломавирус 16/18 (колич.)" and shown_context.SHOWN_KEY not in state.last_entities
+
+
+def test_bot_question_about_the_same_subject_keeps_it():
+    """Ответ подготовки — вопрос бота о том же предмете («с наркозом или без?»): фраза разбора остаётся входом висящего вопроса и
+    конец хода её не снимает (стенд 30.10, `yn_prep_offer_davai`: «как подготовиться к колоноскопии» → вопрос о наркозе → «давай» —
+    без предмета «Хорошо, пишите» вместо оффера оператора)."""
+
+    from messengers_router import shown_context
+    from messengers_router.mess_types import SessionState
+
+    state = SessionState(session_id="s")
+    shown_context.begin_turn(state)
+    state.last_entities["service_name"] = "Колоноскопии"
+    shown_context.parsed_input("колоноскопии")
+    shown_context.sync_prepare(state, {"prepare": "Исследование будет с наркозом или без?", "prepare_variants": {"with": "А", "without": "Б"}})
+    shown_context.finish_turn(state)
+    assert state.last_entities["service_name"] == "Колоноскопии" and shown_context.SHOWN_KEY not in state.last_entities
+
+
+@pytest.mark.parametrize("dialog", ["P1", "P1_HAVE"])
+def test_char_dialogs_p1_hold_under_on(dialog, d21_world, monkeypatch):  # noqa: F811
+    """Диалоги П-1 сетки деплоя 22 (`tests/test_two_turn_shown_context_class.py`, xfail strict Н-1 под конфигом деплоя 21) под
+    `pending_in_frame = on`: вопрос пациента не в слоте и на «а сколько стоит?» нет услуги, которой бот не показывал."""
+
+    from tests import test_two_turn_shown_context_class as two
+    from tests import understanding_contract as uc
+
+    turns = getattr(two, dialog)
+    record = uc.run(d21_world, monkeypatch, turns, cfg={"MR_PENDING_IN_FRAME": "on"})
+    assert two._reply_in_slot(turns, record) == [] and two._unseen_claims(record) == [], [r["text"] for r in record]
+    assert _FOREIGN_ROW not in record[2]["text"], record[2]["text"]

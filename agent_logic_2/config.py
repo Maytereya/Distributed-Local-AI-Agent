@@ -238,6 +238,7 @@ class MessengerRouterConfig:
     frame_policy: str
     shown_by_id: str
     expects_by_understanding: str
+    own_question_reply: str
     insurance_topic: str
     price_select_named: str
     bare_name_overview: str
@@ -821,6 +822,11 @@ settings = Settings(
         # без продвижения — один вопрос-оффер с причиной (Д2 звено 2, вариант (А), решение владельца 29.10; шаг 3 деплоя 22,
         # STEP-2026-10-30-EXPECTS-BY-UNDERSTANDING). off — как было. [MESSENGER_ROUTER] expects_by_understanding
         expects_by_understanding=_get_enum("MESSENGER_ROUTER", "expects_by_understanding", default="off", allowed={"off", "on"}),
+        # Ответ на свой вопрос бота (BUG-2026-10-30-OWN-LIST-REPLY): показанный нумерованный список цен и просьба инструмента назвать
+        # услугу — висящий вопрос одной функции ответа (`pending_answer`): строку списка выбирают номером, словом («первый») или
+        # названием, «все» раскрывает список; названное в ответ на просьбу остаётся в теме просьбы. Ход, который ответ на свой
+        # вопрос поглотил, тип вопроса (`facet_by_llm`) не судит. off — как было. [MESSENGER_ROUTER] own_question_reply
+        own_question_reply=_get_enum("MESSENGER_ROUTER", "own_question_reply", default="off", allowed={"off", "on"}),
         # Вопрос об обслуживании по ДМС / ОМС как тема (класс К26, решение владельца 28.10, ответ клиники): о чём реплика со
         # словами страхования, решает LLM (`choose`, задача `insurance`; слова — кандидат); как получить помощь по ДМС — памятка
         # клиники и оффер оператора, ОМС, конкретный врач, гарантийное письмо и отдел ДМС — «ответит оператор» и оффер; цена — путь цены.
@@ -1046,6 +1052,7 @@ MR_PRICE_NOT_FOUND_BY_DATA = settings.messenger_router.price_not_found_by_data
 MR_FRAME_POLICY = settings.messenger_router.frame_policy
 MR_SHOWN_BY_ID = settings.messenger_router.shown_by_id
 MR_EXPECTS_BY_UNDERSTANDING = settings.messenger_router.expects_by_understanding
+MR_OWN_QUESTION_REPLY = settings.messenger_router.own_question_reply
 MR_INSURANCE_TOPIC = settings.messenger_router.insurance_topic
 MR_PRICE_SELECT_NAMED = settings.messenger_router.price_select_named
 MR_BARE_NAME_OVERVIEW = settings.messenger_router.bare_name_overview

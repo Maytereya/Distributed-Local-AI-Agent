@@ -466,6 +466,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
     lines = [f"По запросу «{service_name}» нашёл варианты стоимости:"]
     grouped = _group_family_variants_by_care_context(shown)
     has_care_groups = any(group["label"] or group["address"] or group["heading"] for group in grouped)
+    numbered: list[str] = []  # строки списка, как их увидел пациент, без номера — пункты вопроса о списке
 
     if has_care_groups:
         for group in grouped:
@@ -486,6 +487,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
                 name = str(row.get("serviceName") or row.get("name") or service_name).strip()
                 amount = _format_rub(_extract_price_amount(row))
                 lines.append(_close_sentence(f"{i}. {name} — {amount}"))
+                numbered.append(f"{name} — {amount}")
     else:
         for i, row in enumerate(shown, 1):
             if not isinstance(row, dict):
@@ -497,11 +499,21 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
             if care_suffix:
                 line = f"{line} {care_suffix}"
             lines.append(line)
+            numbered.append(f"{name} — {amount}")
 
+    from .pending_answer import own_question_on  # модуль ответа на висящий вопрос тянет правила — импорт на вызове
+
+    # Свой нумерованный список (одна нумерация — без групп по месту оказания) — висящий вопрос бота (`own_question_reply = on`,
+    # BUG-2026-10-30-OWN-LIST-REPLY): пункты — строки, как их увидел пациент, и «все»; ответ «1», «первый», «давайте второй»,
+    # название строки разбирает одна функция ответа, а не тип вопроса по голой реплике.
+    own_list = own_question_on() and len(numbered) == len(shown) >= 2 and (not has_care_groups or len(grouped) == 1)
     hint = str(payload.get("show_all_hint") or "").strip()
     if hint:
         lines.append("")
         lines.append(hint)
+    if own_list:
+        expects.ask(expects.Question.SHOW_ALL, kind=expects.PICK, options=(*numbered, *expects.SHOW_ALL_OPTIONS))
+    elif hint:
         # Подсказка «напишите: "все"» — висящий вопрос бота (наблюдатель `_expects`, решение владельца 15.10).
         expects.ask(expects.Question.SHOW_ALL, kind=expects.PICK, options=expects.SHOW_ALL_OPTIONS)
     # Корзина-калькулятор (`basket_calc = on`, ТЗ 17.08 §6): итог и взятие биоматериала под позициями.

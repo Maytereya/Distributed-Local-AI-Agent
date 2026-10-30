@@ -151,15 +151,23 @@ def build_readiness_response(evidence: Evidence) -> ResponseEnvelope | None:
     items = evidence.get(ek.READINESS_RESPONSE)
     if not isinstance(items, list) or not items:
         return None
-    lines = [(str(it.get("name") or "").strip(), str(it.get("deadline") or "").strip()) for it in items if isinstance(it, dict)]
-    lines = [(name, deadline) for name, deadline in lines if name and deadline]
+    lines = [
+        (str(it.get("name") or "").strip(), str(it.get("deadline") or "").strip(), str(it.get("variant") or "").strip())
+        for it in items
+        if isinstance(it, dict)
+    ]
+    lines = [(name, deadline, variant) for name, deadline, variant in lines if name and deadline]
     if not lines:
         return None
     if len(lines) == 1:
-        name, deadline = lines[0]
+        name, deadline, _ = lines[0]
         text = f"Срок готовности «{name}» — {deadline}."
     else:
-        text = "Сроки готовности:\n" + "\n".join(f"— «{name}» — {deadline}" for name, deadline in lines)
+        # Строки одной услуги с разными сроками — каждая с названием и своей ценой рядом, как цена списком
+        # (STEP-2026-10-30-FACET-READERS): цена без названия в строке — цена без привязки к услуге.
+        text = "Сроки готовности:\n" + "\n".join(
+            f"— «{name}»{f' ({variant})' if variant else ''} — {deadline}" for name, deadline, variant in lines
+        )
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
@@ -487,6 +495,7 @@ def build_prepare_response(
         return None
     if payload.get("operator_offer"):
         mark_operator_offer_pending(state, memory)
+    shown_context.sync_prepare(state, payload)
     if isinstance(payload.get("prepare_variants"), dict):
         # Вопрос «с наркозом или без?» — ответ разберёт `_handle_prepare_variant_pending`.
         state.last_entities[PREPARE_VARIANT_PENDING_KEY] = {"titles": dict(payload["prepare_variants"])}

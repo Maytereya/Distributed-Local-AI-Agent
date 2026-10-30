@@ -38,6 +38,14 @@
 - «обе», «все» на вопрос с вариантами, где можно взять несколько (`TypePolicy.many`: составная цена «Вижу в запросе две
   услуги: 1. … 2. …»), — исход `PICK` с несколькими пунктами (`Answer.picks`): задача `MANY_TASK` (те же исходы, выбор до
   N пунктов, промпт `choose_pending_reply_many`); прочие типы — прежняя задача с одним пунктом.
+
+Ответ на свой вопрос бота (`[MESSENGER_ROUTER] own_question_reply = on`, BUG-2026-10-30-OWN-LIST-REPLY), по умолчанию off — как было:
+- свой нумерованный список цен — вопрос `show_all` с пунктами-строками (`renderer`): «1», «первый», «давайте второй», название
+  строки — пункт-строка, её цену отвечает путь цены (`shown_row_number`); «все» — раскрыть список;
+- просьба инструмента цены назвать услугу («Уточните название…», «Введите конкретное название процедуры…») — вопрос-слот темы
+  (`ask_name_after_clarify`; идея BUG-2026-10-26-CLARIFY-REPLY-NOT-ACCEPTED): ответ разбирает эта функция, «ответ» держит тему;
+- ход, который функция признала ответом на вопрос (`absorbs_turn`), тип вопроса не судит (`turn_understanding.absorbed`): тип
+  задал вопрос бота, а не голая реплика («1» → «ни одно» → оффер — регресс деплоя 22 под `facet_by_llm`).
 """
 
 from __future__ import annotations
@@ -47,7 +55,7 @@ import contextvars
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from . import turn_telemetry
 from .choice import Choice, Option, Status, Task, choose
@@ -177,6 +185,15 @@ def in_frame_on() -> bool:
     from .runtime_config import config as cfg
 
     return str(getattr(cfg, "MR_PENDING_IN_FRAME", "off") or "").strip().lower() == "on"
+
+
+def own_question_on() -> bool:
+    """Ответ на свой вопрос бота — висящий вопрос этой функции (`[MESSENGER_ROUTER] own_question_reply = on`,
+    BUG-2026-10-30-OWN-LIST-REPLY): показанный список цен — выбор строки, просьба назвать услугу — вопрос-слот темы."""
+
+    from .runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_OWN_QUESTION_REPLY", "off") or "").strip().lower() == "on"
 
 
 # Выбор, где можно взять несколько пунктов («обе»): те же исходы, что у `pending_reply.PENDING_TASK`, пунктов — до N.
@@ -370,6 +387,33 @@ def exact_pick(text: str, options: tuple[str, ...]) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def shown_rows(options: tuple[str, ...]) -> tuple[str, ...]:
+    """Строки показанного списка цен среди пунктов вопроса `show_all` (`own_question_reply = on`): все пункты, кроме «все»;
+    под off пункт один — «все», строк нет."""
+
+    return tuple(option for option in options if option not in SHOW_ALL_OPTIONS)
+
+
+def shown_row_number(text: str) -> int | None:
+    """Номер строки показанного списка цен, которую выбрал пациент. Под `own_question_reply = on` — решение этой функции на
+    вопрос о списке (номер, «первый», «давайте второй», название строки своими словами — пункт-строка); без такого решения —
+    реплика-номер («1», «2.»), как было. Одно место, где путь цены и классификатор читают выбор строки. Пункты — из поля
+    ожидания на начало хода (`expects.previous`): инструменты поля в сущностях не видят (`expects.without`).
+
+    :param text: реплика пациента
+    :return: номер строки с 1; не выбор строки — None
+    """
+
+    found = current(Question.SHOW_ALL)
+    if own_question_on() and found is not None and found.decided and found.outcome is Outcome.PICK and not found.rest:
+        from . import expects
+
+        asked = expects.previous() or {}
+        rows = shown_rows(tuple(asked.get("options") or ())) if asked.get("type") == Question.SHOW_ALL.value else ()
+        return rows.index(found.pick) + 1 if found.pick in rows else None
+    return number(text)
+
+
 def _is_show_all_reply(text: str) -> bool:
     """Реплика — пункт «все» подсказки «…напишите: "все"» своими словами из одного определения пути цены
     (`_prices_helpers._is_price_show_all_request`: «все», «покажи все», «все варианты»)."""
@@ -495,7 +539,11 @@ async def answer(
     if question_type == Question.SHOW_ALL.value and number(reply) is not None:
         # Цифра на подсказку «напишите: "все"» — номер строки показанного списка, а не пункт подсказки (пункт один — «все»):
         # нумерации совпадали, и «1» раскрывало весь список (BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD). Строку с этим номером
-        # отвечает путь цены (`_prices_helpers._price_family_row_from_context`), без LLM.
+        # отвечает путь цены (`_prices_helpers._price_family_row_from_context`), без LLM. Строки списка — пункты вопроса
+        # (`own_question_reply = on`): номер — пункт-строка (ход поглощён ответом), номера нет в списке — ничего из этого.
+        row = exact_pick(reply, shown_rows(options))
+        if row is not None:
+            return _remember(Answer(question_type, Outcome.PICK, pick=row, source=Source.FAST, text=reply))
         return _remember(Answer(question_type, Outcome.NONE, source=Source.FAST, text=reply))
     picked = exact_pick(reply, options)
     if picked is None and question_type == Question.SHOW_ALL.value and _is_show_all_reply(reply):
@@ -655,6 +703,22 @@ def shows_all() -> bool:
     return found.outcome is Outcome.YES or (found.outcome is Outcome.PICK and found.pick in SHOW_ALL_OPTIONS)
 
 
+# Исходы, которыми пациент ответил на вопрос бота, не задав своего: да / нет / пауза / пункт / значение слота.
+_ABSORBING = frozenset({Outcome.YES, Outcome.NO, Outcome.PAUSE, Outcome.PICK, Outcome.ANSWER})
+
+
+def absorbs_turn() -> bool:
+    """Ход — ответ на свой вопрос бота (`own_question_reply = on`, BUG-2026-10-30-OWN-LIST-REPLY): одна функция решила, что
+    реплика ответила на висящий вопрос (да / нет / пауза / пункт списка / значение слота), без хвоста. Тип вопроса такого хода
+    задал вопрос бота: «1» на список цен — строка списка, а не «ни одно» по голой реплике. Свой вопрос в рамке кнопки
+    (`in_frame`), «ничего из этого», другая тема, хвост и сбой LLM — ход не поглощён."""
+
+    if not own_question_on():
+        return False
+    found = current()
+    return found is not None and found.decided and not found.rest and found.outcome in _ABSORBING
+
+
 _FLOW_TYPES = (Question.APPOINTMENT_ACTION, Question.APPOINTMENT_BRANCH, Question.BOOKING_SERVICE)
 
 
@@ -722,6 +786,74 @@ def slot_value(text: str) -> str:
 
     value = " ".join(str(text or "").split()).strip(" .,!?;:")
     return value if 0 < len(value) <= _SLOT_VALUE_MAX else ""
+
+
+# Просьба инструмента темы назвать услугу («Уточните название…», «Введите конкретное название процедуры…») — висящий вопрос со
+# свободным ответом (`own_question_reply`; идея BUG-2026-10-26-CLARIFY-REPLY-NOT-ACCEPTED): пометка ответа инструмента, слот
+# названия темы (как у вопроса планировщика, `policies.REQUIRED_SLOTS`) и пометка `_pending`, что вопрос поставлен этой просьбой.
+ASKS_NAME_KEY = "asks_service_name"
+CLARIFY_KEY = "clarify"
+_NAME_SLOTS = {"PRICE": "service_name"}
+
+
+def ask_name_after_clarify(label: str, payloads: Iterable[Any], handoff: bool, state: Any, memory: Any) -> bool:
+    """Инструмент темы попросил назвать услугу — висящий вопрос со свободным ответом (`slot_value`, под `pending_buttons`):
+    `_pending` темы с пометкой `CLARIFY_KEY`. Ответ разбирает эта функция (LLM, `FREE_TASK`), а не правило «похоже на название»
+    (`flow_policy._looks_like_price_service_reply` ловит и «спасибо», и «хочу записаться к кардиологу»). Другой висящий вопрос
+    хода (оффер оператора, анти-залип) не перебивается.
+
+    :return: вопрос поставлен
+    """
+
+    slot = _NAME_SLOTS.get(label)
+    if not own_question_on() or not buttons_on() or slot is None or handoff or memory.get_pending(state):
+        return False
+    if not any(isinstance(payload, dict) and payload.get(ASKS_NAME_KEY) for payload in payloads):
+        return False
+    memory.set_pending(state, label=label, missing_slots=[slot])
+    memory.get_pending(state)[CLARIFY_KEY] = True
+    if state.last_entities.get("_secondary_offer_pending"):
+        # Оффер второй темы реплики текста в ответе не имеет (`orchestrator._mark_secondary_offer_pending`): пациент видит просьбу —
+        # ответ на неё, а не «да» на скрытый оффер; вторая тема остаётся в очереди и будет предложена после ответа по услуге.
+        state.last_entities["_secondary_offer_pending"] = False
+    from . import expects
+
+    expects.ask(Question.SLOT_VALUE, kind=expects.FREE)
+    turn_telemetry.note(tu_clarify_topic=label)
+    return True
+
+
+def clarify_question(pending: Any) -> bool:
+    """Висящий вопрос поставлен просьбой инструмента назвать услугу (`ask_name_after_clarify`)."""
+
+    return isinstance(pending, dict) and bool(pending.get(CLARIFY_KEY))
+
+
+def settle_clarify(answered: Answer | None, state: Any, memory: Any, spent_before: int) -> None:
+    """После решения функции об ответе на просьбу назвать услугу: «ответ» (решила LLM) — вопрос остаётся до NLU (тема —
+    `clarify_topic`), решение заменяет классификатор темы и лимит решений хода не тратит (как судья кнопок цены,
+    `button_flow.refund_topic_judge`); иначе (другая тема, «нет», пауза, ничего, сбой LLM) — вопрос снят, реплика идёт обычным
+    путём, как без выключателя."""
+
+    if not clarify_question(memory.get_pending(state)):
+        return
+    if answered is None or answered.source is not Source.LLM or answered.outcome is not Outcome.ANSWER:
+        memory.clear_pending(state)
+        return
+    from . import llm_runtime
+
+    if llm_runtime.turn_decisions_spent() > spent_before and llm_runtime.refund_turn_decision():
+        turn_telemetry.note(tu_clarify_refund=1)
+
+
+def clarify_topic(pending: Any) -> str:
+    """Тема ответа на просьбу назвать услугу, который эта функция признала ответом: тема вопроса (NLU её не угадывает по словам
+    реплики — «узи щитовидной железы» в ответ на вопрос о цене не уходит к врачам); иначе пусто."""
+
+    found = slot_answer()
+    if not clarify_question(pending) or found is None or found.outcome is not Outcome.ANSWER:
+        return ""
+    return str(pending.get("label") or "")
 
 
 def slot_answer() -> Answer | None:

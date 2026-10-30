@@ -516,11 +516,10 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
     pending_label = pending.get("label")
     if not isinstance(pending_label, str):
         return decision.label
-    if pending_answer.continues(*pending_answer.PENDING_QUESTIONS) is False:
-        # «Другая тема» на висящий вопрос темы `_pending` решила одна функция ответа (`expects_by_understanding = on`): тема хода —
-        # решение NLU, переклеек по форме реплики («похоже на название услуги», город, короткий ответ подготовки) нет.
-        pending_answer.acted("plan_pending_override")
-        return decision.label
+    # «Другая тема» на висящий вопрос темы `_pending` решила одна функция ответа (`expects_by_understanding = on`): переклеек по
+    # форме реплики («похоже на название услуги», короткий ответ подготовки) нет, тема хода — решение NLU. Структурный ответ
+    # (город, филиал, ФИО, фамилия врача) — сужение до LLM, как было.
+    new_topic = pending_answer.continues(*pending_answer.PENDING_QUESTIONS) is False
     # Для добора города не разрешаем случайному ADDRESS-решению
     # (обычно на короткий ответ "Самара") ломать исходный flow. PRICE здесь нет: тему хода переклеивает строка
     # `flow_price_city_reply_override` роутера (решение, план и состояние диалога — одной темы); планировщик метку плана
@@ -533,7 +532,8 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
     ):
         return pending_label
     if (
-        pending_label == "PRICE"
+        not new_topic
+        and pending_label == "PRICE"
         and decision.label in {"TEST_ASSIST", "OTHER", "APPOINTMENT", "DOCTOR_INFO", "ADDRESS"}
         and any("service_name" in str(item or "") for item in (pending.get("missing") or []))
         and _looks_like_price_service_reply(user_text)
@@ -573,11 +573,14 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
     ):
         return "APPOINTMENT"
-    if pending_label == "PREPARE":
+    if pending_label == "PREPARE" and not new_topic:
         # Короткий ответ на уточнение подготовки ("вульвоскопия") не должен
         # сбрасываться в PRICE/ADDRESS из-за одиночной переклассификации.
         if detect_prepare_intent(user_text) or _is_short_prepare_followup(user_text):
             return "PREPARE"
+    if new_topic:
+        pending_answer.acted("plan_pending_override")
+        return decision.label
     if _should_break_pending(decision, pending_label):
         return decision.label
     return pending_label
