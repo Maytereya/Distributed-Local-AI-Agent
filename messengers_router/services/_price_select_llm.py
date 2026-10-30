@@ -648,7 +648,9 @@ async def _family_rows(question: str, picked: list[dict[str, Any]], pool: list[d
     mode = scope_mode()
     if mode == "off" or len(picked) != 1:
         return None
-    names = list(dict.fromkeys(_row_name(row) for row in pool if _row_name(row)))[:_SCOPE_NAMES]
+    # Выбранная строка — первой: пул идёт в порядке правил, и она бывает дальше потолка названий — вопрос не видел того, о чём
+    # спрашивает («геморроидэктомия 3–4 стадии» — 20-я в пуле, ответ «слишком общее», карточка 30.10).
+    names = list(dict.fromkeys(_row_name(row) for row in (*picked, *pool) if _row_name(row)))[:_SCOPE_NAMES]
     if len(names) < 2:
         return None
     started = time.monotonic()

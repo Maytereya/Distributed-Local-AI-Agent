@@ -130,6 +130,30 @@ def test_scope_failure_and_shadow_answer_as_off(case, mini_prod_world, monkeypat
     assert _names(shadow) == _names(off) and shadow_row.get("price_family_scope") == "family" and shadow_llm.family_asked == 0
 
 
+def test_scope_question_sees_the_picked_row_beyond_the_names_cap(monkeypatch) -> None:
+    """Выбранная строка дальше потолка названий в пуле (`_SCOPE_NAMES`) — вопрос «что просит» всё равно видит её первой."""
+
+    import asyncio
+
+    from messengers_router.choice import Choice, Status
+    from messengers_router.services import _price_select_llm as sel
+
+    pool = [{"serviceName": f"Удаление {i}", "cost": 1000 + i} for i in range(20)]
+    picked = {"serviceName": "Геморроидэктомия (осложненная), 3-4 стадии", "cost": 50000}
+    pool.append(picked)
+    seen: dict[str, str] = {}
+
+    async def fake_choose(task, question, options, **kw):
+        seen["context"] = kw.get("context", "")
+        return Choice(Status.PICKED, outcome="one")
+
+    monkeypatch.setattr(sel, "choose", fake_choose)
+    monkeypatch.setattr(sel._cfg, "MR_PRICE_SCOPE_LLM", "on", raising=False)
+    assert asyncio.run(sel._family_rows("удаление геморроя 3-4 степени, цены", [picked], pool)) is None
+    lines = seen["context"].splitlines()
+    assert lines[0] == picked["serviceName"] and len(lines) == sel._SCOPE_NAMES
+
+
 def test_prompts_are_the_same_in_both_locations() -> None:
     from pathlib import Path
 
