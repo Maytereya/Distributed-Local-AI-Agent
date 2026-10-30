@@ -49,6 +49,9 @@ _RENDERED_PRICE_ROWS = 5  # рендер цены печатает не боль
 _PREVIOUS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_shown_previous", default=())
 # Услуга контекста до хода (`service_name`): ответ walk-in возвращает её, когда показано несколько строк.
 _BEFORE: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_service_before", default="")
+# Услуга, которую этот ход записал в слот фразой разбора (`pending_in_frame`, `router._pending_slot_value`): вход инструмента хода,
+# а не контекст — после ответа её заменяет показанное (`sync_prepare`) или снимает конец хода (`finish_turn`).
+_PARSED: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_parsed_input", default="")
 
 
 def _row_name(row: Any) -> str:
@@ -99,6 +102,7 @@ def begin_turn(state: SessionState) -> None:
     shown = state.last_entities.get(SHOWN_KEY)
     _PREVIOUS.set(tuple(str(name) for name in shown if str(name or "").strip()) if isinstance(shown, list) else ())
     _BEFORE.set(str(state.last_entities.get("service_name") or "").strip())
+    _PARSED.set("")
 
 
 def previous() -> tuple[str, ...]:
@@ -119,6 +123,42 @@ def remember(state: SessionState, names: list[str]) -> None:
     if len(names) == 1:
         state.last_entities["service_name"] = names[0]
         state.last_entities.pop("test_name", None)
+
+
+def parsed_input(phrases: str) -> None:
+    """Слот-услуга этого хода — позиции разбора, слова пациента (`turn_understanding.service_slot`, `pending_in_frame`): их читает
+    инструмент хода, а контекст следующего хода — то, что ответ показал (И-5.5; Н-1, второй ход: «ВПЧ» в слоте и памятка
+    «Папилломавирус 16/18» на экране → «а сколько стоит?» отвечало ценой жидкостной цитологии, которой пациент не видел)."""
+
+    _PARSED.set(_norm(phrases))
+
+
+def sync_prepare(state: SessionState, payload: dict[str, Any]) -> None:
+    """Ответ подготовки после фразы разбора в слоте (`parsed_input`): контекст — показанные памятки МИС (`prepare_shown`; названия
+    карточек справочника — услуги клиники): одна — она (`remember`), несколько или ни одной (памятка базы знаний, общая памятка,
+    «памятки нет») — без единственной услуги. Без фразы разбора в слоте — как было: подготовка контекст не пишет. Ответ — вопрос
+    бота о том же предмете («с наркозом или без?», `prepare_variants`): разговор о предмете не закончен, фраза — вход висящего
+    вопроса и остаётся (стенд 30.10, `yn_prep_offer_davai`: без неё «давай» на вопрос о наркозе теряло колоноскопию)."""
+
+    if not _PARSED.get() or _norm(str(state.last_entities.get("service_name") or "")) != _PARSED.get():
+        return
+    _PARSED.set("")
+    if isinstance(payload.get("prepare_variants"), dict):
+        return
+    names = [str(name) for name in payload.get("prepare_shown") or [] if str(name or "").strip()]
+    remember(state, names)
+    if len(names) != 1:
+        state.last_entities.pop("service_name", None)
+
+
+def finish_turn(state: SessionState) -> None:
+    """Конец хода: фраза разбора, которую ответ не заменил показанным (переспрос, оффер, ответ не подготовки), — не контекст
+    следующего хода: снимается, если в слоте всё ещё она. Услугу, которую ход записал сам (цена — `sync_price`), не трогает."""
+
+    parsed = _PARSED.get()
+    _PARSED.set("")
+    if parsed and _norm(str(state.last_entities.get("service_name") or "")) == parsed:
+        state.last_entities.pop("service_name", None)
 
 
 def expands_shown(decision: RouteDecision) -> bool:
