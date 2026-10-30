@@ -49,6 +49,7 @@ from ._strong_match import strong_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
 from ._price_select_llm import (
+    FAMILY_VISIBLE_LIMIT,
     PriceSelection,
     distinct_services,
     reconcile_with_proposal,
@@ -121,6 +122,12 @@ def _llm_family_payload(service_name: str, rows: list[dict[str, Any]], *, visibl
         else "",
         "note": "price_llm_select",
     }
+
+
+def _visible_limit(selection: Any) -> int:
+    """Видимых строк списка: у семейства одной услуги — `FAMILY_VISIBLE_LIMIT` (решение владельца 30.10, В3), иначе 10, как было."""
+
+    return FAMILY_VISIBLE_LIMIT if getattr(selection, "status", "") == "family" else 10
 
 
 def _family_row_payload(row: dict[str, Any], query_text: str, entities: dict[str, Any]) -> dict[str, Any]:
@@ -843,10 +850,10 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
 
     missing: list[str] = []  # уточнения пациента, которых выбор строки не нашёл в строках (этап 4) — заголовок ответа
 
-    def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    def _llm_answer(rows: list[dict[str, Any]], selection: Any = None) -> dict[str, Any]:
         name = _llm_selection_service_name(query_text, rows, reply=str(query or ""))
         if len(rows) > 1:
-            payload = _llm_family_payload(name, rows)
+            payload = _llm_family_payload(name, rows, visible_limit=_visible_limit(selection))
         else:
             payload = {
                 "prices": _annotate_price_rows_with_care_context(list(rows)),
@@ -889,7 +896,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             return stop
         llm_rows = reconcile_with_proposal(shown, selection)
         if llm_rows is not None:
-            return _llm_answer(llm_rows)
+            return _llm_answer(llm_rows, selection)
         family_payload["entities_used"] = {
             **entities,
             "service_name_effective": str(family_payload.get("service_name") or "").strip(),
@@ -902,7 +909,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             return stop
         llm_rows = reconcile_with_proposal([], selection)
         if llm_rows is not None:
-            return _llm_answer(llm_rows)
+            return _llm_answer(llm_rows, selection)
         return {"prices": [], "note": "no service query", "entities_used": entities, ASKS_NAME_KEY: True}  # рендер: «Уточните название»
     retail_query = service_name
     if query_text and not _is_city_only_reply(query_text) and not _names_no_service(query):
@@ -939,7 +946,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         return stop
     llm_rows = reconcile_with_proposal(matches[:5], selection)
     if llm_rows is not None:
-        return _llm_answer(llm_rows)
+        return _llm_answer(llm_rows, selection)
     matches = _annotate_price_rows_with_care_context(matches)
     return {
         "prices": matches,
@@ -1054,8 +1061,10 @@ async def service_bundle_info(
 
     missing: list[str] = []  # уточнения пациента, которых выбор строки не нашёл в строках (этап 4) — заголовок ответа
 
-    def _llm_variants(rows: list[dict[str, Any]]) -> dict[str, Any]:
-        llm_payload = _llm_family_payload(_llm_selection_service_name(query_text, rows, reply=str(query or "")), rows)
+    def _llm_variants(rows: list[dict[str, Any]], selection: Any = None) -> dict[str, Any]:
+        llm_payload = _llm_family_payload(
+            _llm_selection_service_name(query_text, rows, reply=str(query or "")), rows, visible_limit=_visible_limit(selection)
+        )
         llm_payload["top_n_applied"] = top_limit
         llm_payload["entities_used"] = entities
         _mark_missing(llm_payload, missing, str(query or ""))
@@ -1089,7 +1098,7 @@ async def service_bundle_info(
             family_payload["entities_used"] = entities
             return family_payload
         if len(llm_rows) > 1:
-            return _llm_variants(llm_rows)
+            return _llm_variants(llm_rows, selection)
     if llm_rows:
         # Одна строка — дальше обычный путь: цена, врачи по её коду.
         query_service_name = _llm_selection_service_name(query_text, llm_rows, reply=str(query or ""))
@@ -1141,7 +1150,7 @@ async def service_bundle_info(
             out[ASKS_NAME_KEY] = True  # рендер: «Уточните название» / «Не нашёл… Уточните название»
             return out
         if len(llm_rows) > 1:
-            return _llm_variants(llm_rows)
+            return _llm_variants(llm_rows, selection)
         service_name = _llm_selection_service_name(query_text, llm_rows, reply=str(query or ""))
         needle = _normalise_input(service_name)
 
@@ -1195,11 +1204,11 @@ async def service_bundle_info(
         if llm_rows is not None and len(llm_rows) > 1 and not rows_overlap(llm_rows, out["retail_prices"]):
             # Правила промахнулись целиком, а LLM нашла несколько вариантов — их и
             # показываем на выбор, без врачей чужой услуги.
-            return _llm_variants(llm_rows)
+            return _llm_variants(llm_rows, selection)
         if llm_rows is not None and distinct_services(llm_rows):
             # LLM выбрала несколько разных услуг (не варианты одной): дальше путь показал бы первую строку с её врачами —
             # «консультация врача» → приём хирурга (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3). Список на выбор.
-            return _llm_variants(llm_rows)
+            return _llm_variants(llm_rows, selection)
     if llm_rows:
         out["retail_prices"] = _annotate_price_rows_with_care_context(list(llm_rows))
         service_name = str(llm_rows[0].get("serviceName") or llm_rows[0].get("name") or service_name).strip()

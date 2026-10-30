@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,6 +125,26 @@ PRICE_QUALIFIER_GENERAL_TASK = replace(PRICE_TASK, name="price_service_qualifier
 PRICE_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_general_named")
 PRICE_QUALIFIER_GENERAL_NAMED_TASK = replace(PRICE_TASK, name="price_service_qualifier_general_named")
 _VARIANT_B_LIMIT = 5
+
+# Одна позиция или семейство (DESIGN-2026-10-31-PRICE-FAMILY-SCOPE, решение владельца 30.10): выбор строки вернул одну строку при
+# нескольких кандидатах — короткий вопрос LLM «что просит пациент». Это проверка уже принятого выбора (`verdict`): решений хода
+# не тратит. Семейство — второй выбор «все варианты этой услуги»: правило 4 выбора строки и `_prefer_base_variants` сводили
+# «приём уролога» к первичному, «биохимию» к одному профилю (карточка d23on_btn: 21 из 26 «одна цена вместо списка» — выбор LLM).
+SCOPE_TASK = Task(name="price_scope", outcomes=("one", "family", "general"), num_predict=24, timeout_s=8, queue_timeout_ms=3000, verdict=True)
+FAMILY_TASK = replace(PRICE_TASK, name="price_service_family", max_terms=0)
+_SCOPE_NAMES = 12
+# Варианты условия (решение владельца 30.10, В1): в семействе — только если пациент о них сказал; варианты врача (к.м.н.,
+# повторный) — в списке семейства.
+_CONDITION_VARIANT_FLAGS = frozenset({"cito", "capillary", "child", "home"})
+# Потолок видимого списка семейства (В3); остальные — «ещё N вариантов, напишите: все».
+FAMILY_VISIBLE_LIMIT = 8
+
+
+def scope_mode() -> str:
+    """`[MESSENGER_ROUTER] price_scope_llm`: off | shadow | on; мусор и отсутствие — off (как было)."""
+
+    mode = str(getattr(_cfg, "MR_PRICE_SCOPE_LLM", "off") or "").strip().lower()
+    return mode if mode in ("shadow", "on") else "off"
 
 
 def price_task(*, judge_qualifier: bool = False, price_answer: bool = True) -> Task:
@@ -608,12 +629,44 @@ async def _checked(question: str, chosen: list[dict[str, Any]], **fields: Any) -
 _HARD_VARIANT_FLAGS = frozenset({"cito", "capillary", "child", "home", "repeat", "kmn"})
 
 
-def _prefer_base_variants(rows: list[dict[str, Any]], question: str) -> list[dict[str, Any]]:
+def _prefer_base_variants(
+    rows: list[dict[str, Any]], question: str, flags: frozenset[str] = _HARD_VARIANT_FLAGS
+) -> list[dict[str, Any]]:
     """Без cito/капиллярной/к.м.н./на дому…, если пациент их не просил и есть базовый вариант."""
 
     requested = _query_nonbase_price_flags(question)
-    base = [row for row in rows if not ((_row_nonbase_price_flags(row) & _HARD_VARIANT_FLAGS) - requested)]
+    base = [row for row in rows if not ((_row_nonbase_price_flags(row) & flags) - requested)]
     return base or rows
+
+
+async def _family_rows(question: str, picked: list[dict[str, Any]], pool: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """Семейство вместо одной строки (DESIGN-2026-10-31-PRICE-FAMILY-SCOPE): выбор вернул одну строку при ≥ 2 разных названиях в пуле —
+    вопрос LLM «одна позиция или семейство»; под `on` для семейства — второй выбор «все варианты этой услуги». Строки — выбранная
+    первой, затем варианты в порядке пула; варианты условия, которых пациент не просил, — вон. None — оставить выбор как есть:
+    off, одна позиция, слишком общее, сбой любого из вопросов или вариантов меньше двух."""
+
+    mode = scope_mode()
+    if mode == "off" or len(picked) != 1:
+        return None
+    names = list(dict.fromkeys(_row_name(row) for row in pool if _row_name(row)))[:_SCOPE_NAMES]
+    if len(names) < 2:
+        return None
+    started = time.monotonic()
+    scope = await choose(SCOPE_TASK, question, [], context="\n".join(names), shadow=mode == "shadow")
+    turn_telemetry.note(price_scope="unavailable" if scope.failed else (scope.outcome or "none"), price_scope_ms=int((time.monotonic() - started) * 1000))
+    if mode != "on" or scope.failed or scope.outcome != "family":
+        return None
+    family = await choose(FAMILY_TASK, question, _options(question, pool))
+    if family.failed:
+        return None
+    first_key = _row_key(picked[0])
+    variants = [pool[index] for index in sorted(int(i) for i in family.ids)]
+    rows = [picked[0], *(row for row in variants if _row_key(row) != first_key)]
+    rows = _prefer_base_variants(rows, question, flags=_CONDITION_VARIANT_FLAGS)
+    if len(rows) < 2:
+        return None
+    turn_telemetry.note(price_family_rows=len(rows))
+    return rows
 
 
 def _journal_path() -> Path:
@@ -870,7 +923,12 @@ async def select_price_rows(
         return settle(*unavailable())
     chosen, terms, reason = first
     if chosen:
-        return settle(await _checked(question, _prefer_base_variants(chosen, question)))
+        picked = _prefer_base_variants(chosen, question)
+        # Суд записи и вердикты одного круга (сильная фраза, суд условия П2) — выбор как есть: там название уже сказано.
+        family = await _family_rows(question, picked, pool) if price_answer and not one_round else None
+        if family is not None:
+            return settle(await _checked(question, family, status="family"))
+        return settle(await _checked(question, picked))
     # Суд условия (`judge_qualifier`): «условия нет» (`qualifier_absent`, правило 3 промпта) — вердикт окончательный.
     # Второй круг искал бы «почти то» (это и запрещает П2), а у класса A под `turn_parse = on` упирался в лимит
     # решений хода (`budget`) и превращал «не нашёл» в ответ правил (BUG-2026-10-16-QUALIFIER-ROUND-TWO-BUDGET).
