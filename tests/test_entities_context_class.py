@@ -262,3 +262,6 @@ def test_price_reader_keeps_the_service_otherwise(monkeypatch, readers, mention,
 def test_price_select_reader(monkeypatch, readers, mention, written_now, tool):
     [step] = _price_plan(monkeypatch, readers, mention=mention, written_now=written_now)
     assert step["tool"] == tool and (tool != "price_info" or "service_name" not in step), step
+    if tool == "price_info":
+        # Буквенное название — кандидат пула выбора LLM, а не потерянное (карточка 30.10: «Immulite» выпадала из пула).
+        assert step["__catalog_hint"] == "ТТГ (TSH) тиреотропный гормон", step

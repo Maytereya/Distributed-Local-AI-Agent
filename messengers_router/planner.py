@@ -437,9 +437,14 @@ def build_plan(
         ):
             # Шаг 5.3б (STEP-2026-10-30-STEP5-3B-PRICE-SELECT): название этого хода подставлено по буквам (подстановка каталога,
             # резолвер грундера), а в разборе реплики есть упоминание услуги — строку прайса выбирает LLM по фразе разбора, как у
-            # названного пониманием хода выше; буквенное название — подсказка резолвера пути цены, а не ответ правил мимо выбора.
+            # названного пониманием хода выше. Буквенное название — не ответ правил мимо выбора, но и не выбрасывается: оно кандидат
+            # пула выбора (`CATALOG_HINT_KEY`) — точная строка «Immulite» иначе выпадала из пула (карточка 30.10: чужая цена +4).
+            from .services._price_select_llm import CATALOG_HINT_KEY
+
+            hint = str(price_entities.get("service_name") or price_entities.get("test_name") or "").strip()
             service_known = False
             price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
+            price_entities[CATALOG_HINT_KEY] = hint
             turn_understanding.note_acted("planner_price_select_by_llm")
         if (
             service_known
