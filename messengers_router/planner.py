@@ -11,7 +11,7 @@ import contextvars
 from collections.abc import Iterator
 from typing import Any
 
-from . import address_flow, address_service, button_flow, expects, topic_policy, turn_understanding
+from . import address_flow, address_service, button_flow, expects, shown_context, topic_policy, turn_understanding
 from .entity_grounder import service_dropped_by_llm
 from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
@@ -140,8 +140,10 @@ def build_plan(
     # Поле ожидания (вопрос бота, D2.1) — состояние диалога, не сущность: инструментам не отдаём, иначе через их
     # `entities_used` текст вопроса попал бы в промпт свободного ответа LLM и поменял бы ответ.
     entities = expects.without(state.last_entities)
-    if address_flow.ADDRESS_BUTTON_KEY in entities or button_flow.LEAF_KEY in entities:  # метки кнопок — состояние хода
-        entities = {k: v for k, v in entities.items() if k not in (address_flow.ADDRESS_BUTTON_KEY, button_flow.LEAF_KEY)}
+    # Метки кнопок и поле формы шага 5.1б — состояние хода, не сущности: в инструменты (и через `entities_used` — в промпт) не идут.
+    hidden = (address_flow.ADDRESS_BUTTON_KEY, button_flow.LEAF_KEY, shown_context.FORM_KEY)
+    if any(key in entities for key in hidden):
+        entities = {k: v for k, v in entities.items() if k not in hidden}
     if runtime_options is not None:
         entities = {**entities, "__runtime_llm_mode": runtime_options.llm_mode}
     missing = missing_slots(effective_label, entities)

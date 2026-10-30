@@ -57,6 +57,9 @@ _PARSED: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_parsed_i
 _STARTED: contextvars.ContextVar[tuple[str, str]] = contextvars.ContextVar("mr_shown_context_started", default=("", ""))
 _NOW: contextvars.ContextVar[bool] = contextvars.ContextVar("mr_shown_now", default=False)
 _CONTEXT_KEYS = ("service_name", "test_name")
+# Поле формы (шаг 5.1б): значения `service_name` / `test_name`, которые держала открытая форма (запись, вопрос-слот, вопрос о наркозе),
+# — вход её висящего вопроса, а не контекст разговора. Пишет только точка фиксации; инструментам не отдаётся (`planner`).
+FORM_KEY = "_form"
 
 
 def _row_name(row: Any) -> str:
@@ -191,26 +194,36 @@ def commit_context(state: SessionState, text: str) -> None:
     показано пациенту — строка ответа (`remember`) или напечатано в тексте ответа, — либо это понятое с выбором из данных (точное
     название прайса). Фраза пациента, которую ответ не показал («а ВПЧ?» → оффер, «ВПЧ» в слоте после памятки), снимается; назвал
     новое, но ничего не показано — снимается и показанное прошлым ответом, иначе «а подготовка?» ответило бы о прошлой услуге.
-    Значение, не менявшееся в ходе, и открытую форму (запись, вопрос-слот — поле формы, шаг 5.1б) не трогает. Телеметрия — `tu_ctx_dropped` (ключи)."""
+    Открытую форму (запись, вопрос-слот) не трогает: её значения — поле формы `_form` (шаг 5.1б); когда форма закрылась, её значения проверяются так же — вход формы не становится контекстом сам. Прочее значение, не менявшееся в ходе, не трогает. Телеметрия — `tu_ctx_dropped` (ключи)."""
 
     from . import turn_telemetry, turn_understanding
     from .services._prices_helpers import is_mis_service_name
 
-    if "context" not in turn_understanding.entity_readers() or _form_open(state):
+    if "context" not in turn_understanding.entity_readers():
         return
+    form = state.last_entities.get(FORM_KEY)
+    form = form if isinstance(form, dict) else {}
+    if _form_open(state):
+        # Поле формы (5.1б): значения открытой формы — её вход; контекстом они станут, только когда форма закроется и пройдут проверку.
+        state.last_entities[FORM_KEY] = {key: value for key in _CONTEXT_KEYS if (value := str(state.last_entities.get(key) or "").strip())}
+        return
+    state.last_entities.pop(FORM_KEY, None)
     shown_text = _norm(text)
     shown_now = {_norm(name) for name in state.last_entities.get(SHOWN_KEY) or [] if _NOW.get()}
     dropped: list[str] = []
+    named_new = False
     for key, started in zip(_CONTEXT_KEYS, _STARTED.get()):
         value = str(state.last_entities.get(key) or "").strip()
-        if not value or value == started:
+        from_form = form.get(key) == value
+        if not value or (value == started and not from_form):
             continue
         norm = _norm(value)
         if norm in shown_now or (norm and norm in shown_text) or is_mis_service_name(value):
             continue
         state.last_entities.pop(key, None)
-        dropped.append(key)
-    if dropped and not _NOW.get():
+        dropped.append(f"{key}:form" if from_form and value == started else key)
+        named_new = named_new or value != started
+    if named_new and not _NOW.get():
         state.last_entities.pop(SHOWN_KEY, None)  # И-5.2а: назвал новое, ответ ничего не показал — прошлое показанное не предмет
     if dropped:
         turn_telemetry.note(tu_ctx_dropped=",".join(dropped))

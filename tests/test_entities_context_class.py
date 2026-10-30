@@ -153,3 +153,48 @@ def test_seam_every_plan_step_carries_the_turn_understanding(monkeypatch):
     assert seen and seen[0], seen
     understood = {id(item) for item in seen[0]}
     assert len(understood) == 1 and seen[0][0] is not None and getattr(seen[0][0], "reply", "") == "сколько стоит ферритин"
+
+
+# Шаг 5.1б — поле формы (STEP-2026-10-30-STEP5-1B-FORM): значения открытой формы — её вход; при закрытии формы они проверяются, как
+# новые: вход формы, которого пациент не видел («анализы» для пунктов сдачи), контекстом следующего хода не становится.
+_ADDRESS_FORM = {"_pending": {"label": "ADDRESS", "missing": ["_any_of:city,branch_name,branch_id"]}}
+
+
+def _form_then_close(ctx, value: str, close_text: str) -> dict:
+    opened = _turn(_ADDRESS_FORM, {"service_name": value}, "Уточните город, пожалуйста.")
+    assert opened.get("_form") == {"service_name": value}, opened  # форма открыта — значение в поле формы
+    closed = {key: val for key, val in opened.items() if key != "_pending"}  # ответ «Самара» закрыл вопрос-слот
+    return _turn(closed, {}, close_text)
+
+
+def test_form_input_not_shown_does_not_become_context(ctx):
+    after = _form_then_close(ctx, "анализы", "В городе Самара пункты сдачи: ул. Пензенская, 71 …")
+    assert "service_name" not in after and "_form" not in after, after
+
+
+@pytest.mark.parametrize(("value", "text"), [("Ферритин", "Пункты сдачи: …"), ("ЭКГ", "ЭКГ делают по адресам: …")], ids=["data_name", "printed"])
+def test_form_value_shown_or_from_data_stays_context(ctx, value, text):
+    after = _form_then_close(ctx, value, text)
+    assert after.get("service_name") == value and "_form" not in after, after
+
+
+def test_form_value_dropped_keeps_what_was_shown_before(ctx):
+    """Снят вход формы, но пациент ничего нового не называл: показанное раньше (ферритин) остаётся — это не И-5.2а."""
+
+    opened = _turn({**_ADDRESS_FORM, "_shown_services": ["Ферритин"]}, {"service_name": "анализы"}, "Уточните город, пожалуйста.")
+    closed = {key: val for key, val in opened.items() if key != "_pending"}
+    after = _turn(closed, {}, "Пункты сдачи: …")
+    assert "service_name" not in after and after.get("_shown_services") == ["Ферритин"], after
+
+
+def test_form_field_never_reaches_the_tools(ctx):
+    """`_form` — состояние хода: в сущности инструментов (и через `entities_used` — в промпт свободного ответа) не идёт."""
+
+    from messengers_router import planner
+    from messengers_router.mess_types import RouteDecision
+    from messengers_router.memory import MemoryStore
+
+    state = SessionState(session_id="form-tools", last_entities={"service_name": "Ферритин", "_form": {"service_name": "анализы"}})
+    plan = planner.build_plan(RouteDecision(label="DOCTOR_INFO", confidence=0.9, entities={}), state, "кто делает?", MemoryStore())
+    entities = [step.input.get("entities") or {} for step in plan.steps]
+    assert entities and all("_form" not in ent and ent.get("service_name") == "Ферритин" for ent in entities), entities
