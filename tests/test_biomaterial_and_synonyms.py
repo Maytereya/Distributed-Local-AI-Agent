@@ -26,6 +26,8 @@
 
 from __future__ import annotations
 
+import functools
+
 import pytest
 
 from agent_logic_2.nayka_api import api_price, api_service_info
@@ -37,6 +39,16 @@ from messengers_router.services._prices_helpers import (
 
 ROWS = [r for r in api_price.load_price_by_region(SAMARA_PRICE_REGION_ID) if isinstance(r, dict)]
 INFO = [r for r in api_service_info.load_service_info() if isinstance(r, dict)]
+
+
+@functools.cache
+def _live_vocabularies() -> bio._MisVocabularies:
+    """Словари живого среза, собранные один раз — как `bio._vocabularies` на проде.
+
+    Сборка заново на каждый вызов теряла и ленивые индексы словаря: свип по
+    каталогу шёл 808 с вместо секунд.
+    """
+    return bio._build_vocabularies(INFO)
 
 
 def _resolve(q: str) -> str | None:
@@ -248,7 +260,7 @@ def test_numeric_reply_does_not_name_a_service(monkeypatch):
     Бот сам печатает пациенту нумерованные списки и предлагает выбрать, поэтому
     «2» — естественный ход диалога, а не странный ввод.
     """
-    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+    monkeypatch.setattr(bio, "_vocabularies", _live_vocabularies)
 
     from messengers_router.services import _prices_helpers as ph
 
@@ -269,7 +281,7 @@ def test_named_biomaterial_does_not_block_the_synonym(monkeypatch):
     постоянно, и это не признак чужого названия.
     См. BUG-2026-09-07-PREFIX-COLLISION.
     """
-    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+    monkeypatch.setattr(bio, "_vocabularies", _live_vocabularies)
 
     from messengers_router.services import _prices_helpers as ph
 
@@ -285,7 +297,7 @@ def test_biomaterial_in_rest_must_be_accepted_by_the_service(monkeypatch):
     белок» съезжал с «Белок в моче (разовая порция)» на «Общий белок» —
     сыворотку вместо мочи. Свип это поймал до коммита.
     """
-    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+    monkeypatch.setattr(bio, "_vocabularies", _live_vocabularies)
 
     from messengers_router.services import _prices_helpers as ph
 
@@ -305,7 +317,7 @@ def test_catalog_names_are_not_hijacked_by_synonyms(monkeypatch):
     синонимов самой клиникой («Расширенная гемостазиограмма» → «Гемостазиограмма
     (скрининг)»), а не к механике.
     """
-    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+    monkeypatch.setattr(bio, "_vocabularies", _live_vocabularies)
 
     names = sorted({str(r.get("serviceName") or "").strip() for r in ROWS if r.get("serviceName")})
     assert len(names) > 1000, "нужен живой каталог"
