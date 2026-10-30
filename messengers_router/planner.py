@@ -427,6 +427,19 @@ def build_plan(
             service_known = False
             price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
             turn_understanding.note_acted("planner_price_by_understanding")
+        if (
+            service_known
+            and "price" in turn_understanding.entity_readers()
+            and understood_price is not None
+            and bool(understood_price.services)
+            and shown_context.carried_over(state)
+        ):
+            # Шаг 5.3а (STEP-2026-10-30-STEP5-3A-PRICE-CONTEXT): в этой реплике есть упоминание услуги (разбор хода, не буквы), а в
+            # состоянии — контекст прошлого хода: он не участвует в выборе строки (резолвер `current_service_name`, выбор
+            # «действующего» названия, контекст выбора LLM) — путь цены по названному в этом ходе.
+            service_known = False
+            price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
+            turn_understanding.note_acted("planner_price_context_not_this_turn")
         if scope and service_known:
             # Ответ на вопрос кнопки цены — путь цены по словам реплики в области кнопки: название, которое подставили
             # дозаполнение или классификатор по всему прайсу, область не обходит.

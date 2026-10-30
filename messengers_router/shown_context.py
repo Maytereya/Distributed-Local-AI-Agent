@@ -188,6 +188,14 @@ def _form_open(state: SessionState) -> bool:
     )
 
 
+def carried_over(state: SessionState) -> bool:
+    """Услуга в состоянии — контекст прошлого хода: значение `service_name` / `test_name` то же, что на начало хода (этот ход его не
+    писал — ни грундер, ни подстановка каталога). Читатель цены шага 5.3а отличает так контекст от понятого в этом ходе."""
+
+    values = [str(state.last_entities.get(key) or "").strip() for key in _CONTEXT_KEYS]
+    return any(values) and all(value == started for value, started in zip(values, _STARTED.get()) if value)
+
+
 def commit_context(state: SessionState, text: str) -> None:
     """Точка фиксации контекста разговора в конце хода (шаг 5.1, `entities_by_understanding` с читателем `context`; И-5.2, И-5.2а,
     И-5.5 дизайна шага 5): значение `service_name` / `test_name`, которое записал этот ход, остаётся контекстом, только если оно

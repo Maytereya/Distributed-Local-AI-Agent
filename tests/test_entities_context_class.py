@@ -198,3 +198,45 @@ def test_form_field_never_reaches_the_tools(ctx):
     plan = planner.build_plan(RouteDecision(label="DOCTOR_INFO", confidence=0.9, entities={}), state, "кто делает?", MemoryStore())
     entities = [step.input.get("entities") or {} for step in plan.steps]
     assert entities and all("_form" not in ent and ent.get("service_name") == "Ферритин" for ent in entities), entities
+
+
+# Шаг 5.3а — читатель `price` (STEP-2026-10-30-STEP5-3A-PRICE-CONTEXT): в реплике есть упоминание услуги (разбор хода), а в состоянии
+# — контекст прошлого хода: контекст не идёт в путь цены (резолвер, «действующее» название, контекст выбора LLM).
+def _price_plan(monkeypatch, readers: str, *, mention: bool, written_now: bool) -> list[dict]:
+    from messengers_router import planner
+    from messengers_router.mess_types import RouteDecision
+    from messengers_router.memory import MemoryStore
+    from messengers_router.turn_understanding import ServiceMention, TurnUnderstanding
+
+    reply = "а ещё ттг"
+    monkeypatch.setattr(rcfg, "MR_ENTITIES_BY_UNDERSTANDING", readers, raising=False)
+    monkeypatch.setattr(rcfg, "MR_TURN_UNDERSTANDING_ONE", "on", raising=False)
+    monkeypatch.setattr(rcfg, "MR_TURN_UNDERSTANDING_PRICE", "on", raising=False)
+    state = SessionState(session_id="p53", last_entities={"service_name": "Ферритин", "city": "Самара"})
+    shown_context.begin_turn(state)
+    if written_now:
+        state.last_entities["service_name"] = "ТТГ (TSH) тиреотропный гормон"  # записал этот ход (подстановка каталога)
+    services = (ServiceMention(phrase="ттг", candidates=(), strength="weak", chosen=None, source="parse"),) if mention else ()
+    token = turn_understanding._CURRENT.set(TurnUnderstanding(services=services, facet="price", reply=reply, names_service=True))
+    try:
+        plan = planner.build_plan(RouteDecision(label="PRICE", confidence=0.9, entities={}), state, reply, MemoryStore())
+    finally:
+        turn_understanding._CURRENT.reset(token)
+    return [{"tool": step.tool, **(step.input.get("entities") or {})} for step in plan.steps]
+
+
+def test_price_reader_drops_previous_context_when_the_reply_names_a_service(monkeypatch):
+    [step] = _price_plan(monkeypatch, "price", mention=True, written_now=False)
+    assert step["tool"] == "price_info" and "service_name" not in step, step
+
+
+@pytest.mark.parametrize(
+    ("readers", "mention", "written_now"),
+    [("off", True, False), ("price", False, False), ("price", True, True)],
+    ids=["off_as_before", "no_mention_condition_follow_up", "service_written_this_turn"],
+)
+def test_price_reader_keeps_the_service_otherwise(monkeypatch, readers, mention, written_now):
+    """Выключатель off; в реплике нет упоминания услуги («а по омс?» — контекст и есть предмет); услугу записал этот ход — как было."""
+
+    [step] = _price_plan(monkeypatch, readers, mention=mention, written_now=written_now)
+    assert step.get("service_name"), step
