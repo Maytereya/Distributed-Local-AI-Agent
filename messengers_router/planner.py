@@ -431,12 +431,16 @@ def build_plan(
             service_known
             and "price" in turn_understanding.entity_readers()
             and understood_price is not None
-            and bool(understood_price.services)
+            and any(mention.source == "parse" for mention in understood_price.services)
             and shown_context.carried_over(state)
+            and not turn_understanding.absorbed()
         ):
             # Шаг 5.3а (STEP-2026-10-30-STEP5-3A-PRICE-CONTEXT): в этой реплике есть упоминание услуги (разбор хода, не буквы), а в
             # состоянии — контекст прошлого хода: он не участвует в выборе строки (резолвер `current_service_name`, выбор
-            # «действующего» названия, контекст выбора LLM) — путь цены по названному в этом ходе.
+            # «действующего» названия, контекст выбора LLM) и не называется в ответе (рендер цены читает состояние) — снимается, как
+            # у списка выше. Ход — ответ на свой вопрос бота (строка показанного списка, `absorbed`) — не трогает: предмет задал вопрос.
+            for key in ("service_name", "test_name"):
+                state.last_entities.pop(key, None)
             service_known = False
             price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
             turn_understanding.note_acted("planner_price_context_not_this_turn")

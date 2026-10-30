@@ -202,7 +202,7 @@ def test_form_field_never_reaches_the_tools(ctx):
 
 # Шаг 5.3а — читатель `price` (STEP-2026-10-30-STEP5-3A-PRICE-CONTEXT): в реплике есть упоминание услуги (разбор хода), а в состоянии
 # — контекст прошлого хода: контекст не идёт в путь цены (резолвер, «действующее» название, контекст выбора LLM).
-def _price_plan(monkeypatch, readers: str, *, mention: bool, written_now: bool) -> list[dict]:
+def _price_plan(monkeypatch, readers: str, *, mention: bool, written_now: bool, state_out: dict | None = None) -> list[dict]:
     from messengers_router import planner
     from messengers_router.mess_types import RouteDecision
     from messengers_router.memory import MemoryStore
@@ -222,12 +222,17 @@ def _price_plan(monkeypatch, readers: str, *, mention: bool, written_now: bool) 
         plan = planner.build_plan(RouteDecision(label="PRICE", confidence=0.9, entities={}), state, reply, MemoryStore())
     finally:
         turn_understanding._CURRENT.reset(token)
+    if state_out is not None:
+        state_out.update(state.last_entities)
     return [{"tool": step.tool, **(step.input.get("entities") or {})} for step in plan.steps]
 
 
 def test_price_reader_drops_previous_context_when_the_reply_names_a_service(monkeypatch):
-    [step] = _price_plan(monkeypatch, "price", mention=True, written_now=False)
-    assert step["tool"] == "price_info" and "service_name" not in step, step
+    """И из инструмента, и из состояния: рендер цены читает состояние — «Не нашёл… для «Ферритин»» на «а ггтп?» (стенд 30.10)."""
+
+    after: dict = {}
+    [step] = _price_plan(monkeypatch, "price", mention=True, written_now=False, state_out=after)
+    assert step["tool"] == "price_info" and "service_name" not in step and "service_name" not in after, (step, after)
 
 
 @pytest.mark.parametrize(
