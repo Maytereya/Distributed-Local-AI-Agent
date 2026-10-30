@@ -2003,8 +2003,9 @@ async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> 
     flags = set(decision.flags or ())
     if decision.label != "TEST_ASSIST" or "topic_by_llm" not in flags or "catalog_service_exact" not in flags:
         return ""
-    if turn_understanding.facet_by_llm():
+    if turn_understanding.facet_by_llm() and not turn_understanding.absorbed():
         # Тип вопроса хода уже решён (`facet_by_llm = on`, STEP-2026-10-30-FACET-BY-LLM): П1 берёт его, а не спрашивает заново.
+        # Ход — ответ на свой вопрос бота (`absorbed`) — тип вопроса не судится: П1 прежним путём.
         # «Где» и «нужна ли запись» — один вариант П1 (`where_when`, адреса), как в его прежней задаче; сбой — пустая строка.
         by_turn = await turn_understanding.llm_facet(user_text)
         facet = _P1_FROM_TURN_FACET.get(by_turn or "", by_turn or "")
@@ -2029,7 +2030,9 @@ async def _route_by_turn_facet(decision: RouteDecision, *, user_text: str) -> Ro
     if decision.label != "PRICE" or not turn_understanding.facet_by_llm():
         return decision
     flags = set(decision.flags or ())
-    if "button_answer_topic" in flags:
+    if "button_answer_topic" in flags or turn_understanding.absorbed():
+        # Ответ на свой вопрос бота — строка показанного списка («1», «первый»), названное на просьбу назвать услугу — тип
+        # вопроса задал вопрос бота, а не голая реплика (BUG-2026-10-30-OWN-LIST-REPLY: «1» → «ни одно» → оффер).
         return decision
     facet = await turn_understanding.llm_facet(user_text)
     if facet == "prepare":
@@ -3440,9 +3443,10 @@ async def _handle_secondary_queue_pending(
         return None
 
     show_all_q, secondary_q = expects.Question.SHOW_ALL, expects.Question.SECONDARY_OFFER
-    if pending_answer.shows_all():
+    if pending_answer.shows_all() or pending_answer.picked(show_all_q):
         # Ответ на подсказку «напишите: "все"» («да, давайте все») — «показать все»: вторичный оффер снимается, как на
-        # «все», ответ читает путь цены (`_price_show_all_requested`).
+        # «все», ответ читает путь цены (`_price_show_all_requested`). Строка показанного списка («давайте второй»,
+        # `own_question_reply`) — так же: ответ на список, а не «да» скрытому офферу; строку читает путь цены.
         state.last_entities["_secondary_offer_pending"] = False
         return None
     if pending_answer.passes(secondary_q) or pending_answer.passes(show_all_q):
@@ -3653,6 +3657,10 @@ async def _resolve_nlu_decision_before_doctor_guard(
             # когда тема есть.
             answer_topic = button_flow.answer_topic(pending_before_nlu)
             firm_topic = answer_topic and (button_flow.mixed_topic() or button_flow.frame_firm())
+            if not answer_topic and pending_answer.clarify_topic(pending_before_nlu):
+                # Ответ на просьбу инструмента назвать услугу (`own_question_reply`), признанный ответом LLM, — тема просьбы, и правило
+                # другой темы по словам реплики её не перебивает (правила сужают, решает LLM; срочное — раньше).
+                answer_topic, firm_topic = pending_answer.clarify_topic(pending_before_nlu), True
             firm = {"answer_topic_firm": True} if firm_topic else {}
             nlu_result = await analyze_with_candidates(
                 user_text,
@@ -4412,7 +4420,9 @@ async def patient_routing_stream(
     if not button_id:
         expected = pending_answer.expected_from(state.last_entities)
         if expected is not None:
-            filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
+            # Просьба инструмента назвать услугу (`own_question_reply`) — правила «значение найдено» её не решают: решает LLM.
+            clarify = pending_answer.clarify_question(memory.get_pending(state))
+            filled = expected[0] == expects.Question.SLOT_VALUE.value and not clarify and _slot_filled_by_rules(user_text, state, services, memory)
             spent = llm_runtime.turn_decisions_spent()
             # Вопрос кнопки меню под `button_answer_topic` / `button_topic_hint`: значение, найденное правилами, LLM проверяет на
             # «другую тему» — правила находят его и в реплике о другом («ЭКГ как подготовиться?» на «Цену анализа»).
@@ -4426,6 +4436,7 @@ async def patient_routing_stream(
                 button=button_flow.judge_context(pending, expected[1]),
             )
             button_flow.refund_topic_judge(answered, pending, spent)
+            pending_answer.settle_clarify(answered, state, memory, spent)
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
@@ -4585,6 +4596,9 @@ async def patient_routing_stream(
     response = button_flow.with_mixed_hint(response)
     address_flow.finish_turn(state)  # метка адресной кнопки — следующей реплике (`address_branch_flags`)
     button_flow.finish_leaf(state)  # метка листа без своего вопроса — следующей реплике (`frame`)
+    if plan is not None and evidence is not None:
+        # «Уточните название…» инструмента темы — висящий вопрос этой темы (`own_question_reply`), после анти-залипа: его оффер первее.
+        pending_answer.ask_name_after_clarify(plan.label, evidence.items.values(), response.handoff, state, memory)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
     _finish_turn(state, memory, response)
 

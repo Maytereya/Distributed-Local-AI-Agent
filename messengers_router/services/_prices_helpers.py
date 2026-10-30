@@ -2945,7 +2945,9 @@ def _price_family_row_from_context(query_text: str, entities: dict[str, Any]) ->
     """
     Строка показанного списка семейства по её номеру: реплика — только номер («1», «2.», «№3»), и строка с этим номером была
     в прошлом ответе. Пациент нумерует строки, которые видел, — отвечаем этой строкой, без LLM (решение владельца 26.10,
-    BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD: «1» на список с подсказкой «напишите: "все"» раскрывало весь список).
+    BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD: «1» на список с подсказкой «напишите: "все"» раскрывало весь список). Под
+    `own_question_reply = on` строку выбирает и одна функция ответа на вопрос о списке — «первый», «давайте второй», название
+    строки своими словами (`pending_answer.shown_row_number`, BUG-2026-10-30-OWN-LIST-REPLY).
 
     :param query_text: реплика пациента
     :param entities: сессионный контекст (`_price_family_context` — список, который видел пациент)
@@ -2953,9 +2955,9 @@ def _price_family_row_from_context(query_text: str, entities: dict[str, Any]) ->
     """
 
     # Импорт в функции: сервисный слой не тянет модуль хода при своём импорте.
-    from ..pending_answer import number
+    from ..pending_answer import shown_row_number
 
-    index = number(query_text)
+    index = shown_row_number(query_text)
     raw_ctx = entities.get("_price_family_context")
     if index is None or not isinstance(raw_ctx, dict) or not isinstance(raw_ctx.get("family_variants"), list):
         return None

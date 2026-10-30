@@ -651,11 +651,26 @@ async def turn_facet(user_text: str) -> FacetDecision:
     return await start_facet(user_text)
 
 
+def absorbed() -> bool:
+    """Ход поглощён ответом на свой вопрос бота (`own_question_reply = on`, BUG-2026-10-30-OWN-LIST-REPLY): одна функция ответа
+    на висящий вопрос решила, что реплика — ответ (пункт показанного списка, да / нет, значение слота). Тип вопроса такого хода
+    задал вопрос бота — LLM о голой реплике («1», «первый», «почек») не спрашивается, читатели типа вопроса идут прежним путём.
+    Одно определение для всех читателей типа вопроса (не белый список флагов правил)."""
+
+    from . import pending_answer  # функция ответа импортирует понимание хода — импорт на вызове
+
+    return pending_answer.absorbs_turn()
+
+
 async def llm_facet(user_text: str) -> str | None:
     """Тип вопроса, по которому читатель действует под `facet_by_llm = on`: решение LLM этой реплики. None — выключатель off,
-    сбой LLM, лимит хода, слов нет: читатель идёт прежним путём (своими детекторами)."""
+    сбой LLM, лимит хода, слов нет, ход поглощён ответом на свой вопрос (`absorbed`): читатель идёт прежним путём (своими
+    детекторами)."""
 
     if not facet_by_llm():
+        return None
+    if absorbed():
+        turn_telemetry.note(tu_facet_src="absorbed")
         return None
     decided = await turn_facet(user_text)
     return decided.value if decided.src == "llm" else None
@@ -774,7 +789,7 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
         return None
     if mode() != "off":
         # Тип вопроса от LLM (`facet_by_llm = on`) — параллельно разбору реплики; ход ждёт обоих.
-        facet = start_facet(user_text) if facet_by_llm() else None
+        facet = start_facet(user_text) if facet_by_llm() and not absorbed() else None
         tu = await (_observe_parse_on(user_text) if agree_telemetry() else _observe_parse_on_lazy(user_text))
         tu = _decide_named(tu, user_text) if tu is not None and one_enabled() else tu
         if facet is None:
